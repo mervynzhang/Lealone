@@ -42,7 +42,7 @@ import com.lealone.sql.IExpression;
 /**
  * This is the base class for most tables.
  * A table contains a list of columns and a list of rows.
- * 
+ *
  * @author H2 Group
  * @author zhh
  */
@@ -1001,6 +1001,15 @@ public abstract class Table extends SchemaObjectBase {
 
     public boolean isPersistIndexes() {
         return persistIndexes;
+    }
+
+    /**
+     * 把异步执行的索引操作尽量执行完，执行checkpoint或关闭数据库前调用。
+     *
+     * @return 还没执行完的索引操作所属事务的最小事务id，没有就返回Long.MAX_VALUE
+     */
+    public long flushIndexOperations() {
+        return Long.MAX_VALUE;
     }
 
     public boolean isPersistData() {

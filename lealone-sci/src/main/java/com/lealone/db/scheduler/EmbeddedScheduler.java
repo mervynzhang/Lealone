@@ -114,6 +114,11 @@ public class EmbeddedScheduler extends InternalSchedulerBase {
     }
 
     @Override
+    public boolean hasPendingPageOperations() {
+        return pageOperationSize.get() > 0;
+    }
+
+    @Override
     protected void runPageOperationTasks() {
         PageOperation po;
         // 先执行上一个被锁定的PageOperation，严格保证每个PageOperation的执行顺序

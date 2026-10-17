@@ -12,6 +12,7 @@ import com.lealone.agent.SystemOutline;
 import com.lealone.agent.SystemOutlineNode;
 import com.lealone.common.util.DataUtils;
 import com.lealone.db.async.AsyncResultHandler;
+import com.lealone.db.lock.Lock;
 import com.lealone.db.lock.Lockable;
 import com.lealone.db.scheduler.SchedulerListener;
 import com.lealone.db.session.InternalSession;
@@ -25,6 +26,7 @@ import com.lealone.transaction.Transaction;
 import com.lealone.transaction.TransactionMap;
 import com.lealone.transaction.TransactionMapCursor;
 import com.lealone.transaction.aote.TransactionalValue.OldValue;
+import com.lealone.transaction.aote.lock.RowLock;
 import com.lealone.transaction.aote.log.UndoLog;
 import com.lealone.transaction.aote.log.UndoLogRecord;
 
@@ -114,13 +116,12 @@ public class AOTransactionMap<K, V> implements TransactionMap<K, V> {
 
     @Override
     public K floorKey(K key) {
-        while (true) {
-            K k = map.floorKey(key);
-            if (k == null || get(k) != null) {
-                return k;
-            }
-            key = k;
+        K k = map.floorKey(key);
+        // 命中的 key 对当前事务不可见时，下一轮必须用 lowerKey(严格小)，用 floorKey 会原地打转
+        while (k != null && get(k) == null) {
+            k = map.lowerKey(k);
         }
+        return k;
     }
 
     @Override
@@ -136,13 +137,11 @@ public class AOTransactionMap<K, V> implements TransactionMap<K, V> {
 
     @Override
     public K ceilingKey(K key) {
-        while (true) {
-            K k = map.ceilingKey(key);
-            if (k == null || get(k) != null) {
-                return k;
-            }
-            key = k;
+        K k = map.ceilingKey(key);
+        while (k != null && get(k) == null) {
+            k = map.higherKey(k);
         }
+        return k;
     }
 
     /**
@@ -347,6 +346,19 @@ public class AOTransactionMap<K, V> implements TransactionMap<K, V> {
         return new AOTransactionMap<>((AOTransaction) transaction, map);
     }
 
+    // 只有墓碑属于本事务、或者删除它的事务已经提交/结束，才可以复活它
+    private boolean canRevive(Lockable old) {
+        Lock lock = old.getLock();
+        if (lock == null)
+            return true;
+        Transaction t = lock.getTransaction();
+        if (t == null)
+            return true;
+        if (t == transaction)
+            return true;
+        return ((AOTransaction) t).isCommitted(); // 已提交的删除留下的墓碑
+    }
+
     @Override // put和putIfAbsent需要先执行get，而addIfAbsent不需要
     public void addIfAbsent(K key, Lockable lockable, AsyncResultHandler<Integer> handler) {
         add(key, lockable, true, null, handler);
@@ -360,6 +372,7 @@ public class AOTransactionMap<K, V> implements TransactionMap<K, V> {
         TransactionalValue.insertLock(lockable, transaction); // 内部有增加行锁
         lockable.setMetaVersion(getValueType().getMetaVersion());
         UndoLogRecord r = addUndoLog(key, lockable, null);
+        setInsertRecord(lockable, r);
         AsyncResultHandler<Lockable> handler = ar -> {
             if (ar.isSucceeded()) {
                 Lockable old = ar.getResult();
@@ -371,8 +384,23 @@ public class AOTransactionMap<K, V> implements TransactionMap<K, V> {
                         r.setUndone(true);
                         // 同一个事务，先删除再更新，因为删除记录时只是打了一个删除标记，存储层并没有真实删除
                         if (old.getLockedValue() == null) {
+                            // 墓碑可能是别的事务正在删除中且还没提交，这时不能复活，否则会出现两行同唯一键
+                            if (!canRevive(old)) {
+                                topHandler.handleResult(Transaction.OPERATION_DATA_DUPLICATE);
+                                return;
+                            }
+                            long oldRowId = Long.MIN_VALUE;
+                            // 唯一索引的 key 不比较 rowId，删除只是打标记，所以复活时要连 rowId 一起换掉，
+                            // 否则索引指向的是已经删除的那一行
+                            if (old.isIndexKey() && lockable.isIndexKey()) {
+                                oldRowId = old.getKey();
+                                old.setKey(lockable.getKey());
+                            }
                             old.setLockedValue(lockable.getLockedValue());
-                            addUndoLog(key, old, lockable.getLockedValue());
+                            // oldValue 仍然传新值，和原来一致，保证提交、redo日志和内存统计的行为不变；
+                            // 回滚要恢复成墓碑，改用 revivedFromDelete 标记(不影响 oldValue 的类型)
+                            addUndoLog(key, old, lockable.getLockedValue())
+                                    .setRevivedFromDelete(oldRowId);
                         } else {
                             topHandler.handleResult(Transaction.OPERATION_DATA_DUPLICATE);
                             return;
@@ -421,6 +449,12 @@ public class AOTransactionMap<K, V> implements TransactionMap<K, V> {
         }
         lockable.setMetaVersion(getValueType().getMetaVersion());
         Object oldValue = lockable.getLockedValue();
+
+        if (value == null && lockable.isIndexKey() && removeUncommittedInsert(key, lockable))
+            return Transaction.OPERATION_COMPLETE;
+
+        // 删除二级索引项时列值会保留下来(见IndexKey.setLockedValue)，
+        // BTree仍然可以按原来的顺序比较这个墓碑
         lockable.setLockedValue(value);
         addUndoLog(key, lockable, oldValue);
         return Transaction.OPERATION_COMPLETE;
@@ -592,6 +626,32 @@ public class AOTransactionMap<K, V> implements TransactionMap<K, V> {
 
     private UndoLogRecord addUndoLog(Object key, Lockable lockable, Object oldValue) {
         return transaction.undoLog.add(map, key, lockable, oldValue);
+    }
+
+    private static void setInsertRecord(Lockable lockable, UndoLogRecord insertRecord) {
+        Lock lock = lockable.getLock();
+        if (lock instanceof RowLock)
+            ((RowLock) lock).setInsertRecord(insertRecord);
+    }
+
+    // 本事务插入又删除的索引项：直接物理删除。
+    // 如果只是打删除标记，会留下一个"墓碑"，而唯一索引比较时不看 rowId，
+    // 之后同键的记录再插进来时会跟这个墓碑比较相等，提交时按 key 删除就可能删错行
+    private boolean removeUncommittedInsert(Object key, Lockable lockable) {
+        Lock lock = lockable.getLock();
+        if (!(lock instanceof RowLock))
+            return false;
+        RowLock rowLock = (RowLock) lock;
+        UndoLogRecord insertRecord = rowLock.getInsertRecord();
+        if (insertRecord == null || insertRecord.isUndone())
+            return false;
+        insertRecord.setUndone(true);
+        rowLock.setInsertRecord(null);
+        markDirtyPage(key, lockable);
+        // 必须在列值还在的时候删，置空之后BTree就无法按比较定位这一项了
+        lockable.getPageListener().getPageReference().remove(key);
+        lockable.setLockedValue(null);
+        return true;
     }
 
     @Override

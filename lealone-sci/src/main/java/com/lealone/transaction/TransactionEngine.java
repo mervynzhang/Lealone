@@ -6,6 +6,7 @@
 package com.lealone.transaction;
 
 import java.util.List;
+import java.util.function.LongSupplier;
 
 import com.lealone.db.Constants;
 import com.lealone.db.RunMode;
@@ -42,6 +43,20 @@ public interface TransactionEngine extends PluggableEngine {
     boolean supportsMVCC();
 
     void checkpoint();
+
+    /**
+     * 设置执行checkpoint前的回调。checkpoint会保存各个StorageMap并且截断redo log，
+     * 在此之前必须先执行完所有还没执行的异步操作，比如非唯一索引的批量索引操作，
+     * 否则会丢失索引记录。
+     * 回调返回还没执行完的异步操作所属事务的最小事务id，checkpoint不能把
+     * lastTransactionId设置得比它还大，否则这些操作的redo log会被提前截断。
+     */
+    default void setBeforeCheckpointHandler(LongSupplier handler) {
+    }
+
+    default long runBeforeCheckpointHandler() {
+        return Long.MAX_VALUE;
+    }
 
     default void recover(StorageMap<?, ?> map, List<StorageMap<?, ?>> indexMaps) {
     }
