@@ -309,11 +309,10 @@ public class Chunk {
         writePagePositions(body);
         writeRemovedPages(body, chunkManager);
 
-        // chunk header
-        writeHeader();
-        // chunk body
+        // 先写body，最后写chunk header，如果中间崩溃，header里也不会出现指向未写完内容的root page
         long bodyPos = appendMode ? size() : CHUNK_HEADER_SIZE;
         fileStorage.writeFully(bodyPos, body.getAndFlipBuffer());
+        writeHeader();
         fileStorage.sync();
     }
 
