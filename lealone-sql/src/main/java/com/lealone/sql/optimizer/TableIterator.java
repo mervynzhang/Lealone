@@ -95,6 +95,9 @@ public class TableIterator {
             this.oldRow = oldRow;
             return -1;
         }
+        // 锁成功后要用真正加锁的行对象刷新tableFilter，
+        // 否则后续读到的是加锁前遍历得到的副本，会基于旧值更新导致丢失更新
+        tableFilter.rebuildSearchRow(session, oldRow);
         return 1;
     }
 
