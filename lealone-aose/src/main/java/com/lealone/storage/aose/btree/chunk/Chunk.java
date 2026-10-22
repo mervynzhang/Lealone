@@ -135,11 +135,15 @@ public class Chunk {
     }
 
     public int getOffset() {
-        int size = (int) size();
-        if (size <= 0)
+        long size = size();
+        if (size <= CHUNK_HEADER_SIZE)
             return 0;
-        else
-            return size - CHUNK_HEADER_SIZE;
+        long offset = size - CHUNK_HEADER_SIZE;
+        // chunk的文件长度还包括页面位置表等，可能超过2G，不能直接强转成int
+        if (offset > Integer.MAX_VALUE)
+            throw DataUtils.newIllegalStateException(DataUtils.ERROR_WRITING_FAILED,
+                    "Chunk too large, max size: {0}, current size: {1}", Integer.MAX_VALUE, size);
+        return (int) offset;
     }
 
     private void readPagePositions() {
