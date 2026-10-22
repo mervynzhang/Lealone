@@ -174,15 +174,29 @@ public class Update extends UpDel {
                 done = fireBeforeRow(table, oldRow, newRow);
             }
             if (!done) { // update row
+                // 更新行时oldRow的列值会被新行覆盖，修改主键字段时还会变成一个没有列值的墓碑行，
+                // 所以要在更新前保留一份，否则after触发器和外键约束拿到的就不是旧值了
+                Row oldRowSnapshot = fireRow ? copyRow(oldRow) : null;
                 onPendingOperationStart();
                 table.updateRow(session, oldRow, newRow, updateColumnIndexes, true, ar -> {
                     if (fireRow && ar.isSucceeded()) {
-                        fireAfterRow(table, oldRow, newRow);
+                        fireAfterRow(table, oldRowSnapshot, newRow);
                     }
                     onPendingOperationComplete(ar);
                 });
             }
             return !done;
+        }
+
+        // 只保留行号和列值，用于更新后还能拿到更新前的数据
+        private Row copyRow(Row row) {
+            Value[] columns = row.getColumns();
+            if (columns == null) {
+                return row;
+            }
+            Value[] copy = new Value[columns.length];
+            System.arraycopy(columns, 0, copy, 0, columns.length);
+            return new Row(row.getKey(), copy);
         }
 
         private Row createNewRow(Row oldRow) {
