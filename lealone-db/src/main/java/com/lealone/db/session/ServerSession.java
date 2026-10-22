@@ -1295,8 +1295,13 @@ public class ServerSession extends SessionBase implements InternalSession {
 
     @Override
     public Transaction getTransaction() {
-        if (transaction != null)
-            return transaction;
+        if (transaction != null) {
+            // 事务可能已经被异步提交或回滚了，不能再把已结束的事务返回给调用方，
+            // 否则后续每条语句都会报Transaction is closed
+            if (!transaction.isClosed())
+                return transaction;
+            transaction = null;
+        }
 
         RunMode runMode = getRunMode();
         Transaction transaction = database.getTransactionEngine().beginTransaction(runMode,
