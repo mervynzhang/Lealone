@@ -7,6 +7,8 @@ package com.lealone.storage.aose.btree;
 
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -461,6 +463,22 @@ public class BTreeStorage {
         }
     }
 
+    private Set<Long> readRedoLogTransactionIds() {
+        Set<Long> transactionIds = new HashSet<>();
+        ByteBuffer log = readRedoLog();
+        if (log == null)
+            return transactionIds;
+        while (log.hasRemaining()) {
+            int len = log.getInt();
+            int pos = log.position();
+            int type = log.get();
+            if (type > 1)
+                transactionIds.add(DataUtils.readVarLong(log));
+            log.position(pos + len);
+        }
+        return transactionIds;
+    }
+
     void sync() {
         redoLogLock.lock();
         try {
@@ -477,27 +495,25 @@ public class BTreeStorage {
         }
     }
 
+    // 恢复时每个事务都要验证一次，原来每次都重新分配并扫描整个redo log，
+    // 一个几十MB的log配上十万级的事务就是TB级的分配，恢复要几分钟。
+    // 现在只解析一次，之后用集合判断。
+    private Set<Long> redoLogTransactionIds;
+    private Chunk redoLogTransactionIdsChunk;
+    private boolean redoLogTransactionIdsValid;
+
     boolean validateRedoLog(long lastTransactionId) {
         redoLogLock.lock();
         try {
             Chunk c = chunkManager.getLastChunk();
             if (c != null && c.getLastTransactionId() >= lastTransactionId)
                 return true;
-            ByteBuffer log = readRedoLog();
-            if (log == null)
-                return false;
-            while (log.hasRemaining()) {
-                int len = log.getInt();
-                int pos = log.position();
-                int type = log.get();
-                if (type > 1) {
-                    long transactionId = DataUtils.readVarLong(log);
-                    if (transactionId == lastTransactionId)
-                        return true;
-                }
-                log.position(pos + len);
+            if (!redoLogTransactionIdsValid || redoLogTransactionIdsChunk != c) {
+                redoLogTransactionIds = readRedoLogTransactionIds();
+                redoLogTransactionIdsChunk = c;
+                redoLogTransactionIdsValid = true;
             }
-            return false;
+            return redoLogTransactionIds.contains(lastTransactionId);
         } finally {
             redoLogLock.unlock();
         }
