@@ -235,6 +235,22 @@ public class SystemFunction extends BuiltInFunction {
         return table.getDiskSpaceUsed();
     }
 
+    private static boolean isLazyArgs(int type) {
+        switch (type) {
+        case IFNULL:
+        case CASEWHEN:
+        case COALESCE:
+        case NVL2:
+        case DECODE:
+        case CASE:
+        case GREATEST:
+        case LEAST:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     private static boolean cancelStatement(ServerSession session, int targetSessionId) {
         session.getUser().checkAdmin();
         ServerSession[] sessions = session.getDatabase().getSessions(false);
@@ -253,12 +269,15 @@ public class SystemFunction extends BuiltInFunction {
 
     @Override
     protected Value getValueN(ServerSession session, Expression[] args, Value[] values) {
+        // CASE、COALESCE这些函数的参数不一定被求值，不能提前把参数都算出来，
+        // 否则没有被选中的分支也会执行(比如除以0)，聚合函数还会被算两次
+        boolean lazyArgs = isLazyArgs(info.type);
         Value v0 = getNullOrValue(session, args, values, 0);
-        Value v1 = getNullOrValue(session, args, values, 1);
-        Value v2 = getNullOrValue(session, args, values, 2);
-        Value v3 = getNullOrValue(session, args, values, 3);
-        Value v4 = getNullOrValue(session, args, values, 4);
-        Value v5 = getNullOrValue(session, args, values, 5);
+        Value v1 = lazyArgs ? null : getNullOrValue(session, args, values, 1);
+        Value v2 = lazyArgs ? null : getNullOrValue(session, args, values, 2);
+        Value v3 = lazyArgs ? null : getNullOrValue(session, args, values, 3);
+        Value v4 = lazyArgs ? null : getNullOrValue(session, args, values, 4);
+        Value v5 = lazyArgs ? null : getNullOrValue(session, args, values, 5);
         Value result;
         switch (info.type) {
         case NULLIF:
@@ -794,13 +813,18 @@ public class SystemFunction extends BuiltInFunction {
         scale = s;
         displaySize = d;
         if (allConst) {
-            Value v = getValue(session);
-            if (v == ValueNull.INSTANCE) {
-                if (info.type == CAST || info.type == CONVERT) {
-                    return this;
+            try {
+                Value v = getValue(session);
+                if (v == ValueNull.INSTANCE) {
+                    if (info.type == CAST || info.type == CONVERT) {
+                        return this;
+                    }
                 }
+                return ValueExpression.get(v);
+            } catch (DbException e) {
+                // 常量折叠时可能出错，比如 CASE/COALESCE 里不会被求值的分支有除以0，
+                // 这时保留原来的表达式，等真正执行到再报错
             }
-            return ValueExpression.get(v);
         }
         return this;
     }
