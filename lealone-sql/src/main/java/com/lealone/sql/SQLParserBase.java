@@ -5070,8 +5070,10 @@ public class SQLParserBase implements SQLParser {
     }
 
     protected TransactionStatement parseCheckpoint() {
-        readIf("SYNC"); // 兼容原来的CHECKPOINT_SYNC命令
-        return new TransactionStatement(session, SQLStatement.CHECKPOINT);
+        boolean sync = readIf("SYNC"); // 兼容原来的CHECKPOINT_SYNC命令
+        TransactionStatement command = new TransactionStatement(session, SQLStatement.CHECKPOINT);
+        command.setCheckpointSync(sync);
+        return command;
     }
 
     protected StatementBase parseAlter() {

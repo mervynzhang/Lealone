@@ -251,9 +251,18 @@ public class AOTransactionEngine extends TransactionEngineBase implements Storag
 
     @Override
     public void checkpoint() {
+        checkpoint(false);
+    }
+
+    @Override
+    public void checkpoint(boolean sync) {
         for (int i = 0; i < logSyncServices.length; i++) {
-            if (logSyncServices[i].isRunning())
-                logSyncServices[i].getCheckpointService().executeCheckpointAsync(false);
+            if (logSyncServices[i].isRunning()) {
+                if (sync)
+                    logSyncServices[i].getCheckpointService().executeCheckpointSync();
+                else
+                    logSyncServices[i].getCheckpointService().executeCheckpointAsync(false);
+            }
         }
     }
 

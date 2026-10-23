@@ -50,16 +50,15 @@ public class CheckpointDurabilityTest extends TestBase {
         assertRestarted(db, 2000, 100);
     }
 
-    // CHECKPOINT之后update仍有偶发丢失(本地3次跑挂2次，index-agent矩阵10次挂2次)，是P0同族的残留问题，
+    // CHECKPOINT SYNC 会等脏页写完再返回，所以这里用SYNC形式做确定性校验
     // 修好之前先忽略，避免让完整套件变成偶发红
-    @Ignore("CHECKPOINT之后update偶发丢失(changed=0)，P0同族残留，待修")
     @Test
     public void testCheckpointThenUpdate() throws Exception {
         String db = "ckptdurC" + System.nanoTime();
         run(db, url -> {
             execute(url, "create table if not exists t(id int primary key, v varchar(200))");
             execute(url, "insert into t select x, 'v'||x from system_range(1, 2000)");
-            execute(url, "CHECKPOINT");
+            execute(url, "CHECKPOINT SYNC");
             assertEquals(100, executeUpdate(url, "update t set v='changed'||id where id <= 100"));
         });
         assertRestarted(db, 2000, 100);
@@ -72,7 +71,7 @@ public class CheckpointDurabilityTest extends TestBase {
         run(db, url -> {
             execute(url, "create table if not exists t(id int primary key, v varchar(300))");
             execute(url, "insert into t select x, repeat('d', 200)||x from system_range(1, 20000)");
-            execute(url, "CHECKPOINT");
+            execute(url, "CHECKPOINT SYNC");
             execute(url, "BACKUP TO '" + new File(TEST_DIR, db + ".zip").getAbsolutePath() + "'");
             // 跨多个叶子页更新
             assertEquals(151, executeUpdate(url,
