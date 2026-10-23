@@ -222,15 +222,19 @@ public class AOTransaction implements Transaction {
     }
 
     private void writeRedoLog(boolean asyncCommit) {
-        checkNotClosed();
+        // 同一条语句会被重复stop，此时事务可能已经提交结束，不用再写一次redo log，
+        // 结果由第一次提交负责回调
+        UndoLog ul = undoLog;
+        if (ul == null)
+            return;
         if (session != null && !session.isRedoLogEnabled()) {
             if (asyncCommit)
                 asyncCommitComplete();
             return;
         }
-        if (logSyncService.needSync() && undoLog.isNotEmpty()) {
-            undoLog.prepareWrite();
-            RedoLogRecord r = new LocalTransactionRLR(undoLog, null);
+        if (logSyncService.needSync() && ul.isNotEmpty()) {
+            ul.prepareWrite();
+            RedoLogRecord r = new LocalTransactionRLR(ul, null);
             if (lobTask != null)
                 r = new LobSave(lobTask, r);
             if (asyncCommit) {
@@ -241,7 +245,7 @@ public class AOTransaction implements Transaction {
         } else {
             if (lobTask != null)
                 lobTask.run();
-            if (undoLog.isNotEmpty()) // 只读事务不用管
+            if (ul.isNotEmpty()) // 只读事务不用管
                 onSynced();
             // 不需要事务日志同步，可以直接提交事务了
             if (asyncCommit)

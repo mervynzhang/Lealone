@@ -39,6 +39,10 @@ public abstract class RedoLogRecord {
         return false;
     }
 
+    public UndoLog getUndoLog() {
+        return null;
+    }
+
     public void initPendingRedoLog(Map<String, List<ByteBuffer>> pendingRedoLog) {
     }
 
@@ -100,6 +104,11 @@ public abstract class RedoLogRecord {
         }
 
         @Override
+        public UndoLog getUndoLog() {
+            return undoLog;
+        }
+
+        @Override
         public void initPendingRedoLog(Map<String, List<ByteBuffer>> pendingRedoLog) {
             UndoLogRecord.readForRedo(operations, pendingRedoLog);
         }
@@ -136,6 +145,11 @@ public abstract class RedoLogRecord {
         public LobSave(Runnable lobTask, RedoLogRecord r) {
             this.lobTask = lobTask;
             this.r = r;
+        }
+
+        @Override
+        public UndoLog getUndoLog() {
+            return r.getUndoLog();
         }
 
         @Override
