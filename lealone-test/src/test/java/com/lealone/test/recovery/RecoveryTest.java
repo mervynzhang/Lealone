@@ -63,7 +63,6 @@ public class RecoveryTest {
         }
     }
 
-    @Ignore("已知bug: kill -9之后，已经返回成功的自动提交记录会丢失(instant模式也会丢)")
     @Test
     public void testCommitDurability() throws Exception {
         File dir = newDir("commit-durability");
@@ -79,7 +78,6 @@ public class RecoveryTest {
         }
     }
 
-    @Ignore("已知bug: 同上，崩溃后已提交的基线记录会丢失")
     @Test
     public void testTxnAtomicity() throws Exception {
         File dir = newDir("txn-atomicity");
@@ -96,7 +94,6 @@ public class RecoveryTest {
         }
     }
 
-    @Ignore("已知bug: 崩溃恢复会丢失已提交记录，子进程提交路径还会抛undoLog为null的NPE")
     @Test
     public void testBulkLoad() throws Exception {
         File dir = newDir("bulk-load");
@@ -189,7 +186,6 @@ public class RecoveryTest {
         }
     }
 
-    @Ignore("已知bug: instant模式仍然会丢已提交记录，异步提交路径还会抛transaction为null的NPE")
     @Test
     public void testLogSyncInstant() throws Exception {
         File dir = newDir("log-sync-instant");
