@@ -284,7 +284,8 @@ public class RedoLog {
         return true;
     }
 
-    public void save() {
+    // 返回本次真正写出redo记录的条数，没有可写的记录时返回0，调用方据此做退化保护
+    public int save() {
         SystemOutline.createNode(SystemOutlineNode.RedoLog_save);
         boolean isPeriodic = logSyncService.isPeriodic();
         // 事务中涉及的StorageMap对应的log
@@ -298,6 +299,7 @@ public class RedoLog {
         AtomicLong redoLogRecordCount = logSyncService.getRedoLogRecordCount();
         long logLength = 0;
         int writeCount = 0;
+        int processedCount = 0;
         while (redoLogRecordCount.get() > 0) {
             // Instant的场景会在while循环内调用sync，所以重新创建，避免重复执行
             if (!isPeriodic) {
@@ -322,6 +324,7 @@ public class RedoLog {
                 }
             }
             int buffLength = 0;
+            int passProcessedCount = 0;
             // 找出提交时间戳最小的PendingTransaction
             PendingTransaction pt = nextPendingTransaction(pts);
             while (pt != null) {
@@ -340,6 +343,7 @@ public class RedoLog {
                         logLength += write(logs);
                     }
                     redoLogRecordCount.decrementAndGet();
+                    passProcessedCount++;
                     // 提前设置已经同步完成，让调度线程及时回收PendingTransaction
                     if (isPeriodic) {
                         setSynced(pt);
@@ -379,10 +383,17 @@ public class RedoLog {
                 }
                 scheduler.wakeUp();
             }
+            processedCount += passProcessedCount;
+            // 本轮没有写出任何redo记录，剩下的计数不是本线程能处理的，
+            // 不能在这里死循环，交给调用方做退化保护
+            if (passProcessedCount == 0) {
+                break;
+            }
         }
         if (logLength > 0 && isPeriodic) {
             sync(logs);
         }
+        return processedCount;
     }
 
     private void setSynced(PendingTransaction pt) {
