@@ -8,6 +8,8 @@ package com.lealone.test.sql;
 import org.junit.Before;
 import org.junit.Test;
 
+import com.lealone.db.api.ErrorCode;
+
 /**
  * Regression tests for the real (non dialect) defects found by the sqllogictest run.
  * <p>
@@ -64,5 +66,18 @@ public class SltRegressionTest extends SqlTestBase {
         assertEquals(2, getIntValue(1, true));
         sql = "SELECT CASE WHEN 1=1 THEN COUNT(DISTINCT a) ELSE 0 END FROM slt_t";
         assertEquals(3, getIntValue(1, true));
+    }
+
+    // 建表失败时不能把上一条DDL创建的表也回滚掉
+    @Test
+    public void failedCreateTableKeepsPreviousTable() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS slt_keep");
+        executeUpdate("DROP TABLE IF EXISTS slt_bad");
+        executeUpdate("CREATE TABLE slt_keep(c INTEGER)");
+        executeUpdateThanAssertErrorCode("CREATE TABLE slt_bad(a INTEGER UNIQUE, b TEXT UNIQUE)",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+        sql = "SELECT COUNT(*) FROM slt_keep";
+        assertEquals(0, getIntValue(1, true));
+        executeUpdate("DROP TABLE slt_keep");
     }
 }
