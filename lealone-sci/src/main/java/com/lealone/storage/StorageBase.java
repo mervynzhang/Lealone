@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.ZipEntry;
+import java.util.zip.CRC32;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import com.lealone.common.exceptions.DbException;
@@ -142,6 +144,18 @@ public abstract class StorageBase implements Storage {
     }
 
     @Override
+    public void backupTo(String baseDir, BackupContext ctx) {
+        if (isInMemory())
+            return;
+        save();
+        try {
+            backupFiles(baseDir, ctx);
+        } catch (IOException e) {
+            throw DbException.convertIOException(e, "");
+        }
+    }
+
+    @Override
     public void close() {
         for (StorageEventListener listener : listeners.values())
             listener.beforeClose(this);
@@ -231,6 +245,70 @@ public abstract class StorageBase implements Storage {
         out.putNextEntry(new ZipEntry(entryName));
         IOUtils.copyAndCloseInput(in, out);
         out.closeEntry();
+    }
+
+    private void backupFiles(String baseDir, BackupContext ctx) throws IOException {
+        if (baseDir != null)
+            baseDir = new File(baseDir).getCanonicalPath().replace('\\', '/');
+        String path = new File(getStoragePath()).getCanonicalPath();
+        FilePath p = FilePath.get(path);
+        if (p.isDirectory()) {
+            String pathShortName = path.replace('\\', '/');
+            if (baseDir != null && pathShortName.startsWith(baseDir))
+                pathShortName = pathShortName.substring(baseDir.length() + 1);
+            else
+                pathShortName = pathShortName.substring(pathShortName.lastIndexOf('/') + 1);
+            FilePath dir = FilePath.get(path);
+            for (FilePath map : dir.newDirectoryStream()) {
+                String mapName = map.getName();
+                String entryNameBase = pathShortName + "/" + mapName;
+                for (FilePath file : map.newDirectoryStream()) {
+                    backupFile(ctx, entryNameBase + "/" + file.getName(), mapName, file);
+                }
+            }
+        } else {
+            backupFile(ctx, p.getName(), null, p);
+        }
+    }
+
+    // 先流式计算size和crc32，只有新增或变化的文件才写入zip，全程不把文件读进内存
+    private void backupFile(BackupContext ctx, String entryName, String mapName, FilePath file)
+            throws IOException {
+        long size;
+        long crc32;
+        CRC32 crc = new CRC32();
+        size = 0;
+        try (InputStream in = open(mapName, file)) {
+            if (in == null)
+                return;
+            byte[] buff = new byte[8192];
+            int read;
+            while ((read = in.read(buff)) > 0) {
+                crc.update(buff, 0, read);
+                size += read;
+            }
+        }
+        crc32 = crc.getValue();
+        ctx.addPresent(entryName);
+        if (!ctx.shouldWrite(entryName, size, crc32))
+            return;
+        ZipOutputStream out = ctx.getZipOutputStream();
+        try (InputStream in = open(mapName, file)) {
+            out.putNextEntry(new ZipEntry(entryName));
+            byte[] buff = new byte[8192];
+            int read;
+            while ((read = in.read(buff)) > 0) {
+                out.write(buff, 0, read);
+            }
+            out.closeEntry();
+        }
+        ctx.addEntry(entryName, size, crc32);
+    }
+
+    private InputStream open(String mapName, FilePath file) throws IOException {
+        if (mapName == null)
+            return file.newInputStream();
+        return getInputStream(mapName, file);
     }
 
     public static ZipOutputStream createZipOutputStream(String fileName) throws IOException {

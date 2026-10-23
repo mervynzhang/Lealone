@@ -71,6 +71,8 @@ import com.lealone.db.value.Value;
 import com.lealone.net.NetNode;
 import com.lealone.sql.SQLEngine;
 import com.lealone.sql.SQLParser;
+import com.lealone.storage.BackupContext;
+import com.lealone.storage.BackupManifest;
 import com.lealone.storage.Storage;
 import com.lealone.storage.StorageBase;
 import com.lealone.storage.StorageBuilder;
@@ -1764,18 +1766,40 @@ public class Database extends DbObjectBase implements DataHandler {
     }
 
     public void backupTo(String fileName, Long lastDate) {
+        if (lastDate != null) {
+            // 按文件mtime过滤会漏数据和漏删除清单，不能再静默产出错误备份包
+            throw DbException.getUnsupportedException(
+                    "LAST DATE is not supported, please use: BACKUP TO '<file>' INCREMENTAL FROM '<base backup>'");
+        }
+        backupTo(fileName, (String) null);
+    }
+
+    public void backupTo(String fileName, String baseBackupFile) {
         checkpoint();
         String baseDir = getStoragePath().replace('\\', '/');
         baseDir = baseDir.substring(0, baseDir.lastIndexOf('/'));
+        BackupManifest baseManifest = null;
+        byte[] baseManifestBytes = null;
+        if (baseBackupFile != null) {
+            try {
+                File baseFile = new File(baseBackupFile);
+                baseManifest = BackupManifest.read(baseFile);
+                baseManifestBytes = BackupManifest.readManifestBytes(baseFile);
+            } catch (IOException e) {
+                throw DbException.convertIOException(e, baseBackupFile);
+            }
+        }
         try (ZipOutputStream out = StorageBase.createZipOutputStream(fileName)) {
+            BackupContext ctx = new BackupContext(out, baseManifest, baseManifestBytes);
             // 如果有database lob storage，这一步也把它备份了
             for (Storage s : getStorages()) {
-                s.backupTo(baseDir, out, lastDate);
+                s.backupTo(baseDir, ctx);
             }
             // 备份table lob storage
             for (DataHandler dh : dataHandlers.values()) {
-                dh.getLobStorage().backupTo(baseDir, out, lastDate);
+                dh.getLobStorage().backupTo(baseDir, ctx);
             }
+            ctx.finish();
         } catch (IOException e) {
             throw DbException.convertIOException(e, fileName);
         }
