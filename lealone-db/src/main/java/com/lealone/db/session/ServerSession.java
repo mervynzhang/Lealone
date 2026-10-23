@@ -552,13 +552,14 @@ public class ServerSession extends SessionBase implements InternalSession {
         closeTemporaryResults();
         closeCurrentCommand();
 
-        boolean asyncCommit = false;
         if (asyncResult != null && asyncHandler != null) {
             if (isAutoCommit() || isCommitCommand) {
-                asyncCommit = true;
                 // 不阻塞当前线程，异步提交事务，等到事务日志写成功后再给客户端返回语句的执行结果
                 asyncCommit(asyncHandler, asyncResult);
             } else {
+                // 先置null再通知客户端：客户端被唤醒后可能立刻执行下一条语句并设置新的
+                // YieldableCommand，晚一步再置null会把新命令清掉，WAITING的语句永远不会被重新调度
+                endYieldableCommand();
                 // 当前语句是在一个手动提交的事务中进行，提前给客户端返回语句的执行结果
                 asyncHandler.handle(asyncResult);
             }
@@ -567,9 +568,6 @@ public class ServerSession extends SessionBase implements InternalSession {
                 // 阻塞当前线程，可能需要等事务日志写完为止
                 commit();
             }
-        }
-        // asyncCommit执行完后才能把YieldableCommand置null，否则会导致部分响应无法发送
-        if (!asyncCommit) {
             endYieldableCommand();
         }
     }
