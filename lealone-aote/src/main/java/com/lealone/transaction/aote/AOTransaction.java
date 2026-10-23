@@ -325,20 +325,22 @@ public class AOTransaction implements Transaction {
             return OPERATION_NEED_WAIT;
 
         SessionStatus oldSessionStatus = session.getStatus();
+        // 异步回调的路径也要记录在等谁，否则LOCK_TIMEOUT检查看不到等待状态
+        session.setLockedBy(SessionStatus.WAITING, this, lockedObject);
+        Throwable timeoutError = session.getLockTimeoutError();
+        if (timeoutError != null)
+            throw DbException.convert(timeoutError);
         if (asyncHandler != null) {
             asyncHandler.handle(SessionStatus.WAITING);
-        } else {
-            session.setLockedBy(SessionStatus.WAITING, this, lockedObject);
         }
 
         this.session.addWaitingScheduler(session.getScheduler());
 
         // 如果已经提交了，要恢复到原来的状态，通知重试
         if (isClosed()) {
+            session.setLockedBy(oldSessionStatus, null, null);
             if (asyncHandler != null) {
                 asyncHandler.handle(null);
-            } else {
-                session.setLockedBy(oldSessionStatus, null, null);
             }
             return OPERATION_NEED_RETRY;
         }
