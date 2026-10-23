@@ -1694,8 +1694,12 @@ public class Database extends DbObjectBase implements DataHandler {
      * Flush all changes and open a new transaction log.
      */
     public void checkpoint() {
+        checkpoint(false);
+    }
+
+    public void checkpoint(boolean sync) {
         if (persistent) {
-            transactionEngine.checkpoint();
+            transactionEngine.checkpoint(sync);
         }
         getTempFileDeleter().deleteUnused();
     }

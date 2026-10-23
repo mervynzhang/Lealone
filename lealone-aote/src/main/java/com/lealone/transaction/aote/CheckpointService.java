@@ -95,6 +95,13 @@ public class CheckpointService implements Runnable {
         logSyncService.wakeUp(); // 唤醒执行检查点
     }
 
+    // CHECKPOINT SYNC用: 等这次checkpoint真正把脏页写完再返回
+    public void executeCheckpointSync() {
+        if (isClosed)
+            return;
+        executeCheckpoint(true, false, true);
+    }
+
     // 按周期自动触发
     @Override
     public void run() {
@@ -226,6 +233,10 @@ public class CheckpointService implements Runnable {
     }
 
     private void executeCheckpoint(boolean force, boolean isClosing) {
+        executeCheckpoint(force, isClosing, false);
+    }
+
+    private void executeCheckpoint(boolean force, boolean isClosing, boolean sync) {
         if (maps.isEmpty())
             return;
         boolean needSave = collectDirtyMemory();
@@ -235,8 +246,8 @@ public class CheckpointService implements Runnable {
                 || isClosed // 关闭前要刷脏页
                 || lastSavedAt + checkpointPeriod < System.currentTimeMillis()) // 周期超过阈值了
         {
-            if (isClosing) { // 正在关闭时，直接用当前线程保存
-                save(force, true);
+            if (isClosing || sync) { // 正在关闭或SYNC时，直接用当前线程保存
+                save(force, isClosing);
             } else {
                 workingThread = new Thread(() -> {
                     save(force, false);

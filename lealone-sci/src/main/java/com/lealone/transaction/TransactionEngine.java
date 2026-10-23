@@ -44,6 +44,11 @@ public interface TransactionEngine extends PluggableEngine {
 
     void checkpoint();
 
+    // sync=true时等checkpoint真正把脏页写完再返回(CHECKPOINT SYNC)
+    default void checkpoint(boolean sync) {
+        checkpoint();
+    }
+
     /**
      * 设置执行checkpoint前的回调。checkpoint会保存各个StorageMap并且截断redo log，
      * 在此之前必须先执行完所有还没执行的异步操作，比如非唯一索引的批量索引操作，
