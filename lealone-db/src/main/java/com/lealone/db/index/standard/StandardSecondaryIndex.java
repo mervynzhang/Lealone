@@ -341,6 +341,11 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         }
 
         @Override
+        public boolean isSearchRowUpToDate() {
+            return false;
+        }
+
+        @Override
         public boolean next() {
             searchRow = nextSearchRow();
             row = null; // 延迟构建
