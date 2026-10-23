@@ -21,6 +21,7 @@ public class Backup extends ManipulationStatement {
 
     private String fileName;
     private String lastDate;
+    private String baseFileName;
 
     public Backup(ServerSession session) {
         super(session);
@@ -44,6 +45,10 @@ public class Backup extends ManipulationStatement {
         this.lastDate = lastDate;
     }
 
+    public void setBaseFileName(String baseFileName) {
+        this.baseFileName = baseFileName;
+    }
+
     @Override
     public int update() {
         session.getUser().checkAdmin();
@@ -51,8 +56,12 @@ public class Backup extends ManipulationStatement {
         if (!db.isPersistent()) {
             throw DbException.get(ErrorCode.DATABASE_IS_NOT_PERSISTENT);
         }
-        Long ld = lastDate != null ? Date.valueOf(lastDate).getTime() : null;
-        db.backupTo(fileName, ld);
+        if (baseFileName != null) {
+            db.backupTo(fileName, baseFileName);
+        } else {
+            Long ld = lastDate != null ? Date.valueOf(lastDate).getTime() : null;
+            db.backupTo(fileName, ld);
+        }
         return 0;
     }
 }
