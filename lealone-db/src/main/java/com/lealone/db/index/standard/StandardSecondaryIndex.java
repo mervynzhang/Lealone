@@ -372,6 +372,8 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         }
 
         protected IndexKey getIndexKey(TransactionMapCursor<IndexKey, IndexKey> tmCursor) {
+            // 每条索引项都必须用它自己对应的主表行来校验，不能复用上一条的缓存
+            row = null;
             IndexKey current = tmCursor.getKey();
             // 索引项可能是墓碑(正在被删)或残留的孤儿项，只有主表行当前值还等于它时才返回，
             // 否则该行会通过更新后的索引项再产出一次，同一个rowKey会返回两次
@@ -386,7 +388,10 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
 
         // 主表行当前的索引列值是否还等于这条索引项保存的值
         private boolean isRowStillMatching(IndexKey indexKey) {
-            Row row = table.getRow(session, indexKey.getKey());
+            // 复用游标里缓存的这一行，避免和后续TableFilter取值时重复读一次主表
+            if (row == null)
+                row = table.getRow(session, indexKey.getKey());
+            Row row = this.row;
             if (row == null)
                 return false;
             IndexKey currentKey = convertToKey(row);
