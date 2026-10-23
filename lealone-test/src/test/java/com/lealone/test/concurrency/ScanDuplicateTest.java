@@ -22,24 +22,21 @@ import org.junit.Test;
 import com.lealone.test.TestBase;
 
 /**
- * 4k 页的表在并发 insert/delete/checkpoint 时反复扫描主索引，
- * 要求扫描不能成规模地重复返回同一行。
+ * 并发扫描不能返回重复行(端到端护栏)。4k 页的表在并发 insert/delete/checkpoint 时反复扫描主索引。
  *
- * BTreeCursor 曾经在子页被切割后从父节点的第一个子页重新往下找，
- * 把父节点左边已经扫描过的记录又扫一遍，形状是 ...34 35 36 1 2 3...，
- * 实测能扫出 91979 行但表里只有 10000 行。
+ * 历史修复：
+ * - BTreeCursor 曾经在子页被切割后从父节点第一个子页重扫，实测 1 万行的表扫出 9 万多行；
+ *   已修(按最后返回的 key 从根重新定位)。
+ * - 扫描曾返回已删除的墓碑行(全 NULL 行)：StandardPrimaryIndex 游标跳过墓碑，
+ *   TableFilter 跳过列值为 null 的行(二级索引还要物化确认基表行还在)。
+ * - 语句重试时 TableIterator 没清旧行，同一行在一次语句执行里被处理两次，进而在二级索引上
+ *   留下陈旧/孤儿索引项；同时二级索引游标改为"主表当前值 == 索引项保存值"才返回。
  *
- * 检出率（本机多次压测统计，不是理论值）：
- * - 修复前：约 100+ 次/40 万次扫描出现重复，每次运行都能复现，单次重复量从十几行到几万行；
- * 判重必须在同一条语句的结果里做（两条聚合语句各自取快照，并发删除时会天然不一致）。
- * 修复前（BTreeCursor 从父节点左端重扫）单条语句就能读出重复 id，形状是 ...34 35 36 1 2 3...；
- * 分两层验证过：
- * - 裸 BTreeMap 游标（不走事务/索引层）在并发 put 下：修复前 3/4 次运行出现倒序/重复 key，
- *   取页改为"取到后确认是不是ref自己的页面、被重定向则按lastKey重新定位"+ "定位后必须大于lastKey"
- *   之后，连续 5 次运行约 8 万次扫描 0 重复；
- * - 但走 SQL 的 `SELECT id ... WHERE id >= 0` 仍会偶发（实测 2/5 次运行在单条语句里读到重复 id，
- *   失败时常见 id=0 的重复行），残余在 BTree 之上（事务层/表层的行可见性），尚未定位。
- * 所以这个用例先 @Ignore：等 SQL 路径残余修好后去掉 @Ignore 作为端到端护栏。
+ * 现状(实测)：所有事务提交完再扫描时不再重复，finalDup = 0/20 次运行；但**并发扫描期间**
+ * (有未提交更新在飞)仍偶发同一语句返回重复行(concurrentDuplicates 约 2~40/次运行，单次百万级扫描)。
+ * 残余原因判断为：同一语句内"读索引项"与"读主表行"可能落在不同版本上，需要语句级快照
+ * (或索引项校验也用同一快照)才能根治，属事务层/可见性层问题。
+ * 所以本用例先保持 @Ignore，等事务层结论落地后再去掉 @Ignore 作为端到端护栏。
  */
 public class ScanDuplicateTest extends TestBase {
 
@@ -49,7 +46,7 @@ public class ScanDuplicateTest extends TestBase {
     // 并发采样允许的最大重复行数，用于容忍已知的1行残留竞态窗
     private static final long MAX_DELTA = 3;
 
-    @Ignore("BTree层已修；SQL扫描仍有BTree之上的残余重复(实测2/5次)，修好后去掉@Ignore")
+    @Ignore("残余：并发扫描期间同一语句内索引项与主表行读取跨版本，需要语句级快照(事务层)，修好后去掉@Ignore")
     @Test(timeout = 120000)
     public void concurrentScanMustNotReturnDuplicateRows() throws Exception {
         String db = "scandup_" + System.currentTimeMillis() + "_" + RUN_ID.incrementAndGet();

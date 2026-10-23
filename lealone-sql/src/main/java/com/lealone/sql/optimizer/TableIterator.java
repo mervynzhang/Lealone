@@ -37,6 +37,9 @@ public class TableIterator {
     }
 
     public void reset() {
+        // 语句重试必须从头重扫：这里不清旧行的话，下一次next()会用旧行rebuild并直接返回true，
+        // 而游标还停在起始位置，随后又会走到同一行，导致同一行在一次语句执行里被处理两次
+        oldRow = null;
         tableFilter.reset();
     }
 
