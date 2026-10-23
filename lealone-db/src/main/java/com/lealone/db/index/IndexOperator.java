@@ -20,6 +20,7 @@ import com.lealone.db.lock.DbObjectLock;
 import com.lealone.db.row.Row;
 import com.lealone.db.scheduler.InternalScheduler;
 import com.lealone.db.scheduler.Scheduler;
+import com.lealone.db.scheduler.SchedulerFactory;
 import com.lealone.db.scheduler.SchedulerTaskManager;
 import com.lealone.db.scheduler.SchedulerThread;
 import com.lealone.db.session.ServerSession;
@@ -330,8 +331,10 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
 
     private void run(IndexOperation io) {
         // 在没有可重复读事务的情况下，对索引执行insert或delete操作可以不用走事务层，直接走存储层
+        // 页操作还没执行完时不能走存储层快路径，否则同一个索引key上的操作可能乱序
         boolean fastPath = !(table.getDatabase().getTransactionEngine()
-                .containsRepeatableReadTransactions() || io instanceof UIO);
+                .containsRepeatableReadTransactions() || io instanceof UIO
+                || scheduler.hasPendingPageOperations());
         ioSession.setFastPath(fastPath);
         if (!fastPath) {
             Transaction transaction = ioSession.getTransaction();
@@ -347,7 +350,8 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
             io.setCompleted(true);
             indexOperationSize.decrementAndGet();
             if (!fastPath) {
-                ioSession.asyncCommit();
+                // 同步提交，索引操作真正生效之后才算完成，保证后续操作能看到它
+                ioSession.commit();
             }
         }
     }
@@ -355,10 +359,21 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
     public static void addIndexOperation(ServerSession session, StandardTable table, IndexOperation io) {
         if (io.rowKey == 0)
             io.rowKey = session.getLastIdentity();
+        // 同一个row key的索引操作必须由同一个调度器按顺序执行，否则并发更新同一个索引key时会丢更新
+        InternalScheduler target = getSchedulerByRowKey(session.getScheduler(), io.rowKey);
         List<IndexOperator> indexOperators = table.getIndexOperators();
         for (int i = 0, size = indexOperators.size(); i < size; i++) {
-            indexOperators.get(i).addIndexOperation(session.getScheduler(), (i == 0 ? io : io.copy()));
+            indexOperators.get(i).addIndexOperation(target, (i == 0 ? io : io.copy()));
         }
+    }
+
+    private static InternalScheduler getSchedulerByRowKey(InternalScheduler current, long rowKey) {
+        SchedulerFactory factory = current.getSchedulerFactory();
+        int count = factory.getSchedulerCount();
+        if (count <= 1)
+            return current;
+        Scheduler s = factory.getScheduler((int) Math.floorMod(rowKey, count));
+        return s instanceof InternalScheduler ? (InternalScheduler) s : current;
     }
 
     public static IndexOperation createAIO(long rowKey, Value[] columns) {
