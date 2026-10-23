@@ -45,11 +45,11 @@ public class IncrementalBackupTest extends TestBase {
             execute(conn, "insert into big select x, repeat('b', 500)||x from system_range(1, 20000)");
             execute(conn, "create table if not exists small(id int primary key, v varchar(200))");
             execute(conn, "insert into small select x, repeat('s', 100)||x from system_range(1, 100)");
-            execute(conn, "CHECKPOINT");
+            execute(conn, "CHECKPOINT SYNC");
             execute(conn, "BACKUP TO '" + full.getAbsolutePath() + "'");
             execute(conn, "update small set v = 'updated'||id where id <= 50");
             execute(conn, "delete from small where id > 90");
-            execute(conn, "CHECKPOINT");
+            execute(conn, "CHECKPOINT SYNC");
             execute(conn, "BACKUP TO '" + inc.getAbsolutePath() + "' INCREMENTAL FROM '"
                     + full.getAbsolutePath() + "'");
         }
@@ -102,11 +102,11 @@ public class IncrementalBackupTest extends TestBase {
         try (Connection conn = DriverManager.getConnection(url)) {
             execute(conn, "create table if not exists t(id int primary key, v varchar(200))");
             execute(conn, "insert into t select x, repeat('x', 100)||x from system_range(1, 40000)");
-            execute(conn, "CHECKPOINT");
+            execute(conn, "CHECKPOINT SYNC");
             execute(conn, "BACKUP TO '" + full.getAbsolutePath() + "'");
             // 大批删除，让一部分旧chunk被淘汰
             execute(conn, "delete from t where id > 1000");
-            execute(conn, "CHECKPOINT");
+            execute(conn, "CHECKPOINT SYNC");
             execute(conn, "BACKUP TO '" + inc.getAbsolutePath() + "' INCREMENTAL FROM '"
                     + full.getAbsolutePath() + "'");
         }
