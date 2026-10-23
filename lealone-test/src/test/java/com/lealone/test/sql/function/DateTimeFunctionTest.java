@@ -18,6 +18,8 @@ public class DateTimeFunctionTest extends SqlTestBase {
     }
 
     void init() throws Exception {
+        // 下面的期望值是按东八区算的
+        java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("GMT+8"));
         executeUpdate("DROP TABLE IF EXISTS DateAndTimeFunctionTest");
         executeUpdate("CREATE TABLE DateAndTimeFunctionTest (pk int NOT NULL PRIMARY KEY, " + //
                 "d date, t time, ts timestamp)");
