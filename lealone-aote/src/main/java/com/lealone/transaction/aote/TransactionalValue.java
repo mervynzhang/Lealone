@@ -153,7 +153,8 @@ public class TransactionalValue extends LockableBase {
         switch (isolationLevel) {
         case Transaction.IL_READ_COMMITTED: {
             if (t == null) {
-                return lockable.getValue();
+                // 没有锁的墓碑行(getLockedValue为null)不能当成可见记录返回
+                return maybeDeleted(lockable);
             }
             if (t.isCommitted()) {
                 return getValue(lockable);
