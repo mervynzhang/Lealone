@@ -24,10 +24,13 @@ public class SingleThreadTransactionManager extends TransactionManager {
 
     @Override
     public AOTransaction removeTransaction(long tid, int bitIndex) {
-        currentTransactionCount--;
-        bf.clear(bitIndex);
         AOTransaction t = transactions[bitIndex];
         transactions[bitIndex] = null;
+        bf.clear(bitIndex);
+        // 同一个事务可能被重复移除(提交和回滚并发)，不能重复递减，否则计数可能变成负数
+        if (t == null)
+            return null;
+        currentTransactionCount--;
         super.removeTransaction(t);
         return t;
     }
