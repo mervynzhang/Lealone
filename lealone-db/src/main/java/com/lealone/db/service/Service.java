@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.lealone.agent.CodeAgent;
@@ -33,6 +34,7 @@ import com.lealone.db.Database;
 import com.lealone.db.DbObjectType;
 import com.lealone.db.LealoneDatabase;
 import com.lealone.db.SysProperties;
+import com.lealone.db.api.ErrorCode;
 import com.lealone.db.async.Future;
 import com.lealone.db.auth.Right;
 import com.lealone.db.constraint.ConstraintReferential;
@@ -508,6 +510,101 @@ public class Service extends SchemaObjectBase {
         session.getUser().checkRight(service, Right.EXECUTE);
     }
 
+    // 老版本代码生成器生成的服务执行器只实现了同步方法，如果直接调用异步方法，
+    // ServiceExecutor里异步方法的默认实现会静默返回ValueNull，导致结果变成NULL
+    private static final int ASYNC_VALUE_METHOD = 1;
+    private static final int ASYNC_MAP_METHOD = 2;
+    private static final int ASYNC_JSON_METHOD = 4;
+    private static final int SYNC_VALUE_METHOD = 8;
+    private static final int SYNC_MAP_METHOD = 16;
+    private static final int SYNC_JSON_METHOD = 32;
+    private static final Map<Class<?>, Integer> EXECUTOR_METHOD_CACHE = new ConcurrentHashMap<>();
+
+    private static boolean isMethodOverridden(Class<?> executorClass, String methodName,
+            Class<?> argsType) {
+        try {
+            Method method = executorClass.getMethod(methodName, String.class, argsType);
+            return method.getDeclaringClass() != ServiceExecutor.class;
+        } catch (NoSuchMethodException e) {
+            return false;
+        }
+    }
+
+    private static int getExecutorMethodFlags(ServiceExecutor executor) {
+        Class<?> executorClass = executor.getClass();
+        Integer flags = EXECUTOR_METHOD_CACHE.get(executorClass);
+        if (flags == null) {
+            int f = 0;
+            if (isMethodOverridden(executorClass, "executeServiceAsync", Value[].class))
+                f |= ASYNC_VALUE_METHOD;
+            if (isMethodOverridden(executorClass, "executeServiceAsync", Map.class))
+                f |= ASYNC_MAP_METHOD;
+            if (isMethodOverridden(executorClass, "executeServiceAsync", String.class))
+                f |= ASYNC_JSON_METHOD;
+            if (isMethodOverridden(executorClass, "executeService", Value[].class))
+                f |= SYNC_VALUE_METHOD;
+            if (isMethodOverridden(executorClass, "executeService", Map.class))
+                f |= SYNC_MAP_METHOD;
+            if (isMethodOverridden(executorClass, "executeService", String.class))
+                f |= SYNC_JSON_METHOD;
+            flags = f;
+            EXECUTOR_METHOD_CACHE.put(executorClass, flags);
+        }
+        return flags;
+    }
+
+    private static Future<?> executeServiceAsync(ServiceExecutor executor, String methodName,
+            Value[] methodArgs) {
+        int flags = getExecutorMethodFlags(executor);
+        if ((flags & ASYNC_VALUE_METHOD) != 0)
+            return executor.executeServiceAsync(methodName, methodArgs);
+        if ((flags & SYNC_VALUE_METHOD) != 0)
+            return Future.succeededFuture(executor.executeService(methodName, methodArgs));
+        throw noServiceMethod(executor, methodName);
+    }
+
+    private static Future<?> executeServiceAsync(ServiceExecutor executor, String methodName,
+            Map<String, Object> methodArgs) {
+        int flags = getExecutorMethodFlags(executor);
+        if ((flags & ASYNC_MAP_METHOD) != 0)
+            return executor.executeServiceAsync(methodName, methodArgs);
+        if ((flags & SYNC_MAP_METHOD) != 0)
+            return Future.succeededFuture(executor.executeService(methodName, methodArgs));
+        throw noServiceMethod(executor, methodName);
+    }
+
+    private static Future<?> executeServiceAsync(ServiceExecutor executor, String methodName,
+            String json) {
+        int flags = getExecutorMethodFlags(executor);
+        if ((flags & ASYNC_JSON_METHOD) != 0)
+            return executor.executeServiceAsync(methodName, json);
+        if ((flags & SYNC_JSON_METHOD) != 0)
+            return Future.succeededFuture(executor.executeService(methodName, json));
+        throw noServiceMethod(executor, methodName);
+    }
+
+    private static RuntimeException noServiceMethod(ServiceExecutor executor, String methodName) {
+        return DbException.get(ErrorCode.METHOD_NOT_FOUND_1,
+                "service method not implemented: " + executor.getClass().getName() + "." + methodName);
+    }
+
+    // 服务方法的返回类型，找不到时返回Value.UNKNOWN
+    public static int getServiceMethodReturnType(ServerSession session, String serviceName,
+            String methodName) {
+        Service service = getService(session, session.getDatabase(), session.getCurrentSchemaName(),
+                serviceName);
+        List<ServiceMethod> serviceMethods = service.getServiceMethods();
+        if (serviceMethods != null) {
+            for (ServiceMethod m : serviceMethods) {
+                if (m.getMethodName().equalsIgnoreCase(methodName)) {
+                    Column returnType = m.getReturnType();
+                    return returnType == null ? Value.UNKNOWN : returnType.getType();
+                }
+            }
+        }
+        return Value.UNKNOWN;
+    }
+
     // 通过jdbc调用
     public static Object execute(ServerSession session, String serviceName, String methodName,
             Value[] methodArgs) {
@@ -519,7 +616,7 @@ public class Service extends SchemaObjectBase {
         Service service = getService(session, session.getDatabase(), session.getCurrentSchemaName(),
                 serviceName);
         checkRight(session, service);
-        return service.getExecutor().executeServiceAsync(methodName, methodArgs);
+        return executeServiceAsync(service.getExecutor(), methodName, methodArgs);
     }
 
     // 通过http调用
@@ -540,7 +637,8 @@ public class Service extends SchemaObjectBase {
         }
         Service service = getService(session, db, schemaName, serviceName);
         checkRight(session, service);
-        return service.getExecutor(disableDynamicCompile).executeServiceAsync(methodName, methodArgs);
+        return executeServiceAsync(service.getExecutor(disableDynamicCompile), methodName,
+                methodArgs);
     }
 
     // 通过json调用
@@ -558,7 +656,7 @@ public class Service extends SchemaObjectBase {
             }
             Service service = getService(session, db, a[1], a[2]);
             checkRight(session, service);
-            return service.getExecutor().executeServiceAsync(methodName, json);
+            return executeServiceAsync(service.getExecutor(), methodName, json);
         } else {
             throw new RuntimeException("service " + serviceName + " not found");
         }

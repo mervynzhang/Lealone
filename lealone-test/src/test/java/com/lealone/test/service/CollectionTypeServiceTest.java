@@ -8,6 +8,7 @@ package com.lealone.test.service;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 
 import org.junit.Test;
 
@@ -39,6 +40,10 @@ public class CollectionTypeServiceTest extends SqlTestBase {
         HashMap<Integer, String> map = new HashMap<>();
         map.put(10, "a");
         map.put(20, "b");
-        service.m7(list, set, map, 1);
+        Map<Integer, String> result = service.m7(list, set, map, 1);
+        // MAP类型的返回值经TCP传回客户端后不能变成null
+        assertNotNull(result);
+        assertEquals("a", result.get(10));
+        assertEquals("b", result.get(20));
     }
 }
