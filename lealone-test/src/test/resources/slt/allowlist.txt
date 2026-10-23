@@ -12,12 +12,10 @@
 #
 # Keep every rule as narrow as possible: a rule that is too broad hides real bugs.
 #
-# --- the ALL quantifier: not supported by Lealone's parser -------------------------------
-# SELECT ALL / SUM(ALL x) / MIN(ALL x) appear in 78,212 records of the 137 file set. Lealone
-# parses ALL as a column or function name, which is a pure dialect gap, not a wrong result. This
-# is 98% of the raw failure count of the suite - it is the reason the suite needs an allowlist.
-ALL-COLUMN	Column "ALL" not found	ALL quantifier parsed as a column reference, e.g. SUM(ALL x) / MIN(ALL -51); Lealone has no ALL quantifier
-ALL-FUNC	Function "ALL" not found	ALL quantifier inside an expression, e.g. SELECT ALL SUM(...); parser reports it as unknown function ALL
+# --- division by zero: SQLite returns NULL, Lealone follows the SQL standard ------------
+# The suite's oracle is SQLite, where x/0 evaluates to NULL. Lealone (like PostgreSQL and the SQL
+# standard) raises DIVISION_BY_ZERO_1. Pure dialect gap, kept visible by this rule.
+DIV-ZERO	Division by zero	SQLite returns NULL for x/0, Lealone raises DIVISION_BY_ZERO_1 (SQL standard)
 ALL-SYNTAX	^exception\t[^\t]*\t.*Syntax error.*\tALL	ALL quantifier used where Lealone expects a term, e.g. MAX(ALL 99); syntax error at "ALL 99"
 #
 # --- SQLite / MySQL only statement syntax -----------------------------------------------
