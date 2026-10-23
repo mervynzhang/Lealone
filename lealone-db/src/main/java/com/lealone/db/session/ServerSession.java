@@ -595,9 +595,11 @@ public class ServerSession extends SessionBase implements InternalSession {
     }
 
     public <T> void asyncCommit(AsyncResultHandler<T> asyncHandler, AsyncResult<T> asyncResult) {
-        if (transaction != null) {
+        // 提交完成可能在调度线程中把transaction置null，先取出局部引用
+        Transaction t = transaction;
+        if (t != null) {
             beforeCommit();
-            transaction.asyncCommit(() -> {
+            t.asyncCommit(() -> {
                 commitFinal();
                 if (asyncHandler != null)
                     asyncHandler.handle(asyncResult);
@@ -610,9 +612,10 @@ public class ServerSession extends SessionBase implements InternalSession {
     }
 
     public void commit() {
-        if (transaction != null) {
+        Transaction t = transaction;
+        if (t != null) {
             beforeCommit();
-            transaction.commit();
+            t.commit();
             commitFinal();
         }
     }
