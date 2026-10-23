@@ -1,0 +1,31 @@
+# sqllogictest baseline for the Lealone build.
+# Columns: file <TAB> expected non-allowlisted QUERY failures <TAB> observed total query failures (informational).
+# Regenerate with: mvn -o test -pl lealone-test -Pslt -Dtest=SltTest -Dslt.updateBaseline=true
+# Only query failures are gated; 'statement' records are executed but never counted.
+select1.test	0	0
+select2.test	0	0
+select3.test	0	0
+select4.test	0	0
+evidence/in2.test	0	0
+evidence/slt_lang_createview.test	0	0
+evidence/slt_lang_dropview.test	0	0
+random/expr/slt_good_1.test	0	284
+random/expr/slt_good_2.test	0	467
+random/expr/slt_good_4.test	0	669
+random/expr/slt_good_5.test	0	693
+random/expr/slt_good_19.test	0	653
+random/expr/slt_good_21.test	0	693
+random/expr/slt_good_32.test	0	441
+random/expr/slt_good_37.test	0	639
+random/expr/slt_good_43.test	0	494
+random/expr/slt_good_54.test	0	503
+random/expr/slt_good_60.test	0	691
+random/expr/slt_good_65.test	0	506
+random/expr/slt_good_73.test	0	685
+random/expr/slt_good_76.test	0	525
+random/expr/slt_good_87.test	0	584
+random/expr/slt_good_91.test	1	687
+random/expr/slt_good_96.test	1	700
+random/expr/slt_good_98.test	0	542
+random/expr/slt_good_106.test	0	699
+random/expr/slt_good_109.test	0	593
