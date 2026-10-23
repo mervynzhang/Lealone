@@ -43,6 +43,11 @@ public interface InternalSession extends Session {
         return false;
     }
 
+    // 等锁超时检查，超时返回错误，没超时返回null
+    default Throwable getLockTimeoutError() {
+        return null;
+    }
+
     default boolean isQueryCommand() {
         return false;
     }
