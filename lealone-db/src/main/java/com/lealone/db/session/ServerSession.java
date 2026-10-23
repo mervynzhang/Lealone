@@ -601,7 +601,7 @@ public class ServerSession extends SessionBase implements InternalSession {
         if (t != null) {
             beforeCommit();
             t.asyncCommit(() -> {
-                commitFinal();
+                commitFinal(t);
                 if (asyncHandler != null)
                     asyncHandler.handle(asyncResult);
             });
@@ -676,6 +676,13 @@ public class ServerSession extends SessionBase implements InternalSession {
     }
 
     private void commitFinal() {
+        commitFinal(null);
+    }
+
+    // 迟到的提交回调不能清掉session里已经换上的下一个事务
+    private void commitFinal(Transaction expected) {
+        if (expected != null && transaction != expected)
+            return;
         commitOrRollbackNestedConnections(true);
         if (!containsDDL) {
             // do not clean the temp tables if the last command was a create/drop
