@@ -44,6 +44,8 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
 
     private final LinkableList<IndexOperation>[] pendingIosArray;
     private final boolean[] taskManagerAdded;
+    // 当前线程正在执行的索引操作，二级索引在remove未命中时用它决定要不要延后重试
+    private static final ThreadLocal<IndexOperation> currentOperation = new ThreadLocal<>();
     private final AtomicLong indexOperationSize = new AtomicLong(0);
     private final AtomicBoolean indexOperationErrorLogged = new AtomicBoolean(false);
     private final DbObjectLock lock = new DbObjectLock(DbObjectType.INDEX);
@@ -371,6 +373,7 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
             Transaction transaction = ioSession.getTransaction();
             transaction.setParentTransaction(io.getTransaction());
         }
+        currentOperation.set(io);
         try {
             io.run(index, ioSession);
         } catch (Exception e) {
@@ -382,6 +385,7 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
                         + io.rowKey, e);
             }
         } finally {
+            currentOperation.remove();
             io.setCompleted(true);
             indexOperationSize.decrementAndGet();
             if (!fastPath) {
@@ -424,6 +428,16 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
 
     public static IndexOperation createRIO(long rowKey, Value[] columns) {
         return new RIO(rowKey, columns);
+    }
+
+    // 正在执行的索引操作，没有就返回null
+    public static IndexOperation getCurrentOperation() {
+        return currentOperation.get();
+    }
+
+    // 是否是延后重试的删除操作(重试操作自己不能再产生重试)
+    public static boolean isRetryOperation() {
+        return currentOperation.get() instanceof RIO;
     }
 
     public static abstract class IndexOperation extends LinkableBase<IndexOperation> {
