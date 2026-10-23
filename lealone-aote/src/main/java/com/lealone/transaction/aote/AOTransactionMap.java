@@ -449,6 +449,11 @@ public class AOTransactionMap<K, V> implements TransactionMap<K, V> {
             TransactionalValue.setTransaction(transaction, lockable); // 二级索引需要设置
             if (markDirtyPage(key, lockable) != null)
                 map.put(key, lockable);
+        } else {
+            // 原地改已有行的值时，行上的PageListener可能还指向切割前的老页(链到了祖先节点)，
+            // 只标脏祖先页不会让真正的叶子页变脏，页被checkpoint写干净后更新就不会再写盘，
+            // 所以按key重新put一次，让BTree重新定位叶子页并标脏
+            map.put(key, lockable);
         }
         lockable.setMetaVersion(getValueType().getMetaVersion());
         Object oldValue = lockable.getLockedValue();
