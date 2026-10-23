@@ -8,6 +8,7 @@ package com.lealone.transaction.aote.log;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.lealone.agent.SystemOutline;
@@ -33,7 +34,10 @@ public abstract class LogSyncService extends Thread {
     public static final String LOG_SYNC_TYPE_INSTANT = "instant";
     public static final String LOG_SYNC_TYPE_NO_SYNC = "no_sync";
 
+    private static final int MAX_NO_PROGRESS_LOOP_COUNT = 200;
+
     private final Awaiter awaiter = new Awaiter(logger);
+    private final AtomicBoolean started = new AtomicBoolean();
     private final AtomicLong redoLogRecordCount = new AtomicLong();
     private final AtomicLong lastLogId = new AtomicLong();
 
@@ -105,13 +109,24 @@ public abstract class LogSyncService extends Thread {
 
     @Override
     public void run() {
+        // 同一个LogSyncService可能先被引擎线程start，又被Lealone启动线程直接run，
+        // 两个线程同时跑会破坏redoLogRecordCount和RedoLog里的非线程安全结构，只允许跑一次
+        if (!started.compareAndSet(false, true))
+            return;
         running = true;
         long lastCheckedAt = System.currentTimeMillis();
         long cpLoopInterval = checkpointService.getLoopInterval();
+        int noProgressCount = 0;
         while (running) {
             try {
-                if (redoLogRecordCount.get() > 0)
-                    redoLog.save();
+                if (redoLogRecordCount.get() > 0) {
+                    if (redoLog.save() > 0)
+                        noProgressCount = 0;
+                    else
+                        noProgressCount++;
+                } else {
+                    noProgressCount = 0;
+                }
                 redoLog.runPendingTransactions();
                 if (MemoryManager.needFullGc())
                     checkpointService.fullGc();
@@ -122,8 +137,14 @@ public abstract class LogSyncService extends Thread {
                     redoLog.clearIdleBuffers(now);
                     lastCheckedAt = now;
                 }
-                if (redoLogRecordCount.get() > 0)
+                if (redoLogRecordCount.get() > 0) {
+                    // 连续多轮没有写出任何redo记录，先让出CPU，避免100%空转
+                    if (noProgressCount >= MAX_NO_PROGRESS_LOOP_COUNT) {
+                        noProgressCount = 0;
+                        awaiter.doAwait(loopInterval);
+                    }
                     continue;
+                }
                 awaiter.doAwait(loopInterval);
             } catch (Throwable t) {
                 logger.error("Failed to sync redo log", t);
