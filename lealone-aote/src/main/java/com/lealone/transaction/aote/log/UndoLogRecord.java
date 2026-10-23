@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import com.lealone.agent.SystemOutline;
 import com.lealone.agent.SystemOutlineNode;
 import com.lealone.db.DataBuffer;
+import com.lealone.db.lock.Lock;
 import com.lealone.db.lock.Lockable;
 import com.lealone.db.value.ValueString;
 import com.lealone.storage.FormatVersion;
@@ -81,6 +82,14 @@ public abstract class UndoLogRecord {
         return key;
     }
 
+    // 回滚插入的记录时把它从页里删掉
+    private void removeInsertedKey() {
+        // 页操作可能还没执行完，此时lockable还没有关联到页，什么都没插入，不用删
+        Lock lock = lockable.getLock();
+        if (lock != null && lock.getPageListener() != null)
+            lock.getPageListener().getPageReference().remove(removalKey());
+    }
+
     protected boolean ignore() {
         // 事务取消或map关闭或删除时直接忽略
         return undone || map.isClosed();
@@ -122,7 +131,7 @@ public abstract class UndoLogRecord {
                 lockable.setKey(revivedOldRowId);
             lockable.setLockedValue(null);
         } else if (oldValue == null) {
-            lockable.getPageListener().getPageReference().remove(removalKey());
+            removeInsertedKey();
         } else {
             TransactionalValue.rollback(oldValue, lockable);
         }
