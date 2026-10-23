@@ -87,7 +87,9 @@ public class BTreeCursor<K, V> implements StorageMapCursor<K, V> {
                 min(child, null);
                 // 保证只向前推进：定位到的第一个key必须大于已经返回过的key，
                 // 否则说明父page对象在遍历过程中被替换过(过期的父节点)，按key重新定位
-                if (key != null && pos != null && pos.page.getKeyCount() > 0
+                // 这里假设key唯一(Lealone的索引key都含rowKey)，如果用于允许重复key的map，
+                // 相等的那一项会被reposition过滤掉
+                if (key != null && pos != null && pos.index < pos.page.getKeyCount()
                         && map.getKeyType().compare(pos.page.getKey(pos.index), key) <= 0) {
                     reposition();
                 }
