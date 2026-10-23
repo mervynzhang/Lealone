@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.lealone.common.util.DataUtils;
 import com.lealone.db.DataBuffer;
+import com.lealone.db.lock.Lockable;
 import com.lealone.storage.aose.btree.BTreeMap;
 import com.lealone.storage.aose.btree.chunk.Chunk;
 import com.lealone.storage.type.StorageDataType;
@@ -83,28 +84,53 @@ public abstract class RowStorageLeafPage extends LeafPage {
         if (isLockedPage)
             isLocked.set(true);
 
+        boolean transactional = valueType.isTransactional();
         int start = buff.position();
-        int keyLength = keys.length;
         int type = PageUtils.PAGE_TYPE_LEAF;
-        buff.putInt(0); // 回填pageLength
-        buff.put((byte) PageStorageMode.ROW_STORAGE.ordinal());
-        int checkPos = buff.position();
-        buff.putShort((short) 0).putVarInt(keyLength);
-        int typePos = buff.position();
-        buff.put((byte) type);
-        int compressStart = buff.position();
-        map.getKeyType().write(buff, keys, keyLength, chunk.formatVersion);
-        writeValues(values, buff, keyLength, chunk.formatVersion);
-        buff.putInt(0); // replicationHostIds
-        if (chunk.isNewFormatVersion())
-            buff.putVarInt(pInfoOld.metaVersion);
-        compressPage(buff, compressStart, type, typePos);
-        int pageLength = buff.position() - start;
-        buff.putInt(start, pageLength);
+        int keyLength;
+        int pageLength;
+        int checkPos;
+        for (int attempt = 0;; attempt++) {
+            buff.position(start);
+            keyLength = keys.length;
+            buff.putInt(0); // 回填pageLength
+            buff.put((byte) PageStorageMode.ROW_STORAGE.ordinal());
+            checkPos = buff.position();
+            buff.putShort((short) 0).putVarInt(keyLength);
+            int typePos = buff.position();
+            buff.put((byte) type);
+            int compressStart = buff.position();
+            map.getKeyType().write(buff, keys, keyLength, chunk.formatVersion);
+            writeValues(values, buff, keyLength, chunk.formatVersion);
+            buff.putInt(0); // replicationHostIds
+            if (chunk.isNewFormatVersion())
+                buff.putVarInt(pInfoOld.metaVersion);
+            compressPage(buff, compressStart, type, typePos);
+            pageLength = buff.position() - start;
+            buff.putInt(start, pageLength);
+            // 序列化期间有行被并发提交时重试，避免写出半新半旧的页
+            if (!transactional || attempt >= 3)
+                break;
+            Object[] latest = valueType.getCommittedObjects(this.keys, getValues());
+            if (sameCommitted(values, (Object[]) latest[1]))
+                break;
+            keys = (Object[]) latest[0];
+            values = (Object[]) latest[1];
+        }
 
         writeCheckValue(buff, chunk, start, pageLength, checkPos);
 
         return updateChunkAndPage(pInfoOld, chunk, start, pageLength, type, true, isLockedPage);
+    }
+
+    private static boolean sameCommitted(Object[] a, Object[] b) {
+        if (a.length != b.length)
+            return false;
+        for (int i = 0; i < a.length; i++) {
+            if (((Lockable) a[i]).getLockedValue() != ((Lockable) b[i]).getLockedValue())
+                return false;
+        }
+        return true;
     }
 
     // 重写所有的RowStorageLeafPage，只需要修改CheckValue即可
