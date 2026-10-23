@@ -291,8 +291,8 @@ public class CheckpointService implements Runnable {
                 long size = map.collectDirtyMemory();
                 e.getValue().set(size);
                 boolean needSave;
-                if (isClosing) { // 关闭时不能只看脏页内存，有些脏页可能挂在没有标记为脏的父节点下面
-                    needSave = map.hasUnsavedChanges();
+                if (isClosing) { // 关闭时必须保存：shutdown hook路径不会调用Storage.close，跳过就会丢更新
+                    needSave = true;
                 } else {
                     needSave = map.hasUnsavedChanges()
                             && (force || (size > 0 && size > map.getCacheSize()));
@@ -303,7 +303,10 @@ public class CheckpointService implements Runnable {
                         workingThread.setName("Saving-" + map.getName());
                     map.setLastTransactionId(lastTransactionId);
                     try {
-                        map.save(Math.max(size, 4096));
+                        if (isClosing)
+                            map.saveForClosing(Math.max(size, 4096));
+                        else
+                            map.save(Math.max(size, 4096));
                     } finally {
                         map.setLastTransactionId(-1);
                     }
