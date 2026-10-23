@@ -33,8 +33,13 @@ import com.lealone.test.TestBase;
  * - 修复前：约 100+ 次/40 万次扫描出现重复，每次运行都能复现，单次重复量从十几行到几万行；
  * 判重必须在同一条语句的结果里做（两条聚合语句各自取快照，并发删除时会天然不一致）。
  * 修复前（BTreeCursor 从父节点左端重扫）单条语句就能读出重复 id，形状是 ...34 35 36 1 2 3...；
- * 58d84738f 之后仍会偶发（实测 2/5 次运行在单条语句里读到重复 id，约 1/1000 次采样命中），
- * 残余原因还没定位清楚，所以这个用例先 @Ignore，等残余修好后去掉 @Ignore 作为回归护栏。
+ * 分两层验证过：
+ * - 裸 BTreeMap 游标（不走事务/索引层）在并发 put 下：修复前 3/4 次运行出现倒序/重复 key，
+ *   取页改为"取到后确认是不是ref自己的页面、被重定向则按lastKey重新定位"+ "定位后必须大于lastKey"
+ *   之后，连续 5 次运行约 8 万次扫描 0 重复；
+ * - 但走 SQL 的 `SELECT id ... WHERE id >= 0` 仍会偶发（实测 2/5 次运行在单条语句里读到重复 id，
+ *   失败时常见 id=0 的重复行），残余在 BTree 之上（事务层/表层的行可见性），尚未定位。
+ * 所以这个用例先 @Ignore：等 SQL 路径残余修好后去掉 @Ignore 作为端到端护栏。
  */
 public class ScanDuplicateTest extends TestBase {
 
@@ -44,7 +49,7 @@ public class ScanDuplicateTest extends TestBase {
     // 并发采样允许的最大重复行数，用于容忍已知的1行残留竞态窗
     private static final long MAX_DELTA = 3;
 
-    @Ignore("BTreeCursor仍有未定位的重复返回竞态(单条语句实测1/1000采样)，修好后去掉@Ignore")
+    @Ignore("BTree层已修；SQL扫描仍有BTree之上的残余重复(实测2/5次)，修好后去掉@Ignore")
     @Test(timeout = 120000)
     public void concurrentScanMustNotReturnDuplicateRows() throws Exception {
         String db = "scandup_" + System.currentTimeMillis() + "_" + RUN_ID.incrementAndGet();
