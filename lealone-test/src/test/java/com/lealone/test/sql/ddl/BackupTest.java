@@ -7,6 +7,7 @@ package com.lealone.test.sql.ddl;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -22,6 +23,7 @@ import java.util.zip.ZipInputStream;
 
 import org.junit.Test;
 
+import com.lealone.db.LealoneDatabase;
 import com.lealone.storage.fs.FileUtils;
 import com.lealone.test.TestBase;
 
@@ -56,6 +58,13 @@ public class BackupTest extends TestBase {
         }
 
 
+        // 存储目录是 <base dir>/db_N；恢复时先在隔离目录里重放一份，再用新进程打开校验
+        File storageRoot = new File(LealoneDatabase.getInstance()
+                .findDatabase(DB_NAME.toUpperCase()).getStoragePath()).getParentFile();
+        LealoneDatabase.getInstance().findDatabase(DB_NAME.toUpperCase()).close(false);
+        assertEquals(100, restoreAndCountInNewProcess(zip2, storageRoot));
+        assertEquals(150, restoreAndCountInNewProcess(zip3, storageRoot));
+
         Map<String, Long> entries1 = readZip(zip1);
         Map<String, Long> entries2 = readZip(zip2);
         Map<String, Long> entries3 = readZip(zip3);
@@ -71,6 +80,74 @@ public class BackupTest extends TestBase {
         // 每个条目都不能是0字节
         for (Map.Entry<String, Long> e : entries2.entrySet()) {
             assertTrue("备份条目不能是空文件: " + e.getKey(), e.getValue() > 0);
+        }
+    }
+
+    // 在隔离的base dir里恢复备份包，再用独立进程打开数据库查询行数，避免同一进程里的内存状态造成假阳性
+    private static int restoreAndCountInNewProcess(File zip, File storageRoot) throws Exception {
+        File isoDir = new File(storageRoot, "restore_" + zip.getName());
+        FileUtils.deleteRecursive(isoDir.getAbsolutePath(), false);
+        // 数据库的元数据(名字和id的映射)在lealone库的存储目录db_0里，要一起带过去
+        copyDir(new File(storageRoot, "db_0"), new File(isoDir, "db_0"));
+        List<String> names = sortedNames(readZip(zip));
+        try (ZipInputStream in = new ZipInputStream(new FileInputStream(zip))) {
+            ZipEntry e;
+            byte[] buff = new byte[8192];
+            while ((e = in.getNextEntry()) != null) {
+                if (e.isDirectory()) {
+                    continue;
+                }
+                File f = new File(isoDir, e.getName());
+                FileUtils.createDirectories(f.getParent());
+                try (FileOutputStream out = new FileOutputStream(f)) {
+                    int read;
+                    while ((read = in.read(buff)) > 0) {
+                        out.write(buff, 0, read);
+                    }
+                }
+            }
+        }
+        String javaHome = System.getProperty("java.home");
+        ProcessBuilder pb = new ProcessBuilder(javaHome + File.separator + "bin" + File.separator
+                + "java", "-Dlealone.base.dir=" + isoDir.getAbsolutePath(), "-cp",
+                System.getProperty("java.class.path"), BackupRestoreCheck.class.getName(),
+                isoDir.getAbsolutePath() + "/" + DB_NAME, "backup_test");
+        pb.redirectErrorStream(true);
+        Process p = pb.start();
+        String out = new String(p.getInputStream().readAllBytes()).trim();
+        p.waitFor();
+        int count = -1;
+        for (String line : out.split("\n")) {
+            if (line.startsWith("ROW_COUNT=")) {
+                count = Integer.parseInt(line.substring("ROW_COUNT=".length()).trim());
+            }
+        }
+        if (count < 0) {
+            fail("恢复校验失败: " + out);
+        }
+        return count;
+    }
+
+    private static void copyDir(File src, File dest) throws Exception {
+        FileUtils.createDirectories(dest.getAbsolutePath());
+        File[] files = src.listFiles();
+        if (files == null) {
+            return;
+        }
+        for (File f : files) {
+            File to = new File(dest, f.getName());
+            if (f.isDirectory()) {
+                copyDir(f, to);
+            } else {
+                try (FileInputStream in = new FileInputStream(f);
+                        FileOutputStream out = new FileOutputStream(to)) {
+                    byte[] buff = new byte[8192];
+                    int read;
+                    while ((read = in.read(buff)) > 0) {
+                        out.write(buff, 0, read);
+                    }
+                }
+            }
         }
     }
 
