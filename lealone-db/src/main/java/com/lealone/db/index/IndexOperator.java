@@ -357,7 +357,9 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
     }
 
     public static void addIndexOperation(ServerSession session, StandardTable table, IndexOperation io) {
-        if (io.rowKey == 0)
+        // 0是合法的rowKey，只有AIO在自增主键场景下rowKey要等主键写成功才确定，才需要用lastIdentity回填；
+        // UIO/RIO的rowKey一定有效，用lastIdentity覆盖会把索引操作当成别的行的
+        if (io instanceof AIO && io.rowKey == 0)
             io.rowKey = session.getLastIdentity();
         // 同一个row key的索引操作必须由同一个调度器按顺序执行，否则并发更新同一个索引key时会丢更新
         InternalScheduler target = getSchedulerByRowKey(session.getScheduler(), io.rowKey);
