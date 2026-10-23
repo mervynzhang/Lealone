@@ -92,6 +92,9 @@ public abstract class YieldableBase<T> implements Yieldable<T> {
 
     @Override
     public final void run() {
+        // 已经结束的语句不能再执行一次，否则会重复提交事务(每条语句会被重试循环重新run)
+        if (stopped)
+            return;
         try {
             if (!started) {
                 start();
