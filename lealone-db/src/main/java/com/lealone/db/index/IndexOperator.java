@@ -270,6 +270,14 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
                     run(io);
                     int i = index.get();
                     lastIos[i] = io;
+                    // 索引项的写入是异步的页操作：先结束本批次，让调度线程执行完这些页操作，
+                    // 否则同一个索引的下一个操作读不到上一个操作刚写入的索引项，旧索引项会残留
+                    if (scheduler.hasPendingPageOperations()) {
+                        schedulers[i].wakeUp();
+                        task.resetLast(); // 让周期任务马上执行，不用等下一次100ms周期
+                        scheduler.wakeUp();
+                        return;
+                    }
                     while (true) {
                         io = io.getNext();
                         if (io == null) {
