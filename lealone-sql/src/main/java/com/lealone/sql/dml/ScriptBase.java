@@ -68,8 +68,49 @@ public abstract class ScriptBase extends ManipulationStatement {
         cipher = c;
     }
 
-    private boolean isEncrypted() {
+    protected boolean isEncrypted() {
         return cipher != null;
+    }
+
+    /**
+     * 加密脚本的固定标记，用来在RUNSCRIPT时确定密码是否正确。
+     * 没有它的时候，密码错误会把解出来的垃圾数据当SQL执行，报错位置随机，
+     * 有时甚至没有任何语句被执行而"静默成功"。
+     */
+    protected static final byte[] SCRIPT_MAGIC = "LealoneScript\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+    /**
+     * 在加密脚本的开头写入标记(标记本身也在加密流里)。
+     */
+    protected void writeMagic() throws java.io.IOException {
+        out.write(SCRIPT_MAGIC, 0, SCRIPT_MAGIC.length);
+    }
+
+    /**
+     * 校验加密脚本开头的标记，密码不对时报明确的加密错误。
+     */
+    protected void verifyMagic() {
+        byte[] buff = new byte[SCRIPT_MAGIC.length];
+        int len = 0;
+        try {
+            while (len < buff.length) {
+                int n = in.read(buff, len, buff.length - len);
+                if (n < 0)
+                    break;
+                len += n;
+            }
+        } catch (java.io.IOException e) {
+            throw com.lealone.common.exceptions.DbException.convertIOException(e, getFileName());
+        }
+        boolean ok = len == buff.length;
+        if (ok) {
+            for (int i = 0; i < buff.length; i++)
+                if (buff[i] != SCRIPT_MAGIC[i])
+                    ok = false;
+        }
+        if (!ok)
+            throw com.lealone.common.exceptions.DbException
+                    .get(com.lealone.db.api.ErrorCode.FILE_ENCRYPTION_ERROR_1, getFileName());
     }
 
     public void setPassword(Expression password) {
