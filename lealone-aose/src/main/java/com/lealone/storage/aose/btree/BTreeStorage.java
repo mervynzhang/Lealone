@@ -301,8 +301,20 @@ public class BTreeStorage {
      * Save all changes and persist them to disk.
      * This method does nothing if there are no unsaved changes.
      */
+    private boolean forceSave;
+
+    // 关闭数据库时用：跳过hasUnsavedChanges判据，保证最后一次保存一定发生
+    void saveForClosing(long dirtyMemory) {
+        forceSave = true;
+        try {
+            save(true, false, dirtyMemory);
+        } finally {
+            forceSave = false;
+        }
+    }
+
     synchronized void save(boolean compact, boolean appendModeEnabled, long dirtyMemory) {
-        if (!map.hasUnsavedChanges() || closed || map.isInMemory()) {
+        if (!forceSave && (!map.hasUnsavedChanges() || closed || map.isInMemory())) {
             return;
         }
         if (map.isReadOnly()) {
@@ -366,7 +378,13 @@ public class BTreeStorage {
         c.setLastRedoLogPos(appendMode ? -1 : lastRedoLogPos);
         c.setLastUnusedChunk(lastUnusedChunk);
 
-        c.write(chunkBody, chunkManager, appendMode);
+        // 写body+header期间必须与redo log的追加互斥，否则redo会写到body中间并导致header记账不一致
+        redoLogLock.lock();
+        try {
+            c.write(chunkBody, chunkManager, appendMode);
+        } finally {
+            redoLogLock.unlock();
+        }
 
         // 最新的chunk写成功后再删除UnusedChunks，不能提前删除，因为UnusedChunks也包含被重写的chunk
         // 若最新的chunk写失败了，被重写的chunk文件也提前删除就会丢失数据

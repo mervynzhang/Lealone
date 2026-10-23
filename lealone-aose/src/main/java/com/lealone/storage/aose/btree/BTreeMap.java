@@ -394,6 +394,18 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
         save(true, false, dirtyMemory);
     }
 
+    @Override
+    public void saveForClosing(long dirtyMemory) {
+        if (!inMemory) {
+            sharedLock.lock();
+            try {
+                btreeStorage.saveForClosing(dirtyMemory);
+            } finally {
+                sharedLock.unlock();
+            }
+        }
+    }
+
     public void save(boolean appendModeEnabled) {
         save(true, appendModeEnabled, collectDirtyMemory());
     }

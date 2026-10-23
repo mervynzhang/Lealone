@@ -1254,7 +1254,7 @@ public class Database extends DbObjectBase implements DataHandler {
         traceSystem.close();
         LealoneDatabase.getInstance().closeDatabase(name);
 
-        // 如果是ShutdownHook不需要在关闭数据库时关闭存储，在关闭事务引擎时会自动刷脏页
+        // 如果是ShutdownHook不需要在关闭数据库时关闭存储，关闭事务引擎时会强制保存所有map
         if (!fromShutdownHook) {
             for (Storage s : getStorages()) {
                 s.close();
