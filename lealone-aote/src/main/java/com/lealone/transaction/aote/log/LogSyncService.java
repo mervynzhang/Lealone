@@ -47,6 +47,7 @@ public abstract class LogSyncService extends Thread {
 
     private volatile boolean running;
     private volatile CountDownLatch latchOnClose;
+    private boolean negativeCountWarned;
 
     private CheckpointService checkpointService;
 
@@ -148,6 +149,8 @@ public abstract class LogSyncService extends Thread {
                 awaiter.doAwait(loopInterval);
             } catch (Throwable t) {
                 logger.error("Failed to sync redo log", t);
+            } finally {
+                checkRedoLogRecordCount();
             }
         }
         try {
@@ -178,6 +181,16 @@ public abstract class LogSyncService extends Thread {
 
     public void wakeUp() {
         awaiter.wakeUp();
+    }
+
+    // redoLogRecordCount是负数说明有并发破坏，打一条日志方便定位，只打一次
+    private void checkRedoLogRecordCount() {
+        long count = redoLogRecordCount.get();
+        if (count < 0 && !negativeCountWarned) {
+            negativeCountWarned = true;
+            logger.warn("redoLogRecordCount is negative({}), LogSyncService may run in more than one thread",
+                    count);
+        }
     }
 
     private void wakeUp(InternalScheduler scheduler) {
