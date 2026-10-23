@@ -31,10 +31,10 @@ import com.lealone.test.TestBase;
  *
  * 检出率（本机多次压测统计，不是理论值）：
  * - 修复前：约 100+ 次/40 万次扫描出现重复，每次运行都能复现，单次重复量从十几行到几万行；
- * - 修复后：仍会偶发成规模的重复（实测约 1/3700 次采样出现 delta=306 行），
- *   残余原因是 BTreeCursor "检查子页ref是否被切割"与"取子页"之间的竞态窗，
- *   这段窗口里仍然会从父节点左端重扫，属于已知遗留问题（下一轮修复）。
- * 因为残余还比较频繁，这个用例先 @Ignore：修复残余竞态窗后去掉 @Ignore 即可作为回归护栏。
+ * 判重必须在同一条语句的结果里做（两条聚合语句各自取快照，并发删除时会天然不一致）。
+ * 修复前（BTreeCursor 从父节点左端重扫）单条语句就能读出重复 id，形状是 ...34 35 36 1 2 3...；
+ * 58d84738f 之后仍会偶发（实测 2/5 次运行在单条语句里读到重复 id，约 1/1000 次采样命中），
+ * 残余原因还没定位清楚，所以这个用例先 @Ignore，等残余修好后去掉 @Ignore 作为回归护栏。
  */
 public class ScanDuplicateTest extends TestBase {
 
@@ -44,7 +44,7 @@ public class ScanDuplicateTest extends TestBase {
     // 并发采样允许的最大重复行数，用于容忍已知的1行残留竞态窗
     private static final long MAX_DELTA = 3;
 
-    @Ignore("BTreeCursor检查-取页竞态窗未修，并发扫描仍会偶发重复返回；修好后去掉@Ignore")
+    @Ignore("BTreeCursor仍有未定位的重复返回竞态(单条语句实测1/1000采样)，修好后去掉@Ignore")
     @Test(timeout = 120000)
     public void concurrentScanMustNotReturnDuplicateRows() throws Exception {
         String db = "scandup_" + System.currentTimeMillis() + "_" + RUN_ID.incrementAndGet();
@@ -132,20 +132,24 @@ public class ScanDuplicateTest extends TestBase {
                 try (Connection c = open(db); Statement s = c.createStatement()) {
                     setLockTimeout(c);
                     while (!stopped.get()) {
-                        try (ResultSet rs = s.executeQuery("SELECT COUNT(*), COUNT(DISTINCT id) FROM "
-                                + table + " WHERE id >= 0")) {
-                            rs.next();
-                            long count = rs.getLong(1);
-                            long distinct = rs.getLong(2);
+                        // 必须在同一条语句里取完整结果再判重，
+                        // 两条聚合语句会各自取快照，并发删除时对比它们没有意义
+                        try (ResultSet rs = s.executeQuery(
+                                "SELECT id FROM " + table + " WHERE id >= 0")) {
+                            java.util.HashSet<Integer> seen = new java.util.HashSet<>();
+                            long count = 0;
+                            while (rs.next()) {
+                                count++;
+                                if (!seen.add(rs.getInt(1)))
+                                    throw new AssertionError(
+                                            "same statement returned duplicate row, id="
+                                                    + rs.getInt(1) + ", rows read=" + count);
+                                if (count > INSERT_COUNT)
+                                    throw new AssertionError("scan returned " + count
+                                            + " rows but only " + INSERT_COUNT + " were inserted");
+                            }
                             scans.incrementAndGet();
-                            long delta = count - distinct;
-                            maxDelta.accumulateAndGet(delta, Math::max);
-                            if (delta > MAX_DELTA)
-                                throw new AssertionError("scan returned duplicate rows: COUNT(*)="
-                                        + count + ", COUNT(DISTINCT id)=" + distinct);
-                            if (count > inserted.get())
-                                throw new AssertionError("scan returned " + count
-                                        + " rows but only " + inserted.get() + " were inserted");
+                            maxDelta.accumulateAndGet(count - seen.size(), Math::max);
                         }
                     }
                 } catch (Throwable e) {
