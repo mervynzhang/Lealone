@@ -53,7 +53,8 @@ public class SqlTestBase extends TestBase implements TestBase.SqlExecutor, TestB
     }
 
     protected boolean autoStartTcpServer() {
-        return false;
+        // 测试自己启动tcp server，服务端classpath才有测试类，不再依赖外部已经启动的服务
+        return true;
     }
 
     private static boolean tcpServerStarted = false;
