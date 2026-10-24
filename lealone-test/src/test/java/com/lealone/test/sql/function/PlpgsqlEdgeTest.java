@@ -409,7 +409,7 @@ public class PlpgsqlEdgeTest extends SqlTestBase {
 
     // 从SCRIPT的输出里找出指定函数的CREATE FUNCTION语句
     private String getCreateSql(String functionName) throws SQLException {
-        String prefix = "CREATE FUNCTION " + functionName;
+        String prefix = "CREATE FUNCTION " + functionName + "(";
         try (Statement statement = conn.createStatement();
                 ResultSet scriptRs = statement.executeQuery("SCRIPT")) {
             while (scriptRs.next()) {

@@ -166,7 +166,7 @@ public class PgFunctionTest extends SqlTestBase {
 
     // 从SCRIPT的输出里找出指定函数的CREATE FUNCTION语句
     private String getCreateSql(String functionName) {
-        String prefix = "CREATE FUNCTION " + functionName;
+        String prefix = "CREATE FUNCTION " + functionName + "(";
         try (Statement s = conn.createStatement(); ResultSet scriptRs = s.executeQuery("SCRIPT")) {
             while (scriptRs.next()) {
                 String sql = scriptRs.getString(1);
