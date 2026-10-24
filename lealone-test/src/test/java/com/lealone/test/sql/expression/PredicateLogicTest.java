@@ -33,12 +33,8 @@ public class PredicateLogicTest extends SqlAssertTestBase {
                 { Boolean.FALSE, Boolean.FALSE, Boolean.FALSE }, // FALSE AND ..
                 { null, Boolean.FALSE, null } }; // NULL AND ..
         for (int i = 0; i < 3; i++)
-            for (int j = 0; j < 3; j++) {
-                // NULL AND FALSE 目前返回 NULL，见 andWithFalseOnRight，这里先跳过这个格子
-                if (i == 2 && j == 1)
-                    continue;
+            for (int j = 0; j < 3; j++)
                 assertTruth(VALUES[i] + " AND " + VALUES[j], table[i][j]);
-            }
     }
 
     @Test
@@ -164,12 +160,6 @@ public class PredicateLogicTest extends SqlAssertTestBase {
     // 以下为已确认缺陷（期望值按 SQL 标准与 H2 2.4.240 实测）
     // ------------------------------------------------------------------
 
-    // BUG: 左操作数为 NULL 时 AND 没有和右边的 FALSE 做短路求值，返回 UNKNOWN。
-    // 期望: NULL AND FALSE = FALSE（H2/PostgreSQL 均为 false，FALSE 是 AND 的"零元"）；
-    // 实际: NULL。
-    // 更矛盾的是 NOT(NULL AND FALSE) 返回 true（等价于认为它是 FALSE），
-    // 而 (NULL AND FALSE) = FALSE 返回 NULL，同一个表达式在不同上下文结果不一致。
-    @Ignore("BUG: NULL AND FALSE returns NULL instead of FALSE; NOT(NULL AND FALSE) returns true")
     @Test
     public void andWithFalseOnRight() {
         assertQueryFalse("SELECT NULL AND FALSE");
