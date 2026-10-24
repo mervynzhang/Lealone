@@ -111,15 +111,15 @@ public class BackupTest extends TestBase {
         ProcessBuilder pb = new ProcessBuilder(javaHome + File.separator + "bin" + File.separator
                 + "java", "-Dlealone.base.dir=" + isoDir.getAbsolutePath(), "-cp",
                 System.getProperty("java.class.path"), BackupRestoreCheck.class.getName(),
-                isoDir.getAbsolutePath() + "/" + DB_NAME, "backup_test");
+                isoDir.getAbsolutePath() + "/" + DB_NAME, "select count(*) from backup_test");
         pb.redirectErrorStream(true);
         Process p = pb.start();
         String out = new String(p.getInputStream().readAllBytes()).trim();
         p.waitFor();
         int count = -1;
         for (String line : out.split("\n")) {
-            if (line.startsWith("ROW_COUNT=")) {
-                count = Integer.parseInt(line.substring("ROW_COUNT=".length()).trim());
+            if (line.startsWith("RESULT=")) {
+                count = Integer.parseInt(line.substring("RESULT=".length()).replace(";", "").trim());
             }
         }
         if (count < 0) {

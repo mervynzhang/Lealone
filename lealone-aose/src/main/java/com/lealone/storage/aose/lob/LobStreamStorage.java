@@ -103,6 +103,14 @@ public class LobStreamStorage implements LobStorage, com.lealone.transaction.Tra
         }
     }
 
+    @Override
+    public void backupTo(String baseDir, com.lealone.storage.BackupContext ctx) {
+        if (storage != null) {
+            init();
+            storage.backupTo(baseDir, ctx);
+        }
+    }
+
     public void backupTo(String baseDir, ZipOutputStream out, StorageMapFilter filter) {
         if (storage != null) {
             init();

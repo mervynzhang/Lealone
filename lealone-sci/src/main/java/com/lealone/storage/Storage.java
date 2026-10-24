@@ -61,6 +61,10 @@ public interface Storage {
 
     void backupTo(String baseDir, ZipOutputStream out, StorageMapFilter filter);
 
+    default void backupTo(String baseDir, BackupContext ctx) {
+        backupTo(baseDir, ctx.getZipOutputStream(), (Long) null);
+    }
+
     void close();
 
     void closeImmediately();
