@@ -6,7 +6,6 @@
 package com.lealone.sql.query;
 
 import com.lealone.db.table.StandardTable;
-import com.lealone.db.value.Value;
 import com.lealone.sql.optimizer.TableFilter;
 
 // 最普通的查询

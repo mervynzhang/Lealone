@@ -23,8 +23,6 @@ import com.lealone.test.sql.SqlTestBase;
  */
 public class PlpgsqlExceptionTest extends SqlTestBase {
 
-    private static final String CHECK_DB = "plpg_exc_db";
-
     public PlpgsqlExceptionTest() {
         setEmbedded(true);
     }

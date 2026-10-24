@@ -7,7 +7,6 @@ package com.lealone.test.db.table;
 
 import org.junit.Test;
 
-import com.lealone.db.api.ErrorCode;
 import com.lealone.db.result.Result;
 import com.lealone.test.db.DbObjectTestBase;
 
