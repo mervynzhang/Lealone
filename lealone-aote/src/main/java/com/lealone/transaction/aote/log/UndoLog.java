@@ -38,6 +38,17 @@ public class UndoLog {
     private Set<Integer> redoLogServiceIndexs;
     private int lastLogServiceIndex = -1;
 
+    // 同一条语句可能被重复commit，一个事务的redo log只需要提交一次
+    private boolean redoLogSubmitted;
+
+    public boolean isRedoLogSubmitted() {
+        return redoLogSubmitted;
+    }
+
+    public void setRedoLogSubmitted() {
+        redoLogSubmitted = true;
+    }
+
     public UndoLog(AOTransaction t) {
         this.t = t;
     }
