@@ -9,6 +9,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.common.logging.Logger;
+import com.lealone.common.logging.LoggerFactory;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.async.AsyncResultHandler;
 import com.lealone.db.index.Cursor;
@@ -39,6 +41,8 @@ import com.lealone.transaction.TransactionMapCursor;
  * @author zhh
  */
 public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey> {
+
+    private static final Logger logger = LoggerFactory.getLogger(StandardSecondaryIndex.class);
 
     private Long lastIndexedRowKey;
     private boolean building;
@@ -149,7 +153,16 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
     @Override
     public void remove(ServerSession session, Row row, Value[] oldColumns, boolean isLockedBySelf,
             AsyncResultHandler<Integer> handler) {
-        IndexKey key = convertToKey(row, oldColumns);
+        if (oldColumns == null && row.getColumns() == null) {
+            // 既没有旧列值也没有当前列值: 算不出这条索引项, 硬算会空指针。
+            // 调用方正常不会走到这里(removeRow 会先补读整行), 真走到说明有别的删除路径漏了列,
+            // 打一条 warn 便于定位, 然后按"没有需要删的索引项"处理。
+            logger.warn("Cannot compute index key to remove, table: {}, rowKey: {}", table.getName(),
+                    row.getKey());
+            onComplete(handler);
+            return;
+        }
+        IndexKey key = convertToKey(row, oldColumns != null ? oldColumns : row.getColumns());
         if (session.isFastPath()) {
             getStorageMap().remove(key, AsyncResultHandler.emptyHandler());
             return;
