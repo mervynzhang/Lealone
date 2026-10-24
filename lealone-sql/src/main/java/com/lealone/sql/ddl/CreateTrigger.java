@@ -10,7 +10,9 @@ import com.lealone.db.DbObjectType;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.api.Trigger;
 import com.lealone.db.lock.DbObjectLock;
+import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
+import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.schema.TriggerObject;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Table;
@@ -34,6 +36,7 @@ public class CreateTrigger extends SchemaStatement {
     private int queueSize = TriggerObject.DEFAULT_QUEUE_SIZE;
     private boolean noWait;
     private String tableName;
+    private String triggerFunctionName;
     private String triggerClassName;
     private String triggerSource;
     private boolean force;
@@ -84,6 +87,10 @@ public class CreateTrigger extends SchemaStatement {
         this.tableName = tableName;
     }
 
+    public void setTriggerFunctionName(String triggerFunctionName) {
+        this.triggerFunctionName = triggerFunctionName;
+    }
+
     public void setTriggerClassName(String triggerClassName) {
         this.triggerClassName = triggerClassName;
     }
@@ -125,7 +132,18 @@ public class CreateTrigger extends SchemaStatement {
         trigger.setRowBased(rowBased);
         trigger.setTypeMask(typeMask);
         trigger.setOnRollback(onRollback);
-        if (this.triggerClassName != null) {
+        if (triggerFunctionName != null) {
+            if (!rowBased) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "function trigger requires FOR EACH ROW");
+            }
+            FunctionAlias function = schema.findFunction(session, triggerFunctionName);
+            if (!(function instanceof SqlFunction) || !((SqlFunction) function).isTriggerReturn()) {
+                throw DbException.get(ErrorCode.FUNCTION_ALIAS_NOT_FOUND_1,
+                        "trigger function " + triggerFunctionName);
+            }
+            trigger.setTriggerFunctionName(triggerFunctionName);
+        } else if (this.triggerClassName != null) {
             trigger.setTriggerClassName(triggerClassName, force);
         } else {
             trigger.setTriggerSource(triggerSource, force);

@@ -296,6 +296,13 @@ public class PlpgSqlVariable {
         return recordFieldNames == null ? 0 : recordFieldNames.length;
     }
 
+    // 触发器RETURN NEW/OLD时把整行record变成ValueArray
+    public Value getRecordValue() {
+        if (!record || !recordAssigned || recordFieldValues == null)
+            return ValueNull.INSTANCE;
+        return ValueArray.get(recordFieldValues.clone());
+    }
+
     public Value getRecordField(int index) {
         if (!recordAssigned)
             throw PlpgSqlException.raise("55000",

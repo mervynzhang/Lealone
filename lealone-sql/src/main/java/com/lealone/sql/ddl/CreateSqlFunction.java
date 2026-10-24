@@ -53,6 +53,8 @@ public class CreateSqlFunction extends SchemaStatement {
     private boolean returnsRecord;
     // RETURNS SETOF <表名>时原样保留表名用于SCRIPT回放
     private String setofTableName;
+    // RETURNS TRIGGER
+    private boolean triggerReturn;
     // RETURNS comp / RETURNS SETOF comp
     private CompositeType compositeReturnType;
     private boolean compositeSetof;
@@ -125,6 +127,10 @@ public class CreateSqlFunction extends SchemaStatement {
     public void setCompositeReturnType(CompositeType type, boolean setof) {
         this.compositeReturnType = type;
         this.compositeSetof = setof;
+    }
+
+    public void setTriggerReturnType() {
+        this.triggerReturn = true;
     }
 
     public void setPolymorphicReturnType(int type, boolean setof) {
@@ -516,6 +522,16 @@ public class CreateSqlFunction extends SchemaStatement {
             throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
                     "cannot determine result data type of anyarray return type");
         }
+        if (triggerReturn) {
+            if (!plpgsql) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "RETURNS TRIGGER requires LANGUAGE plpgsql");
+            }
+            if (getOutputParameterCount() > 0) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "RETURNS TRIGGER can not be used with OUT parameters");
+            }
+        }
         if (plpgsql) {
             PlpgSqlParser.parse(body);
             // PL/pgSQL的数组参数还没有实现
@@ -568,7 +584,9 @@ public class CreateSqlFunction extends SchemaStatement {
         }
         if (returnsRecord)
             function.setReturnsRecord(true);
-        if (compositeReturnType != null) {
+        if (triggerReturn) {
+            function.setTriggerReturnType();
+        } else if (compositeReturnType != null) {
             function.setCompositeReturnType(compositeReturnType, compositeSetof);
         } else if (returnPolymorphicType != Column.POLY_NONE) {
             function.setPolymorphicReturnType(returnPolymorphicType, returnPolymorphicSetof);

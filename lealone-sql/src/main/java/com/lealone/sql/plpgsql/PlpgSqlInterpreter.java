@@ -101,6 +101,12 @@ public class PlpgSqlInterpreter {
 
     private PlpgSqlScope scope;
     private String[] parameterNames;
+    // 触发器函数执行时的行数据，普通函数为null
+    private boolean triggerMode;
+    private String[] triggerColumnNames;
+    private int[] triggerColumnTypes;
+    private Value[] triggerOldRow;
+    private Value[] triggerNewRow;
     // 直接保存OUT/INOUT参数和TABLE结果列的变量，避免同名局部变量遮蔽返回列
     private PlpgSqlVariable[] parameterVariables;
     private PlpgSqlVariable[] tableColumnVariables;
@@ -121,6 +127,17 @@ public class PlpgSqlInterpreter {
         this.sqlExecutor = new PlpgSqlSqlExecutor(session);
     }
 
+    // 触发器函数入口：把NEW/OLD作为record变量放进作用域
+    public Value executeTrigger(String[] columnNames, int[] columnTypes, Value[] oldRow,
+            Value[] newRow) {
+        triggerMode = true;
+        triggerColumnNames = columnNames;
+        triggerColumnTypes = columnTypes;
+        triggerOldRow = oldRow;
+        triggerNewRow = newRow;
+        return execute(new String[0], new String[0], new Value[0]);
+    }
+
     /**
      * 执行函数体，返回RETURN语句的值；没有RETURN时返回NULL。
      */
@@ -131,6 +148,7 @@ public class PlpgSqlInterpreter {
         scope = parameterScope;
         try {
             declareParameters(parameterNames, parameterTypes, parameterValues);
+            declareTriggerVariables(parameterScope);
             declareTableColumns(parameterScope);
             declareFoundVariable(parameterScope);
             try {
@@ -152,6 +170,8 @@ public class PlpgSqlInterpreter {
 
     // 函数自然结束或执行RETURN;时按返回形态组装返回值
     private Value finishWithoutReturn() {
+        if (resultInfo.trigger)
+            return ValueNull.INSTANCE;
         if (resultInfo.setReturning)
             return buildSetResult();
         // RETURNS RECORD和多个OUT参数都返回ValueArray形式的一行record;
@@ -238,6 +258,22 @@ public class PlpgSqlInterpreter {
 
     private static boolean isDateTimeType(int type) {
         return type == Value.DATE || type == Value.TIME || type == Value.TIMESTAMP;
+    }
+
+    private void declareTriggerVariables(PlpgSqlScope parameterScope) {
+        if (!resultInfo.trigger || !triggerMode)
+            return;
+        declareTriggerVariable(parameterScope, "NEW", triggerNewRow);
+        declareTriggerVariable(parameterScope, "OLD", triggerOldRow);
+    }
+
+    private void declareTriggerVariable(PlpgSqlScope parameterScope, String name, Value[] row) {
+        PlpgSqlVariable variable = new PlpgSqlVariable(name, false, false, false);
+        variable.setRecord(true);
+        variable.declareRecordFields(triggerColumnNames, triggerColumnTypes);
+        if (row != null)
+            variable.assignRecord(triggerColumnNames, triggerColumnTypes, row);
+        parameterScope.declare(variable);
     }
 
     // RETURNS TABLE的列在函数体里也是变量，RETURN NEXT不带表达式时用它们组行
@@ -588,6 +624,16 @@ public class PlpgSqlInterpreter {
         if (node.expression == null) {
             // RETURN; 在SETOF/TABLE里结束结果集，在OUT参数函数里返回OUT变量的值
             throw new ReturnSignal(finishWithoutReturn());
+        }
+        if (resultInfo.trigger) {
+            String expression = node.expression.trim();
+            if ("NEW".equalsIgnoreCase(expression) || "OLD".equalsIgnoreCase(expression)) {
+                PlpgSqlVariable variable = scope.findVariable(expression, false);
+                if (variable == null || !variable.isRecord())
+                    throw PlpgSqlException.raise("42703",
+                            "trigger variable " + expression + " does not exist");
+                throw new ReturnSignal(variable.getRecordValue());
+            }
         }
         if (resultInfo.setReturning)
             throw PlpgSqlException.raise("2F005",

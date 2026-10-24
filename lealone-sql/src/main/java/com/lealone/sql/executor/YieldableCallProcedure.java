@@ -121,7 +121,7 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         int[] outputIndexes = new int[outputCount];
         for (int i = 0; i < outputCount; i++)
             outputIndexes[i] = procedure.getOutputParameterIndex(i);
-        return new PlpgSqlResultInfo(procedure.getName(), Value.NULL, false, false, false,
+        return new PlpgSqlResultInfo(procedure.getName(), Value.NULL, false, false, false, false,
                 parameterModes, outputIndexes, null, null, null, null, true);
     }
 

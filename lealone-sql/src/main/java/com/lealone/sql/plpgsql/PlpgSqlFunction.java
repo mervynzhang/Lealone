@@ -68,6 +68,21 @@ public class PlpgSqlFunction extends SqlFunction {
         }
     }
 
+    @Override
+    public Value executeTrigger(ServerSession session, String[] columnNames, int[] columnTypes,
+            Value[] oldRow, Value[] newRow) {
+        // 触发器函数必须和触发它的DML在同一个session/事务里执行，
+        // 这样函数里的DML对后续触发器可见，也能随外层事务一起回滚
+        PlpgSqlInterpreter interpreter = new PlpgSqlInterpreter(session, getCompiledBody(),
+                getResultInfo());
+        try {
+            return interpreter.executeTrigger(columnNames, columnTypes, oldRow, newRow);
+        } catch (PlpgSqlException e) {
+            throw DbException.convert(
+                    new SQLException(e.getMessage(), e.getSqlState(), ErrorCode.GENERAL_ERROR_1));
+        }
+    }
+
     private PlpgSqlResultInfo getResultInfo() {
         int returnType = getReturnType();
         boolean setReturning = isSetReturning();
@@ -86,8 +101,8 @@ public class PlpgSqlFunction extends SqlFunction {
             columnScales = getReturnColumnScales();
         }
         return new PlpgSqlResultInfo(getName(), returnType, isReturnsRecord(), setReturning,
-                returnsTable, parameterModes, outputIndexes, columnNames, columnTypes,
-                columnPrecisions, columnScales, false);
+                returnsTable, isTriggerReturn(), parameterModes, outputIndexes, columnNames,
+                columnTypes, columnPrecisions, columnScales, false);
     }
 
     @Override

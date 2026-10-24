@@ -5348,7 +5348,7 @@ public class SQLParserBase implements SQLParser {
             } else {
                 throw getSyntaxError();
             }
-        } while (readIf(","));
+        } while (readIf(",") || readIf("OR"));
         read("ON");
         String tableName = readIdentifierWithSchema();
         checkSchema(schema);
@@ -5374,6 +5374,13 @@ public class SQLParserBase implements SQLParser {
         command.setNoWait(readIf("NOWAIT"));
         if (readIf("AS")) {
             command.setTriggerSource(readString());
+        } else if (readIf("EXECUTE")) {
+            if (!readIf("PROCEDURE")) {
+                read("FUNCTION");
+            }
+            command.setTriggerFunctionName(readUniqueIdentifier());
+            read("(");
+            read(")");
         } else {
             read("CALL");
             command.setTriggerClassName(readUniqueIdentifier());
@@ -5887,6 +5894,8 @@ public class SQLParserBase implements SQLParser {
                         columnPrecisionArray, columnScaleArray);
             } else if (readIf("RECORD")) {
                 command.setRecordReturnType();
+            } else if (readIf("TRIGGER")) {
+                command.setTriggerReturnType();
             } else if (readIf("VOID")) {
                 // VOID不是普通数据类型，单独处理，PL/pgSQL函数可以省略RETURN
                 command.setReturnType("VOID", Value.NULL);

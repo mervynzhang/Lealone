@@ -18,6 +18,8 @@ public class PlpgSqlResultInfo {
     // RETURNS SETOF/RETURNS TABLE
     public final boolean setReturning;
     public final boolean returnsTable;
+    // RETURNS TRIGGER
+    public final boolean trigger;
     // 参数模式和OUT/INOUT参数下标
     public final int[] parameterModes;
     public final int[] outputIndexes;
@@ -30,14 +32,15 @@ public class PlpgSqlResultInfo {
     public final int[] columnScales;
 
     public PlpgSqlResultInfo(String functionName, int returnType, boolean returnsRecord,
-            boolean setReturning, boolean returnsTable, int[] parameterModes, int[] outputIndexes,
-            String[] columnNames, int[] columnTypes, long[] columnPrecisions, int[] columnScales,
-            boolean procedure) {
+            boolean setReturning, boolean returnsTable, boolean trigger, int[] parameterModes,
+            int[] outputIndexes, String[] columnNames, int[] columnTypes, long[] columnPrecisions,
+            int[] columnScales, boolean procedure) {
         this.functionName = functionName;
         this.returnType = returnType;
         this.returnsRecord = returnsRecord;
         this.setReturning = setReturning;
         this.returnsTable = returnsTable;
+        this.trigger = trigger;
         this.parameterModes = parameterModes;
         this.outputIndexes = outputIndexes;
         this.columnNames = columnNames;
