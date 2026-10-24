@@ -11,6 +11,8 @@ import java.nio.ByteBuffer;
 
 import com.lealone.common.compress.CompressTool;
 import com.lealone.common.exceptions.DbException;
+import com.lealone.common.logging.Logger;
+import com.lealone.common.logging.LoggerFactory;
 import com.lealone.common.util.DataUtils;
 import com.lealone.db.Constants;
 import com.lealone.db.DataBuffer;
@@ -20,6 +22,8 @@ import com.lealone.db.DataHandler;
  * An input stream that is backed by a file storage.
  */
 public class FileStorageInputStream extends InputStream {
+
+    private static final Logger logger = LoggerFactory.getLogger(FileStorageInputStream.class);
 
     private FileStorage fileStorage;
     private final boolean alwaysClose;
@@ -137,7 +141,17 @@ public class FileStorageInputStream extends InputStream {
         fileStorage.readFully(page.getBytes(), 0, Constants.FILE_BLOCK_SIZE);
         page.reset();
         remainingInBuffer = page.getInt();
-        if (remainingInBuffer < 0) {
+        // 块长度必须落在文件范围内，否则是文件损坏或者加密文件的密码不对(块头是解出来的垃圾数据)，
+        // 不能按这个垃圾长度去分配内存，那样会抛OutOfMemoryError，整个数据库都会被强行关闭
+        long available = fileStorage.length() - fileStorage.getFilePointer()
+                + Constants.FILE_BLOCK_SIZE;
+        if (remainingInBuffer < 0 || remainingInBuffer > available) {
+            // 块长度落在文件范围外: 文件损坏, 或者加密文件的密码不对(块头解出来是垃圾)。
+            // 这里仍然按"读到末尾"处理(调用方 RUNSCRIPT 有自己的密码标记校验, 会报明确的加密错误;
+            // 其它调用方拿到短读也不会崩), 但不能一声不响: 数据被截断必须留痕, 否则
+            // LOB 损坏会被当成正常读完, 事后完全查不出来。
+            logger.warn("Block length {} is out of range (available: {}), file: {}, treat as end of file",
+                    remainingInBuffer, available, fileStorage.getFileName());
             close();
             return;
         }
