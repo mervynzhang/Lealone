@@ -5102,8 +5102,15 @@ public class SQLParserBase implements SQLParser {
         while (readIf("LANGUAGE")) {
             checkProcedureLanguage(readStringOrIdentifier());
         }
-        read("AS");
-        command.setBody(readString());
+        // 标准SQL的函数体写成BEGIN ATOMIC ... END，里面可以有多条语句
+        if (readIf("BEGIN")) {
+            read("ATOMIC");
+            command.setBody(parseAtomicBody());
+            command.setAtomicBody(true);
+        } else {
+            read("AS");
+            command.setBody(readString());
+        }
         while (readIf("LANGUAGE")) {
             checkProcedureLanguage(readStringOrIdentifier());
         }
@@ -5149,6 +5156,33 @@ public class SQLParserBase implements SQLParser {
                     "CREATE PROCEDURE ... LANGUAGE " + language
                             + ", only LANGUAGE SQL is supported");
         }
+    }
+
+    // 读取BEGIN ATOMIC和END之间的多条SQL语句，用分号拼成一个过程体/函数体
+    protected String parseAtomicBody() {
+        StatementBuilder buff = new StatementBuilder();
+        ArrayList<Parameter> outerParameters = parameters;
+        // 函数体/过程体里的'?'是给函数体用的，不能留到CREATE语句自己的参数列表里
+        parameters = Utils.newSmallArrayList();
+        try {
+            while (true) {
+                if (isToken("END")) {
+                    read();
+                    break;
+                }
+                if (currentTokenType == END)
+                    throw getSyntaxError();
+                StatementBase statement = parseStatement();
+                buff.appendExceptFirst("; ").append(statement.getSQL());
+                if (readIf(";"))
+                    continue;
+                if (!isToken("END"))
+                    throw getSyntaxError();
+            }
+        } finally {
+            parameters = outerParameters;
+        }
+        return buff.toString();
     }
 
     protected StatementBase parseDropProcedure() {
@@ -5349,8 +5383,16 @@ public class SQLParserBase implements SQLParser {
                 break;
             }
         }
-        read("AS");
-        String body = readString();
+        String body;
+        boolean atomicBody = false;
+        if (readIf("BEGIN")) {
+            read("ATOMIC");
+            body = parseAtomicBody();
+            atomicBody = true;
+        } else {
+            read("AS");
+            body = readString();
+        }
         // PostgreSQL也允许AS '函数体' LANGUAGE plpgsql，所以AS之后再解析一次
         while (true) {
             if (readIf("LANGUAGE")) {
@@ -5372,8 +5414,30 @@ public class SQLParserBase implements SQLParser {
         command.setStrict(strict);
         command.setLanguage(language);
         if ("PLPGSQL".equalsIgnoreCase(language)) {
+            if (atomicBody) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "BEGIN ATOMIC function body with LANGUAGE plpgsql");
+            }
             // PL/pgSQL的函数体交给自己的解释器执行，不需要把参数名改写成?
             command.setBody(body, null, new int[0]);
+        } else if (atomicBody) {
+            String[] statements = LealoneSQLParser.splitStatements(session, body);
+            if (statements.length == 0) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "empty BEGIN ATOMIC function body");
+            }
+            String[] bodySqls = new String[statements.length];
+            int[][] statementParameterIndexes = new int[statements.length][];
+            for (int i = 0; i < statements.length; i++) {
+                ArrayList<Integer> indexes = Utils.newSmallArrayList();
+                bodySqls[i] = SqlFunctionBodyParser.parseAtomicBody(session, statements[i],
+                        parameterNames, indexes);
+                statementParameterIndexes[i] = toIntArray(indexes);
+            }
+            int last = statements.length - 1;
+            // 最后一条语句就是返回值，所以对外的bodySql用最后一条，校验逻辑可以复用
+            command.setBody(body, bodySqls[last], statementParameterIndexes[last]);
+            command.setAtomicBody(bodySqls, statementParameterIndexes);
         } else {
             ArrayList<Integer> bodyParameterIndexes = Utils.newSmallArrayList();
             String bodySql = SqlFunctionBodyParser.parseBody(session, body, parameterNames,

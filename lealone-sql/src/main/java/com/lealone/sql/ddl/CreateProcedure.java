@@ -28,6 +28,7 @@ public class CreateProcedure extends SchemaStatement {
 
     private String procedureName;
     private String body;
+    private boolean atomicBody;
     private boolean ifNotExists;
     private final ArrayList<Column> parameters = new ArrayList<>();
     private final ArrayList<Integer> parameterModes = new ArrayList<>();
@@ -47,6 +48,11 @@ public class CreateProcedure extends SchemaStatement {
 
     public void setBody(String body) {
         this.body = body;
+    }
+
+    // BEGIN ATOMIC ... END形式的函数体
+    public void setAtomicBody(boolean atomicBody) {
+        this.atomicBody = atomicBody;
     }
 
     public void setIfNotExists(boolean ifNotExists) {
@@ -99,7 +105,7 @@ public class CreateProcedure extends SchemaStatement {
         }
         checkOutputParameters();
         SqlProcedure procedure = new SqlProcedure(schema, getObjectId(), procedureName, body,
-                parameters.toArray(new Column[0]), toIntArray(parameterModes));
+                atomicBody, parameters.toArray(new Column[0]), toIntArray(parameterModes));
         schema.add(session, procedure, lock);
         return 0;
     }

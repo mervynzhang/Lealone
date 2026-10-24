@@ -5,10 +5,10 @@
  */
 package com.lealone.sql.executor;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.db.api.ErrorCode;
 import com.lealone.db.async.AsyncResultHandler;
 import com.lealone.db.async.AsyncTask;
 import com.lealone.db.command.CommandParameter;
@@ -21,12 +21,10 @@ import com.lealone.db.table.Column;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueInt;
 import com.lealone.db.value.ValueNull;
-import com.lealone.db.api.ErrorCode;
+import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.PreparedSQLStatement;
 import com.lealone.sql.PreparedSQLStatement.YieldableCommand;
 import com.lealone.sql.SQLStatement;
-import com.lealone.sql.StatementBase;
-import com.lealone.sql.StatementList;
 import com.lealone.sql.dml.CallProcedure;
 import com.lealone.sql.expression.Expression;
 
@@ -76,7 +74,7 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
     @Override
     @SuppressWarnings("unchecked")
     protected void executeInternal() {
-        // yieldable不为null时过程体还没执行完，保持RUNNING状态避免调度器重复重复调度本类，
+        // yieldable不为null时过程体还没执行完，保持RUNNING状态避免调度器重复调度本类，
         // 过程体由子yieldable的完成回调继续驱动
         if (yieldable == null) {
             // 过程体执行失败时真正的错误已经记录在pendingException里，
@@ -232,35 +230,9 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         }
     }
 
-    // 过程体是一个用分号分隔的SQL语句串，这里用解析器自己判断一条语句到哪结束，
-    // 这样字符串常量里出现分号也不会切错
+    // 过程体是一个用分号分隔的SQL语句串，空过程体(比如空的BEGIN ATOMIC块)没有语句
     private String[] splitBody(String body) {
-        ArrayList<String> list = new ArrayList<>();
-        String sql = body;
-        while (true) {
-            StatementBase s = (StatementBase) session.createParser().parse(sql);
-            if (s instanceof StatementList) {
-                StatementList list2 = (StatementList) s;
-                list.add(list2.getFirstStatement().getSQL());
-                sql = skipStatementSeparator(list2.getRemaining());
-                if (sql.isEmpty())
-                    break;
-            } else {
-                list.add(s.getSQL());
-                break;
-            }
-        }
-        return list.toArray(new String[0]);
-    }
-
-    private static String skipStatementSeparator(String sql) {
-        int i = 0;
-        for (int len = sql.length(); i < len; i++) {
-            char c = sql.charAt(i);
-            if (c != ';' && !Character.isWhitespace(c))
-                break;
-        }
-        return sql.substring(i);
+        return LealoneSQLParser.splitStatements(session, body);
     }
 
     // 事务语句会打断ServerSession对executingStatements的计数，过程体里不允许出现

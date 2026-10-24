@@ -26,6 +26,8 @@ public class SqlProcedure extends SchemaObjectBase {
     public static final int PARAM_INOUT = 2;
 
     private final String body;
+    // 过程体是BEGIN ATOMIC ... END这种SQL标准函数体(可以有多条语句)
+    private final boolean atomicBody;
     private final Column[] parameters;
     private final int[] parameterModes;
     private final int[] inputIndexes; // 入参(IN/INOUT)在参数列表中的下标
@@ -34,10 +36,11 @@ public class SqlProcedure extends SchemaObjectBase {
     // 过程体的解析结果，由sql模块负责填充和读取
     private volatile Object compiledBody;
 
-    public SqlProcedure(Schema schema, int id, String name, String body, Column[] parameters,
-            int[] parameterModes) {
+    public SqlProcedure(Schema schema, int id, String name, String body, boolean atomicBody,
+            Column[] parameters, int[] parameterModes) {
         super(schema, id, name);
         this.body = body;
+        this.atomicBody = atomicBody;
         this.parameters = parameters;
         this.parameterModes = parameterModes;
         int inputCount = 0;
@@ -67,6 +70,11 @@ public class SqlProcedure extends SchemaObjectBase {
 
     public String getBody() {
         return body;
+    }
+
+    // BEGIN ATOMIC ... END形式的函数体，过程体里可以有多条SQL语句，最后一条查询的结果就是返回值
+    public boolean isAtomicBody() {
+        return atomicBody;
     }
 
     public int getParameterCount() {
@@ -124,7 +132,17 @@ public class SqlProcedure extends SchemaObjectBase {
             }
             buff.append(parameters[i].getCreateSQL(false));
         }
-        buff.append(") AS ").append(StringUtils.quoteStringSQL(body));
+        buff.append(')');
+        if (atomicBody) {
+            // 每条语句都要有分号(和PostgreSQL一样)，否则回放时END会被当成上一个语句的别名
+            buff.append(" BEGIN ATOMIC ");
+            if (!body.isEmpty()) {
+                buff.append(body).append("; ");
+            }
+            buff.append("END");
+        } else {
+            buff.append(" AS ").append(StringUtils.quoteStringSQL(body));
+        }
         return buff.toString();
     }
 

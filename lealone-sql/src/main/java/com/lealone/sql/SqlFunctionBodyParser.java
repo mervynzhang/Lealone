@@ -34,6 +34,20 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
      */
     static String parseBody(ServerSession session, String body, ArrayList<String> parameterNames,
             ArrayList<Integer> parameterIndexes) {
+        return parse(session, body, parameterNames, parameterIndexes, true);
+    }
+
+    /**
+     * BEGIN ATOMIC函数体里的一条语句：不要求是查询语句，但不允许出现'?'。
+     */
+    static String parseAtomicBody(ServerSession session, String body,
+            ArrayList<String> parameterNames, ArrayList<Integer> parameterIndexes) {
+        return parse(session, body, parameterNames, parameterIndexes, false);
+    }
+
+    private static String parse(ServerSession session, String body,
+            ArrayList<String> parameterNames, ArrayList<Integer> parameterIndexes,
+            boolean singleQuery) {
         SqlFunctionBodyParser parser = new SqlFunctionBodyParser(session);
         parser.initialize(body);
         parser.read();
@@ -55,7 +69,11 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
         if (tokens.isEmpty()) {
             throw DbException.getSyntaxError(body, 0);
         }
-        checkBody(tokens, tokenTypes);
+        if (singleQuery) {
+            checkBody(tokens, tokenTypes);
+        } else {
+            checkNoParameterToken(tokens, tokenTypes);
+        }
 
         int size = tokens.size();
         StringBuilder bodySql = new StringBuilder(body.length());
@@ -99,6 +117,17 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                         "function body must be a single query");
             }
+            if (tokenTypes.get(i) == PARAMETER) {
+                // 函数体里的'?'会和参数名替换出来的'?'混淆，直接拒绝
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "? is not allowed in function body");
+            }
+        }
+    }
+
+    private static void checkNoParameterToken(ArrayList<String> tokens,
+            ArrayList<Integer> tokenTypes) {
+        for (int i = 0, size = tokens.size(); i < size; i++) {
             if (tokenTypes.get(i) == PARAMETER) {
                 // 函数体里的'?'会和参数名替换出来的'?'混淆，直接拒绝
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
