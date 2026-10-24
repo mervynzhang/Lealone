@@ -51,7 +51,6 @@ public class ConcurrencyCheckpointTest extends TestBase {
     // 8 threads x 2000 updates, autocommit (one transaction per update)
     // ------------------------------------------------------------------
 
-    @Ignore("已知bug: 热点行更新后，通过二级索引读到的值会过期(16000次更新后索引上和表上的sum不一致)，间歇性出现")
     @Test(timeout = 180000)
     public void updateStressAutocommit() throws Exception {
         updateStress(unique("concatomic"), true);
@@ -61,7 +60,6 @@ public class ConcurrencyCheckpointTest extends TestBase {
     // same load, but each worker uses an explicit transaction per update
     // ------------------------------------------------------------------
 
-    @Ignore("已知bug: 热点行更新后，通过二级索引读到的值会过期(索引维护的顺序问题，和挂死无关)")
     @Test(timeout = 180000)
     public void updateStressExplicitTransactions() throws Exception {
         updateStress(unique("concexplicit"), false);
