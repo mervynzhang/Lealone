@@ -108,6 +108,12 @@ public class CheckpointDurabilityTest extends TestBase {
         File storageRoot = dbDir.getParentFile();
         File isoDir = new File(storageRoot, dbName + "_iso");
         FileUtils.deleteRecursive(isoDir.getAbsolutePath(), false);
+        // db_0 是本进程一直在用的元数据库, 里面有还没落盘的脏页; 直接复制一个活跃库有竞态,
+        // 子进程偶尔读到半写状态(ExceptionInInitializerError), 让这个用例假红。
+        // 先同步刷一次盘, 保证复制到的是完整快照。
+        Database metadata = LealoneDatabase.getInstance().findDatabase("LEALONE");
+        if (metadata != null)
+            metadata.checkpoint(true);
         copyDir(new File(storageRoot, "db_0"), new File(isoDir, "db_0"));
         copyDir(dbDir, new File(isoDir, dbDir.getName()));
         isoDirs.put(dbName, isoDir);
