@@ -156,6 +156,10 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         }
         TransactionMap<IndexKey, IndexKey> map = getTransactionMap(session);
         Lockable lockable = map.getLockableValue(key);
+        if (lockable == null) { // 旧索引项已经不存在，不能让remove失败挡住后面的add
+            onComplete(handler);
+            return;
+        }
         if (!isLockedBySelf && map.isLocked(lockable))
             onComplete(handler, map.addWaitingTransaction(lockable));
         else
