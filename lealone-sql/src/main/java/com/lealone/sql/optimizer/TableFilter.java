@@ -854,15 +854,17 @@ public class TableFilter extends ColumnResolverBase {
             return currentSearchRow.getPrimaryKey();
         }
         if (current == null) {
-            // 二级索引是异步维护的，索引行里的值可能还是旧的，只能读主表行
-            if (cursor.isSearchRowUpToDate()) {
+            // 二级索引是异步维护的，索引行里的值可能还是旧的，只能读主表行；
+            // 墓碑行的columns为null，不能直接取值
+            if (cursor.isSearchRowUpToDate() && currentSearchRow.getColumns() != null) {
                 Value v = currentSearchRow.getValue(columnId);
                 if (v != null) {
                     return v;
                 }
             }
             current = cursor.get();
-            if (current == null) {
+            if (current == null || current.getColumns() == null) {
+                current = null;
                 return ValueNull.INSTANCE;
             }
         }
