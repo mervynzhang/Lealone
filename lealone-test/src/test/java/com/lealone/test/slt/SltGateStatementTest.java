@@ -102,7 +102,7 @@ public class SltGateStatementTest extends TestBase {
         assertTrue("应该有一条 statement 失败", hasStatementFailure);
 
         List<SltRunner.FileResult> results = Collections.singletonList(r);
-        Map<String, Integer> emptyBaseline = Collections.emptyMap();
+        SltBaseline.Baseline emptyBaseline = new SltBaseline.Baseline();
         SltBaseline.classify(results, Collections.emptyList(), emptyBaseline);
         assertTrue("statement 失败必须让门禁的 gated 失败数大于0", r.gatedFail > 0);
         assertTrue("statement 失败必须让 delta 大于0(门禁变红)", r.delta > 0);
