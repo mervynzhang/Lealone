@@ -68,16 +68,16 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 24, skip 16)  脚本语句  96(通过  96, 失败 0)  被skip用例占  54 条
-[pgregress]   create_procedure.sql     用例 24(执行 14, skip 10)  脚本语句  61(通过  61, 失败 0)  被skip用例占  37 条
+[pgregress]   create_function_sql.sql  用例 40(执行 25, skip 15)  脚本语句 102(通过 102, 失败 0)  被skip用例占  49 条
+[pgregress]   create_procedure.sql     用例 24(执行 14, skip 10)  脚本语句  63(通过  63, 失败 0)  被skip用例占  37 条
 [pgregress]   plpgsql.sql              用例 23(执行 18, skip  5)  脚本语句  56(通过  56, 失败 0)  被skip用例占  12 条
-[pgregress]   rangefuncs.sql           用例 10(执行  9, skip  1)  脚本语句  35(通过  35, 失败 0)  被skip用例占   5 条
-[pgregress] 合计: 用例 97 (执行 65, skip 32), 脚本语句 248 (通过 248, 失败 0), 耗时 545ms
-[pgregress] skip 清单: 32 条用例, 点名跳过的 PG 语句 179 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 104 条在 skip 清单里
+[pgregress]   rangefuncs.sql           用例 10(执行 10, skip  0)  脚本语句  40(通过  40, 失败 0)  被skip用例占   0 条
+[pgregress] 合计: 用例 97 (执行 67, skip 30), 脚本语句 261 (通过 261, 失败 0), 耗时 569ms
+[pgregress] skip 清单: 30 条用例, 点名跳过的 PG 语句 155 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中  85 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  55 条在 skip 清单里
 [pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 15 条)
-[pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 5 条)
+[pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 0 条)
 ```
 
 口径说明：
@@ -88,7 +88,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 32 条 / 179 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 30 条 / 155 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -99,7 +99,6 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 anyarray/anyelement 多态类型 | 3 | 15 | function_sql.sql_body_polymorphic, function_sql.anyarray_setof, procedure.polymorphic |
 | Lealone 无 SQL 标准函数体(RETURN表达式), pg_get_functiondef 本身已支持 | 1 | 13 | function_sql.pg_get_functiondef_sqlbody |
 | Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD | 1 | 3 | function_sql.sql_body_tempseq |
-| Lealone 没有 information_schema.routines 等视图 | 1 | 19 | function_sql.information_schema |
 | Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转 | 1 | 3 | function_sql.or_replace_window |
 | Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN | 1 | 10 | function_sql.setof_inline |
 | Lealone 函数体只允许单条查询(不支持 DDL) | 1 | 8 | function_sql.ddl_in_body |
@@ -116,9 +115,9 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger) | 2 | 4 | plpgsql.trigger_room, plpgsql.trigger_raise |
 | Lealone 无 anyelement/anyarray 多态参数类型 | 1 | 1 | plpgsql.polymorphic |
 | PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100 | 1 | 6 | plpgsql.cursor |
-| 没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持) | 1 | 5 | rangefuncs.with_ordinality_unnest |
 | 这段用 plpgsql 的 FOR ... IN 查询(50100 PL/pgSQL: FOR ... IN query)遍历表, 该语法还不支持; RETURNS SETOF <表行类型> 本身已可用 | 1 | 4 | plpgsql.setof_composite_record |
 | 不支持命名实参(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150) | 1 | 8 | procedure.out_params_named |
+
 
 
 ## 六、这一轮刷新：解锁了什么
@@ -210,8 +209,24 @@ proisstrict/prosecdef/proleakproof/prosrc）和内置函数 `pg_get_functiondef(
 | `function_sql.pg_get_functiondef` | skip（没有该函数） | 4 条查询 | 内置 `pg_get_functiondef(函数名)` 返回 `getCreateSQL()` |
 
 执行用例 60 → 65，skip 37 → 32，脚本语句 227 → 248（+21），被 skip 用例占的 PG 语句 204 → 179。
-`information_schema`（依赖 DEFAULT 参数/OUT/依赖视图）和 `pg_get_functiondef_sqlbody`（依赖 RETURN 函数体）
-仍然 skip，原因见清单。
+`pg_get_functiondef_sqlbody`（依赖 RETURN 函数体）仍然 skip；`information_schema` 已部分解锁，
+见下一小节。
+
+### 本轮续：INFORMATION_SCHEMA 参数/例程视图（部分适配）
+
+新增三张只读视图（和 `PG_PROC` 一样由 `InfoMetaTable` 生成，自动创建、不进 SCRIPT/备份）：
+
+* `INFORMATION_SCHEMA.PARAMETERS`：`specific_catalog/specific_schema/specific_name/ordinal_position/
+  parameter_mode/parameter_name/data_type/parameter_default` 等列，函数和过程的参数都包含 OUT/INOUT；
+* `INFORMATION_SCHEMA.ROUTINES`：`routine_name/routine_type/data_type/is_deterministic/security_type/
+  external_language` 等列，同名重载用 `specific_name`（名字_id）区分；
+* `INFORMATION_SCHEMA.ROUTINE_ROUTINE_USAGE`：列齐全但**依赖关系还没有填充**，查询返回 0 行。
+
+`function_sql.information_schema` 已从 skip 移到执行（6 条语句），但**只覆盖视图本身**：
+DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`parameter_default` 如实断言 NULL；
+函数之间的依赖关系没有分析，`routine_routine_usage` 如实断言 0 行；PG 原文件的
+`routine_sequence_usage`/`routine_column_usage`/`routine_table_usage` 也没有转换。
+等 DEFAULT 和依赖分析合入后，再把脚本恢复成 PG 原样并补上预期行。
 
 ### 仍然不支持的（清单里都有用例）
 
@@ -228,9 +243,10 @@ proisstrict/prosecdef/proleakproof/prosrc）和内置函数 `pg_get_functiondef(
 * **游标/触发器**：`plpgsql.cursor`、`plpgsql.trigger_*`。
 * **`unnest()`/`generate_series()`/`ARRAY[...]` 字面量/`$1` 位置参数**：`rangefuncs.with_ordinality_unnest`、
   `function_sql.a2_array_arg`、`function_sql.bad_body_positional`。
-* **目录与 DDL 属性**：`information_schema.routines` 等视图（1）、`pg_get_functiondef_sqlbody`（依赖 SQL 标准函数体）、
-  `ALTER FUNCTION` 的属性组合 + `SET search_path`（`or_replace_window`）、`CREATE OPERATOR CLASS`（1）。
-  `information_schema.pg_proc` 和 `pg_get_functiondef()` 本分支已经补上。
+* **目录与 DDL 属性**：`pg_get_functiondef_sqlbody`（依赖 SQL 标准函数体）、`ALTER FUNCTION` 的属性组合 +
+  `SET search_path`（`or_replace_window`）、`CREATE OPERATOR CLASS`（1）。
+  `information_schema.pg_proc`、`PARAMETERS`、`ROUTINES`、`ROUTINE_ROUTINE_USAGE`（空表）和
+  `pg_get_functiondef()` 本分支已经补上。
 * **CALL 语义与 psql 元命令**：`CALL` 不区分函数与过程（`call_random`、`call_function`）、
   `\df`/`psql` 元命令（`psql_meta`、`ambiguous_drop`）、`ALTER ROUTINE`/`DROP ROUTINE`（`routine_syntax`）。
 
@@ -250,9 +266,11 @@ proisstrict/prosecdef/proleakproof/prosrc）和内置函数 `pg_get_functiondef(
 3. **`rangefuncs.sql`（827 行 / 428 条语句）也只抽样**：转过来 10 个用例（执行 9 个），
    依赖 `WITH ORDINALITY`、`unnest()`、`generate_series()`、`SETOF <表行类型>` 的段落 skip 或没抽。
 4. **`portals.sql`**：按要求没纳入（游标/portal 语义，不是函数/过程定义）。
-5. 没转换的 PG 断言：`EXPLAIN` 计划、`\df` 等 psql 元命令、`information_schema.routines` 等目录视图、
-   `GRANT/REVOKE/SET ROLE` 权限、`ALTER FUNCTION/PROCEDURE/ROUTINE`——都随用例一起 skip，
-   原因写在清单里，没有偷偷删。`pg_proc` 查询已经改成等价的 `INFORMATION_SCHEMA.PG_PROC` 查询并执行。
+5. 没转换的 PG 断言：`EXPLAIN` 计划、`\df` 等 psql 元命令、`information_schema.routine_sequence_usage/
+   routine_column_usage/routine_table_usage`、`GRANT/REVOKE/SET ROLE` 权限、`ALTER FUNCTION/PROCEDURE/ROUTINE`
+   ——都随用例一起 skip，原因写在清单里，没有偷偷删。`pg_proc` 查询已经改成等价的
+   `INFORMATION_SCHEMA.PG_PROC` 查询；`information_schema` 用例里的 PARAMETERS/ROUTINES 查询也执行了，
+   但 DEFAULT 和 routine_routine_usage 的依赖行还是空的（见第六节）。
 
 ## 九、转换/适配规则
 

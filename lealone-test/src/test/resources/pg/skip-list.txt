@@ -29,7 +29,6 @@ function_sql.sql_body_polymorphic	create_function_sql.sql:197-205	2	Lealone 无 
 function_sql.pg_get_functiondef_sqlbody	create_function_sql.sql:214-228	13	Lealone 无 SQL 标准函数体(RETURN表达式), pg_get_functiondef 本身已支持
 function_sql.sql_body_view	create_function_sql.sql:232-242	6	Lealone 无 SQL 标准函数体(RETURN 表达式)
 function_sql.sql_body_tempseq	create_function_sql.sql:244-253	3	Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD
-function_sql.information_schema	create_function_sql.sql:256-323	19	Lealone 没有 information_schema.routines 等视图
 function_sql.or_replace_window	create_function_sql.sql:337-339	3	Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转
 function_sql.setof_inline	create_function_sql.sql:353-376	10	Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN
 function_sql.ddl_in_body	create_function_sql.sql:409-431	8	Lealone 函数体只允许单条查询(不支持 DDL)
