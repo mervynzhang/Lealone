@@ -560,17 +560,37 @@ select voidtest2(11,22) r;
 
 -- @case function_sql.void_insert
 -- @pg create_function_sql.sql:392-402
--- 缺失: voidtest3 的函数体是不带 RETURNING 的 INSERT(只支持带RETURNING的DML);
---       voidtest4 带 RETURNING, 现在已经支持
+-- 适配: 补上结果断言, select 函数时加别名 r 以固定列名;
+--       voidtest3 是不带 RETURNING 的 INSERT, RETURNS VOID 时这种函数体是合法的
 create temp table sometable(f1 int);
+> update count: 0
+
 create function voidtest3(a int) returns void language sql as
 $$ insert into sometable values(a + 1) $$;
-select voidtest3(17);
+> update count: 0
+
+select voidtest3(17) r;
+> R
+> ----
+> null
+> rows: 1
+
 create function voidtest4(a int) returns void language sql as
 $$ insert into sometable values(a - 1) returning f1 $$;
-select voidtest4(39);
+> update count: 0
+
+select voidtest4(39) r;
+> R
+> ----
+> null
+> rows: 1
+
 table sometable;
--- PG 期望: sometable 里有两行 18 和 38
+> F1
+> --
+> 18
+> 38
+> rows: 2
 
 -- @case function_sql.setof_void
 -- @pg create_function_sql.sql:404-406
