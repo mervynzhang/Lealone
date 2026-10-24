@@ -185,6 +185,8 @@ public class ConcurrencyCheckpointTest extends TestBase {
             CheckpointRunner checkpoint = new CheckpointRunner(db, false);
             AtomicLong inserted = new AtomicLong();
             AtomicLong deleted = new AtomicLong();
+            // 记录每个id的insert提交时间，删不掉时用来区分"测试竞态"和"真丢行"
+            long[] insertCommitNanos = new long[insertCount + 2];
             AtomicReference<Throwable> inserterError = new AtomicReference<>();
             AtomicReference<Throwable> deleterError = new AtomicReference<>();
 
@@ -200,6 +202,7 @@ public class ConcurrencyCheckpointTest extends TestBase {
                         ps.setString(3, payload + id);
                         if (ps.executeUpdate() != 1)
                             throw new AssertionError("insert of id=" + id + " affected != 1 row");
+                        insertCommitNanos[id] = System.nanoTime();
                         inserted.incrementAndGet();
                     }
                 } catch (Throwable e) {
@@ -216,6 +219,7 @@ public class ConcurrencyCheckpointTest extends TestBase {
                     int next = 1;
                     while (deleted.get() < deleteCount) {
                         ps.setInt(1, next);
+                        long deleteStartNanos = System.nanoTime();
                         int n = ps.executeUpdate();
                         if (n == 1) {
                             deleted.incrementAndGet();
@@ -226,8 +230,30 @@ public class ConcurrencyCheckpointTest extends TestBase {
                             // inserter has not reached this key yet
                             Thread.sleep(1);
                         } else {
-                            throw new AssertionError("id=" + next
-                                    + " has been inserted but DELETE affected 0 rows");
+                            // DELETE语句的事务快照可能比INSERT的提交更早(READ_COMMITTED)，
+                            // 这时看不到新行是正常的，立即再删一次；两次都删不到才是真的丢行
+                            long retryStartNanos = System.nanoTime();
+                            ps.setInt(1, next);
+                            int retry = ps.executeUpdate();
+                            if (retry != 1)
+                                throw new AssertionError("id=" + next
+                                        + " is lost: delete affected 0 rows twice"
+                                        + ", insertCommitNanos=" + insertCommitNanos[next]
+                                        + ", firstDeleteStartNanos=" + deleteStartNanos
+                                        + ", retryDeleteStartNanos=" + retryStartNanos
+                                        + ", commitMinusFirstDeleteStartNanos="
+                                        + (insertCommitNanos[next] - deleteStartNanos));
+                            deleted.incrementAndGet();
+                            try (Statement s = c.createStatement();
+                                    ResultSet rs = s.executeQuery("SELECT COUNT(*) FROM " + table
+                                            + " WHERE id = " + next)) {
+                                rs.next();
+                                if (rs.getLong(1) != 0)
+                                    throw new AssertionError("id=" + next
+                                            + " still visible after delete, count="
+                                            + rs.getLong(1));
+                            }
+                            next++;
                         }
                     }
                 } catch (Throwable e) {
