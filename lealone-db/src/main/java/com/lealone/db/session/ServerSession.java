@@ -748,6 +748,8 @@ public class ServerSession extends SessionBase implements InternalSession {
             return;
         commitOrRollbackNestedConnections(false);
         checkCommitRollback();
+        // 回滚也要让查询结果缓存失效，否则回滚前缓存下来的结果(比如COUNT(*))在回滚后还会被继续使用
+        checkDataModification();
         transaction.rollback();
         cleanTempTables(false);
         unlockAll(false);
