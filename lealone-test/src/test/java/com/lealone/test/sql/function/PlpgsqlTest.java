@@ -504,10 +504,23 @@ public class PlpgsqlTest extends SqlTestBase {
                 + "   IF NOT FOUND THEN r := r + 16; END IF;" //
                 + "   SELECT a INTO n FROM plp_found_t WHERE a = 100;" //
                 + "   IF FOUND THEN r := r + 32; END IF;" //
+                + "   PERFORM * FROM plp_found_t WHERE a = 7777;" //
+                + "   IF NOT FOUND THEN r := r + 64; END IF;" //
                 + "   RETURN r;" //
                 + " END; $$");
         executeQuery("SELECT plp_found()");
-        assertEquals(63, getIntValue(1));
+        assertEquals(127, getIntValue(1));
+
+        // 空DECLARE段也要能解析
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_found_empty_declare() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE" //
+                + " BEGIN" //
+                + "   INSERT INTO plp_found_t VALUES(2);" //
+                + "   IF FOUND THEN RETURN 1; END IF;" //
+                + "   RETURN 0;" //
+                + " END; $$");
+        executeQuery("SELECT plp_found_empty_declare()");
+        assertEquals(1, getIntValue(1));
     }
 
     // record和%ROWTYPE变量：SELECT * INTO整行、r.col取字段
