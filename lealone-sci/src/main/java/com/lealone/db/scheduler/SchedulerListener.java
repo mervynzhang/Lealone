@@ -15,6 +15,8 @@ public abstract class SchedulerListener<R> implements AsyncResultHandler<R> {
 
     protected volatile R result;
     protected volatile DbException exception;
+    // 不能用result是否为null来判断是否已经结束，有些操作正常结束时返回的就是null
+    protected volatile boolean completed;
     protected boolean needWakeUp = true;
 
     public void setNeedWakeUp(boolean needWakeUp) {
@@ -36,6 +38,7 @@ public abstract class SchedulerListener<R> implements AsyncResultHandler<R> {
         } else {
             exception = DbException.convert(ar.getCause());
         }
+        completed = true;
         if (needWakeUp)
             wakeUp();
     }
@@ -60,10 +63,11 @@ public abstract class SchedulerListener<R> implements AsyncResultHandler<R> {
 
                 @Override
                 public R await() {
-                    if (result != null)
+                    if (completed) {
+                        if (exception != null)
+                            throw exception;
                         return result;
-                    if (exception != null)
-                        throw exception;
+                    }
                     try {
                         latch.await();
                     } catch (InterruptedException e) {
