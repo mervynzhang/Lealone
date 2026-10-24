@@ -29,7 +29,9 @@ select functest_A_1('abcd', '2020-01-01') r;
   异常写 `> exception <Lealone错误码>`。
 * 一个 `.sql` 文件对应一个独立的库，文件内的用例按顺序执行（和 PG 一个测试文件跑一次一样，
   后面的用例可以用前面建的对象）；文件之间互不影响。库建在 `target/test-data/pgregress/`，
-  整轮跑完删除。
+  下一轮开始时清掉。
+* **PL/pgSQL 的函数体要写在一行**：引擎按"行末是 `;`"切语句，多行块体会被切断。
+  写成 `create function f(a int) returns int as $$ DECLARE x int; BEGIN x := a + 1; RETURN x; END; $$ language plpgsql;`。
 * 每个用例都必须有 `-- @case` 和 `-- @pg`，缺了会直接报结构错误。
 
 ## skip 清单：`skip-list.txt`
@@ -45,8 +47,9 @@ select functest_A_1('abcd', '2020-01-01') r;
   "把跑不过的用例删掉"这条路是堵死的；想让套件变绿只能真修好或明确写进清单。
 * 原因分两类：以 `缺陷:` 开头的是 Lealone 的真实缺陷（见 `docs/PG_REGRESS.md` 第六节），
   其余是能力缺失（未实现的功能）。
-* 头部还有 `# @pg-total <文件> <语句数> converted|skip-all` 三行，声明被转换的 PG 原文件有多少条
-  语句，用来算"跳过了多少"；`skip-all` 表示整份文件都不适用（目前只有 `plpgsql.sql`）。
+* 头部有 `# @pg-total <文件> <语句数> converted|sampled` 若干行，声明被转换的 PG 原文件有多少条
+  语句：`converted` 表示逐用例转换（PG 语句要么执行、要么在清单里点名），`sampled` 表示长篇文件
+  （`plpgsql.sql`、`rangefuncs.sql`）只抽样转换，清单里点名的只是被 skip 的代表性用例。
 
 ## 打开一个被 skip 的用例
 
