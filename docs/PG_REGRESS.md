@@ -5,11 +5,9 @@
 `lealone-test/src/test/resources/pg/skip-list.txt` 一起，既是测试套件的说明书，也是
 "Lealone 离 PG 还有多远"的度量尺。
 
-- 当前基线：`feature/stored-routines`（`dbf8768af`，复合类型 `CREATE TYPE`/`RETURNS comp`/`SETOF <表行类型>`、
-  `%ROWTYPE` 数组、存储过程 OUT/INOUT 参数与按参数类型重载、`LANGUAGE plpgsql` 过程体、`RETURNS VOID` + 普通 DML、
-  `BEGIN ATOMIC`/`CASE ... END` 多语句体、DML `RETURNING`、`WITH ORDINALITY`、标量函数进 FROM、多 OUT record；
-  `wip/r5d` 工作线又补了无名参数/`$1` 位置参数、DEFAULT 参数值、命名实参）
-- 上一轮基线：`5a25375b5`（96 用例 / 56 执行 / 40 skip / 207 语句，r3b 之后又解锁了一批，见第六节）
+- 当前基线：`feature/stored-routines`（`714892b82`，多态类型、`pg_proc` 目录、`FOR ... IN <query>` 查询循环都已合并；
+  本轮在此基础上实现了 **PL/pgSQL 游标 + `refcursor` 门户**）
+- 上一轮基线：`90264e02e`（98 用例 / 82 执行 / 16 skip / 327 语句）
 - 对照的 PG 源码：本地 `postgres` 20devel 的 `src/test/regress/sql/`
 - 只加测试代码和资源，**没有改任何产品代码**；发现的缺陷都记在第七节，不在本工作线修
 
@@ -71,13 +69,13 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ```
 [pgregress]   create_function_sql.sql  用例 40(执行 33, skip  7)  脚本语句 135(通过 135, 失败 0)  被skip用例占  24 条
 [pgregress]   create_procedure.sql     用例 25(执行 19, skip  6)  脚本语句  90(通过  90, 失败 0)  被skip用例占  17 条
-[pgregress]   plpgsql.sql              用例 23(执行 20, skip  3)  脚本语句  62(通过  62, 失败 0)  被skip用例占   6 条
+[pgregress]   plpgsql.sql              用例 23(执行 21, skip  2)  脚本语句  81(通过  81, 失败 0)  被skip用例占   4 条
 [pgregress]   rangefuncs.sql           用例 10(执行 10, skip  0)  脚本语句  40(通过  40, 失败 0)  被skip用例占   0 条
-[pgregress] 合计: 用例 98 (执行 82, skip 16), 脚本语句 327 (通过 327, 失败 0), 耗时 656ms
-[pgregress] skip 清单: 16 条用例, 点名跳过的 PG 语句 92 条
+[pgregress] 合计: 用例 98 (执行 83, skip 15), 脚本语句 346 (通过 346, 失败 0), 耗时 725ms
+[pgregress] skip 清单: 15 条用例, 点名跳过的 PG 语句 86 条
 [pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中  55 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  27 条在 skip 清单里
-[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 10 条)
+[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 4 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 0 条)
 ```
 
@@ -89,7 +87,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 16 条 / 92 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 15 条 / 86 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -100,14 +98,11 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转 | 1 | 3 | function_sql.or_replace_window |
 | BEGIN ATOMIC和EXPLAIN(COSTS OFF)已支持, 但setof函数内联与select列表里的setof展开仍不支持 | 1 | 10 | function_sql.setof_inline |
 | Lealone 无 CREATE OPERATOR CLASS/分区操作符类 | 1 | 6 | function_sql.partition_ops |
-| Lealone 的 CALL 不区分函数与过程 | 1 | 1 | procedure.call_random |
+| Lealone 的 CALL 不区分函数与过程 | 2 | 3 | procedure.call_random, procedure.call_function |
 | Lealone客户端没有psql元命令(\df); pg_get_functiondef()本身已支持 | 1 | 1 | procedure.psql_meta |
-| Lealone 的 CALL 不区分函数与过程 | 1 | 2 | procedure.call_function |
 | GRANT/REVOKE EXECUTE ON PROCEDURE 的解析已支持, 但 Lealone 无 SET ROLE/PUBLIC 角色, 过程权限也不参与调用检查 | 1 | 10 | procedure.privileges |
 | Lealone 不支持 ALTER ROUTINE/DROP ROUTINE(ALTER PROCEDURE/DROP PROCEDURE 已支持) | 1 | 5 | procedure.routine_syntax |
-| 只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节 | 1 | 2 | plpgsql.trigger_room |
-| 只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节 | 1 | 2 | plpgsql.trigger_raise |
-| PL/pgSQL 游标(DECLARE CURSOR/OPEN/FETCH/CLOSE)与 refcursor 门户都不支持, 评估见docs第十二节 | 1 | 6 | plpgsql.cursor |
+| 只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节 | 2 | 4 | plpgsql.trigger_room, plpgsql.trigger_raise |
 | 不支持命名 OUT 参数占位(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150) | 1 | 8 | procedure.out_params_named |
 
 ## 六、这一轮刷新：解锁了什么
@@ -143,6 +138,33 @@ skip 原因缩小为"命名 OUT 参数占位 + 过程 VARIADIC"（命名**入参
 | `procedure.out_params_named`（新增 skip） | — | — | 命名实参 `a => null` 与过程的 `VARIADIC` 仍不支持 |
 
 统计变化：用例 96 → 97，执行 56 → 60，skip 40 → 37，脚本语句 207 → 227（失败 0）。
+
+### 本轮（`wip/r6b`）：PL/pgSQL 游标 + `refcursor` 门户
+
+| 能力 | 状态 | 说明 |
+| --- | --- | --- |
+| `DECLARE c CURSOR FOR <query>` | 完成 | 查询在 `OPEN` 时物化，`FETCH` 只移动位置，不重新执行查询 |
+| 参数化游标 `CURSOR (p1 int, p2 int)` | 完成 | `OPEN c(1, 2)`、命名实参 `OPEN c(p2 := 2, p1 := 1)` 都支持；参数在独立作用域里给查询用 |
+| `OPEN c` / `OPEN c [FOR <query>]` | 完成 | 重复 `OPEN` 报 55000，没有查询报 55000 |
+| `FETCH [NEXT\|PRIOR\|FIRST\|LAST\|ABSOLUTE n\|RELATIVE n\|ALL\|FORWARD [n]\|BACKWARD [n]] c INTO ...` | 完成 | 目标可以是 record/`%ROWTYPE`/标量列表；`FOUND` 和 `GET DIAGNOSTICS ROW_COUNT` 都按 PG 语义更新 |
+| `CLOSE c` | 完成 | 声明游标清状态，`refcursor` 从门户注册表移除 |
+| `FOR rec IN c LOOP` | 完成 | 从游标当前位置迭代，支持 `EXIT`/带标签 `CONTINUE`/`FOUND` |
+| `refcursor` 类型 | 完成 | 作为 `VARCHAR` 的别名（值为门户名），可做参数、返回值、局部变量；`constant refcursor := 'name'` 可用 |
+| 门户的跨函数可见性 | 完成 | 门户注册表挂在**最外层会话**上，`SELECT f(g())` 里 `g` 打开的门户 `f` 能 FETCH |
+| **SQL 层 `FETCH ... IN <name>` / `CLOSE <name>`** | **未做** | 需要新的 SQL 语句类型和解析入口，本轮没做；PG 用例里这两句改成在 plpgsql 里 FETCH（等价语义） |
+
+解锁用例 `plpgsql.cursor`（PG plpgsql.sql:1859-1900，另外把该段后面的参数化游标/命名实参/`constant refcursor` 也一起覆盖）：
+统计变化：执行 82 → 83，skip 16 → 15，脚本语句 327 → 346（失败 0）。
+
+**门户生命周期与风险**（本轮实现的口径）：
+* 门户注册表是 `ServerSession` 上的一个 `HashMap<String, CursorPortal>`，挂在最外层会话上；
+  嵌套会话（函数体）通过事务父链找到最外层会话，所以同一语句里多个函数共享门户。
+* **事务结束（提交或回滚）统一关闭**：`endTransaction()` 里清空门户并调用 `closePortal()`，
+  和 PG 的"门户随事务结束关闭"一致；跨语句使用门户必须在显式事务里（autocommit 下一条语句一个事务，门户会在语句末关闭）。
+* 游标泄漏：门户只在注册表里、事务结束即释放；`CLOSE` 立即释放；声明游标的状态挂在变量上，随函数调用结束回收。
+  没有后台线程、没有阻塞：`OPEN` 一次性物化结果（内存），`FETCH` 是 O(1) 定位。
+* 已知限制：`FETCH` 的 `INTO` 目标不能是 `FOR ... IN c` 之外的行数组；`WHERE CURRENT OF`、
+  `FETCH ... IN <name>`（SQL 层）、`WITH HOLD` 游标都还没做；游标参数不支持默认值。
 
 ## 七、剩余缺口与缺陷（都已实测复现）
 

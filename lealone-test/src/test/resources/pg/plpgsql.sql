@@ -293,19 +293,94 @@ select sp_add_user('user1') r1, sp_add_user('user2') r2, sp_add_user('user2') r3
 
 -- @case plpgsql.cursor
 -- @pg plpgsql.sql:1859-1900
--- 缺失: PL/pgSQL 游标(OPEN/FETCH/CLOSE)和 refcursor 类型都不支持, DDL 阶段报 50100
-create function refcursor_test1(refcursor) returns refcursor as $$
-begin
-   open $1 for select name from pg_class;
-   return $1;
-end;
-$$ language plpgsql;
-select refcursor_test1('test1');
--- PG 期望: refcursor 值 test1
+-- 适配: PG 用 copy from stdin 准备数据, 这里改成 INSERT; $1 改成参数名;
+--       PG 在 SQL 层用 fetch next in test1 / fetch all from test2, Lealone 还没有 SQL 层门户语句,
+--       所以这里在同一语句里跨函数取门户(消息层面等价); pg_class 换成普通表
+create table rc_test (a int, b int);
+> update count: 0
 
--- ---------------------------------------------------------------------------
--- RAISE
--- ---------------------------------------------------------------------------
+insert into rc_test values(5, 10), (50, 100), (500, 1000);
+> update count: 3
+
+-- 1) 匿名refcursor: 函数内OPEN FOR查询, 返回门户名; 另一个函数按名字FETCH
+create function return_unnamed_refcursor() returns refcursor as $$ declare rc refcursor; begin open rc for select a from rc_test order by a; return rc; end $$ language plpgsql;
+> update count: 0
+
+create function use_refcursor(rc refcursor) returns int as $$ declare x int; begin fetch next from rc into x; return x; end $$ language plpgsql;
+> update count: 0
+
+select use_refcursor(return_unnamed_refcursor()) r;
+> R
+> -
+> 5
+> rows: 1
+
+-- 2) 指定门户名: 传进去的名字就是门户名, 函数返回同一个名字
+create function refcursor_test1(rc refcursor) returns refcursor as $$ begin open rc for select a from rc_test order by a; return rc; end $$ language plpgsql;
+> update count: 0
+
+create function fetch_refcursor(rc refcursor) returns int as $$ declare x int; begin fetch next from rc into x; return x; end $$ language plpgsql;
+> update count: 0
+
+select refcursor_test1('test1') r;
+> R
+> -----
+> test1
+> rows: 1
+
+select fetch_refcursor(refcursor_test1('test2')) a;
+> A
+> -
+> 5
+> rows: 1
+
+-- 3) 参数化游标: DECLARE c CURSOR (p1 int, p2 int) FOR ... + OPEN c($1,$2) 的等价写法
+create function refcursor_test2(p1 int, p2 int) returns boolean as $$ declare c cursor (minA int, minB int) for select * from rc_test where a > minA and b > minB; r record; begin open c(p1, p2); fetch c into r; close c; if found then return true; else return false; end if; end $$ language plpgsql;
+> update count: 0
+
+select refcursor_test2(20000, 20000) as "should_false", refcursor_test2(20, 20) as "should_true";
+> should_false should_true
+> ------------ -----------
+> FALSE        TRUE
+> rows: 1
+
+-- 4) 命名实参: open c(param12 := $2, param1 := $1)
+create function namedparmcursor_test1(p1 int, p2 int) returns boolean as $$ declare c cursor (param1 int, param12 int) for select * from rc_test where a > param1 and b > param12; r record; begin open c(param12 := p2, param1 := p1); fetch c into r; close c; return found; end $$ language plpgsql;
+> update count: 0
+
+select namedparmcursor_test1(20, 20) as "should_true", namedparmcursor_test1(20000, 20000) as "should_false";
+> should_true should_false
+> ----------- ------------
+> TRUE        FALSE
+> rows: 1
+
+-- 5) constant refcursor 带初始名字时可以打开并返回
+create function constant_refcursor() returns refcursor as $$ declare rc constant refcursor := 'my_cursor_name'; begin open rc for select a from rc_test order by a; return rc; end $$ language plpgsql;
+> update count: 0
+
+select constant_refcursor() r;
+> R
+> --------------
+> my_cursor_name
+> rows: 1
+
+-- 6) FOR r IN c LOOP 遍历声明游标, 遇到EXIT提前结束
+create function cursor_loop() returns int as $$ declare c cursor for select a from rc_test order by a; r record; s int := 0; begin open c; for r in c loop if r.a > 100 then exit; end if; s := s + r.a; end loop; close c; return s; end $$ language plpgsql;
+> update count: 0
+
+select cursor_loop() r;
+> R
+> --
+> 55
+> rows: 1
+
+-- 7) 没有OPEN就FETCH报34000
+create function fetch_not_open() returns int as $$ declare c cursor for select a from rc_test; x int; begin fetch c into x; return x; end $$ language plpgsql;
+> update count: 0
+
+-- PL/pgSQL异常在SQL层是50000, SQLSTATE是34000
+select fetch_not_open() r;
+> exception 50000
 
 -- @case plpgsql.raise_notice
 -- @pg plpgsql.sql:2085-2106
