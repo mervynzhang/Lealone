@@ -2393,13 +2393,14 @@ public class SQLParserBase implements SQLParser {
     }
 
     protected JavaFunction readJavaFunction(Schema schema, String functionName) {
-        FunctionAlias functionAlias = null;
+        // 函数可以按参数类型重载，所以要先把实参读出来再按类型选函数
+        ArrayList<FunctionAlias> candidates;
         if (schema != null) {
-            functionAlias = schema.findFunction(session, functionName);
+            candidates = schema.findFunctions(session, functionName);
         } else {
-            functionAlias = findFunctionAlias(session.getCurrentSchemaName(), functionName);
+            candidates = findFunctionAliases(session.getCurrentSchemaName(), functionName);
         }
-        if (functionAlias == null) {
+        if (candidates.isEmpty()) {
             throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, functionName);
         }
         Expression[] args;
@@ -2413,8 +2414,10 @@ public class SQLParserBase implements SQLParser {
         }
         args = new Expression[numArgs];
         argList.toArray(args);
-        JavaFunction func = new JavaFunction(functionAlias, args);
-        return func;
+        if (candidates.size() == 1) {
+            return new JavaFunction(candidates.get(0), args);
+        }
+        return new JavaFunction(candidates, args);
     }
 
     protected JavaAggregate readJavaAggregate(UserAggregate aggregate) {
@@ -6190,6 +6193,25 @@ public class SQLParserBase implements SQLParser {
             }
         }
         return null;
+    }
+
+    // 找出同名的所有函数(重载)，按schema搜索路径找到第一组有结果的
+    protected ArrayList<FunctionAlias> findFunctionAliases(String schema, String aliasName) {
+        ArrayList<FunctionAlias> list = database.getSchema(session, schema).findFunctions(session,
+                aliasName);
+        if (!list.isEmpty()) {
+            return list;
+        }
+        String[] schemaNames = session.getSchemaSearchPath();
+        if (schemaNames != null) {
+            for (String n : schemaNames) {
+                list = database.getSchema(session, n).findFunctions(session, aliasName);
+                if (!list.isEmpty()) {
+                    return list;
+                }
+            }
+        }
+        return list;
     }
 
     protected Sequence findSequence(String schema, String sequenceName) {

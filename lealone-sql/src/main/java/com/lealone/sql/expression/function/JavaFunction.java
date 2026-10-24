@@ -5,9 +5,14 @@
  */
 package com.lealone.sql.expression.function;
 
+import java.util.ArrayList;
+
+import com.lealone.common.exceptions.DbException;
 import com.lealone.common.util.StatementBuilder;
 import com.lealone.db.Constants;
+import com.lealone.db.api.ErrorCode;
 import com.lealone.db.schema.FunctionAlias;
+import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
@@ -27,32 +32,137 @@ import com.lealone.sql.expression.visitor.ExpressionVisitor;
  */
 public class JavaFunction extends Function {
 
-    private final FunctionAlias functionAlias;
-    private final FunctionAlias.JavaMethod javaMethod;
+    // 只有单候选时直接用它，同名重载时用candidates消解
+    private FunctionAlias functionAlias;
+    private final ArrayList<FunctionAlias> candidates;
+    private FunctionAlias.JavaMethod javaMethod;
 
     public JavaFunction(FunctionAlias functionAlias, Expression[] args) {
         this.functionAlias = functionAlias;
+        this.candidates = null;
         this.javaMethod = functionAlias.findJavaMethod(args);
+        this.args = args;
+        checkArgumentTypes();
+    }
+
+    /**
+     * 名字对应多个重载函数时，按实参的静态类型选一个。
+     * 实参类型还没确定时(比如实参是NULL)等到optimize阶段再消解。
+     */
+    public JavaFunction(ArrayList<FunctionAlias> candidates, Expression[] args) {
+        this.candidates = candidates;
         this.args = args;
     }
 
+    // 按实参类型在候选函数里消解重载，匹配程度最好的那个胜出，一样好就算歧义
+    private void resolveOverload() {
+        if (javaMethod != null || candidates == null) {
+            return;
+        }
+        int[] argumentTypeIds = new int[args.length];
+        for (int i = 0; i < args.length; i++) {
+            argumentTypeIds[i] = args[i].getType();
+        }
+        FunctionAlias best = null;
+        int bestScore = Integer.MAX_VALUE;
+        boolean ambiguous = false;
+        for (int i = 0; i < candidates.size(); i++) {
+            FunctionAlias candidate = candidates.get(i);
+            int score = getMatchScore(candidate, argumentTypeIds);
+            if (score == SqlFunction.MATCH_NONE) {
+                continue;
+            }
+            if (score < bestScore) {
+                bestScore = score;
+                best = candidate;
+                ambiguous = false;
+            } else if (score == bestScore) {
+                ambiguous = true;
+            }
+        }
+        // PostgreSQL在匹配程度相同时报歧义错误，这里同样不猜
+        if (ambiguous) {
+            throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, getSignatureText());
+        }
+        if (best == null) {
+            throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
+        }
+        functionAlias = best;
+        javaMethod = best.findJavaMethod(args);
+    }
+
+    // 只有一个候选函数时也要检查实参类型能不能转，类型不兼容就当函数不存在(和PostgreSQL一致)；
+    // CREATE ALIAS建的Java函数保持原来的宽松转换，不做检查
+    private void checkArgumentTypes() {
+        if (!(functionAlias instanceof SqlFunction)) {
+            return;
+        }
+        int[] argumentTypeIds = new int[args.length];
+        for (int i = 0; i < args.length; i++) {
+            argumentTypeIds[i] = args[i].getType();
+        }
+        if (((SqlFunction) functionAlias).getMatchScore(argumentTypeIds) == SqlFunction.MATCH_NONE) {
+            throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
+        }
+    }
+
+    private static int getMatchScore(FunctionAlias alias, int[] argumentTypeIds) {
+        if (alias instanceof SqlFunction) {
+            return ((SqlFunction) alias).getMatchScore(argumentTypeIds);
+        }
+        // CREATE ALIAS建的Java函数不参与类型消解，参数个数对上就算匹配
+        for (FunctionAlias.JavaMethod m : alias.getJavaMethods()) {
+            int count = m.getParameterCount();
+            if (count == argumentTypeIds.length
+                    || (m.isVarArgs() && count <= argumentTypeIds.length + 1)) {
+                return SqlFunction.MATCH_WEAK;
+            }
+        }
+        return SqlFunction.MATCH_NONE;
+    }
+
+    // 用于报错信息的调用签名，例如 F(INT, VARCHAR)
+    private String getSignatureText() {
+        StatementBuilder buff = new StatementBuilder(getName()).append('(');
+        for (int i = 0; i < args.length; i++) {
+            buff.appendExceptFirst(", ");
+            buff.append(DataType.getDataType(args[i].getType()).name);
+        }
+        return buff.append(')').toString();
+    }
+
+    private FunctionAlias.JavaMethod getJavaMethod() {
+        resolveOverload();
+        if (javaMethod == null) {
+            throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
+        }
+        return javaMethod;
+    }
+
     public FunctionAlias getFunctionAlias() {
+        resolveOverload();
         return functionAlias;
     }
 
     @Override
     public Value getValue(ServerSession session) {
-        return javaMethod.getValue(session, args, false);
+        return getJavaMethod().getValue(session, args, false);
     }
 
     @Override
     public int getType() {
-        return javaMethod.getDataType();
+        return getJavaMethod().getDataType();
     }
 
     @Override
     public Expression optimize(ServerSession session) {
         boolean allConst = optimizeArgs(session);
+        // 实参optimize之后类型才确定，这时候再消解重载或者检查类型
+        if (candidates != null) {
+            resolveOverload();
+        } else {
+            checkArgumentTypes();
+        }
         if (allConst) {
             return ValueExpression.get(getValue(session));
         }
@@ -76,6 +186,7 @@ public class JavaFunction extends Function {
 
     @Override
     public void getSQL(StatementBuilder sql) {
+        FunctionAlias functionAlias = getFunctionAlias();
         if (!functionAlias.getSchema().getName().equals(Constants.SCHEMA_MAIN)) {
             sql.append(LealoneSQLParser.quoteIdentifier(functionAlias.getSchema().getName()))
                     .append('.');
@@ -87,18 +198,21 @@ public class JavaFunction extends Function {
 
     @Override
     public String getName() {
-        return functionAlias.getName();
+        if (functionAlias != null) {
+            return functionAlias.getName();
+        }
+        return candidates.get(0).getName();
     }
 
     @Override
     public ValueResultSet getValueForColumnList(ServerSession session, Expression[] args) {
-        Value v = javaMethod.getValue(session, args, true);
+        Value v = getJavaMethod().getValue(session, args, true);
         return v == ValueNull.INSTANCE ? null : (ValueResultSet) v;
     }
 
     @Override
     public int getCost() {
-        int cost = javaMethod.hasConnectionParam() ? 25 : 5;
+        int cost = getJavaMethod().hasConnectionParam() ? 25 : 5;
         for (Expression e : args) {
             cost += e.getCost();
         }
@@ -124,17 +238,17 @@ public class JavaFunction extends Function {
 
     @Override
     public boolean isDeterministic() {
-        return functionAlias.isDeterministic();
+        return getFunctionAlias().isDeterministic();
     }
 
     @Override
     public boolean isSetReturning() {
-        return functionAlias.isSetReturning();
+        return getFunctionAlias().isSetReturning();
     }
 
     @Override
     boolean isBufferResultSetToLocalTemp() {
-        return functionAlias.isBufferResultSetToLocalTemp();
+        return getFunctionAlias().isBufferResultSetToLocalTemp();
     }
 
     @Override

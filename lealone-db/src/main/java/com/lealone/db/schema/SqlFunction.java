@@ -350,6 +350,96 @@ public class SqlFunction extends FunctionAlias {
         return variadic;
     }
 
+    /** 实参类型和参数类型完全一致，匹配程度最高 */
+    public static final int MATCH_EXACT = 0;
+    /** 实参类型和参数类型属于同一类型族，可以隐式转换 */
+    public static final int MATCH_FAMILY = 1;
+    /** 实参类型未知(比如NULL)或者要跨类型族转换，匹配程度最低 */
+    public static final int MATCH_WEAK = 2;
+    /** 类型不兼容，这个函数不可能是被调用的重载 */
+    public static final int MATCH_NONE = -1;
+
+    /**
+     * 计算实参类型和函数声明的匹配程度，返回值越小匹配越好，MATCH_NONE表示不匹配。
+     * 实参个数必须和入参个数一致，VARIADIC参数可以展开成任意多个实参。
+     */
+    public int getMatchScore(int[] argumentTypeIds) {
+        if (argumentTypeIds == null || parameterTypeIds == null) {
+            return MATCH_NONE;
+        }
+        int fixedCount = variadic ? inputParameterCount - 1 : inputParameterCount;
+        if (variadic ? argumentTypeIds.length < fixedCount : argumentTypeIds.length != fixedCount) {
+            return MATCH_NONE;
+        }
+        int score = 0;
+        for (int i = 0; i < argumentTypeIds.length; i++) {
+            int index = i < fixedCount ? inputIndexes[i] : inputIndexes[fixedCount];
+            int parameterType = parameterTypeIds[index];
+            // VARIADIC展开出来的实参匹配的是数组元素类型
+            if (variadic && i >= fixedCount) {
+                parameterType = parameterComponentTypes[index];
+            }
+            int match = getTypeMatch(argumentTypeIds[i], parameterType);
+            if (match == MATCH_NONE) {
+                return MATCH_NONE;
+            }
+            score += match;
+        }
+        return score;
+    }
+
+    private static int getTypeMatch(int argumentType, int parameterType) {
+        if (argumentType == parameterType) {
+            return MATCH_EXACT;
+        }
+        // 实参类型未知时先按弱匹配算，等optimize拿到类型后再决定
+        if (argumentType == Value.UNKNOWN || argumentType == Value.NULL) {
+            return MATCH_WEAK;
+        }
+        if (parameterType == Value.UNKNOWN || parameterType == Value.NULL) {
+            return MATCH_WEAK;
+        }
+        if (isSameTypeFamily(argumentType, parameterType)) {
+            return MATCH_FAMILY;
+        }
+        // 字符串到其它类型一直是可以转的(和PostgreSQL的未知类型字面量规则类似)，
+        // 但反过来不行: 数字/日期要当字符串用必须显式CAST，这一点和PostgreSQL一致
+        if (DataType.isStringType(argumentType)) {
+            return MATCH_WEAK;
+        }
+        return MATCH_NONE;
+    }
+
+    private static boolean isSameTypeFamily(int type1, int type2) {
+        if (isNumericType(type1) && isNumericType(type2)) {
+            return true;
+        }
+        if (isDateTimeType(type1) && isDateTimeType(type2)) {
+            return true;
+        }
+        // 字符串类型之间可以隐式转换，比如VARCHAR到CHAR
+        return DataType.isStringType(type1) && DataType.isStringType(type2);
+    }
+
+    private static boolean isNumericType(int type) {
+        switch (type) {
+        case Value.BYTE:
+        case Value.SHORT:
+        case Value.INT:
+        case Value.LONG:
+        case Value.DECIMAL:
+        case Value.DOUBLE:
+        case Value.FLOAT:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    private static boolean isDateTimeType(int type) {
+        return type == Value.DATE || type == Value.TIME || type == Value.TIMESTAMP;
+    }
+
     // 用于报错信息的签名，例如 F(INT, VARCHAR)
     public String getSignature() {
         StatementBuilder buff = new StatementBuilder(getName()).append('(');
