@@ -38,17 +38,33 @@ public class PlpgSqlFunction extends SqlFunction {
         // 函数体内的SQL在独立的嵌套会话里执行，事务以当前会话的事务为父事务；
         // SECURITY DEFINER时这个嵌套会话用的是属主身份
         ServerSession nestedSession = createNestedSession(session);
+        // 函数体里的SQL共用一个事务，这样带EXCEPTION段的块才能回滚到块入口的保存点
+        boolean autoCommit = session.isAutoCommit();
+        nestedSession.setAutoCommit(false);
         String schemaName = session.getCurrentSchemaName();
         if (schemaName != null && !Constants.SCHEMA_MAIN.equals(schemaName))
             nestedSession.setCurrentSchemaName(schemaName);
         PlpgSqlInterpreter interpreter = new PlpgSqlInterpreter(nestedSession, block,
                 getResultInfo());
+        boolean success = false;
         try {
-            return interpreter.execute(getParameterNames(), getParameterTypes(), values);
-        } catch (PlpgSqlException e) {
-            // 离开函数时把PL/pgSQL异常转换成带SQLSTATE的DbException
-            throw DbException.convert(
-                    new SQLException(e.getMessage(), e.getSqlState(), ErrorCode.GENERAL_ERROR_1));
+            Value value;
+            try {
+                value = interpreter.execute(getParameterNames(), getParameterTypes(), values);
+            } catch (PlpgSqlException e) {
+                // 离开函数时把PL/pgSQL异常转换成带SQLSTATE的DbException
+                throw DbException.convert(
+                        new SQLException(e.getMessage(), e.getSqlState(), ErrorCode.GENERAL_ERROR_1));
+            }
+            // 外层是自动提交时，函数正常返回就把函数体的事务提交掉
+            if (autoCommit)
+                nestedSession.commit();
+            success = true;
+            return value;
+        } finally {
+            // 异常离开函数时整个函数体的修改都要回滚，对应PostgreSQL的语句级子事务
+            if (!success)
+                nestedSession.rollback();
         }
     }
 
