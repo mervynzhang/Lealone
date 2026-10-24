@@ -50,6 +50,7 @@ import com.lealone.db.scheduler.InternalScheduler;
 import com.lealone.db.scheduler.Scheduler;
 import com.lealone.db.scheduler.SchedulerThread;
 import com.lealone.db.schema.Schema;
+import com.lealone.db.schema.Sequence;
 import com.lealone.db.table.Table;
 import com.lealone.db.util.ExpiringMap;
 import com.lealone.db.value.Value;
@@ -99,6 +100,7 @@ public class ServerSession extends SessionBase implements InternalSession {
     private HashMap<String, Table> localTempTables;
     private HashMap<String, Index> localTempTableIndexes;
     private HashMap<String, Constraint> localTempTableConstraints;
+    private HashMap<String, Sequence> localTempSequences;
     private int throttle;
     private long lastThrottle;
     private PreparedSQLStatement currentCommand;
@@ -267,6 +269,39 @@ public class ServerSession extends SessionBase implements InternalSession {
             return null;
         }
         return localTempTables.get(name);
+    }
+
+    public Sequence findLocalTempSequence(String name) {
+        if (localTempSequences == null) {
+            return null;
+        }
+        return localTempSequences.get(name);
+    }
+
+    public ArrayList<Sequence> getLocalTempSequences() {
+        if (localTempSequences == null) {
+            return new ArrayList<>(0);
+        }
+        return new ArrayList<>(localTempSequences.values());
+    }
+
+    public void addLocalTempSequence(Sequence sequence) {
+        if (localTempSequences == null) {
+            localTempSequences = database.newStringMap();
+        }
+        if (localTempSequences.get(sequence.getName()) != null) {
+            throw DbException.get(ErrorCode.SEQUENCE_ALREADY_EXISTS_1, sequence.getSQL());
+        }
+        modificationId++;
+        localTempSequences.put(sequence.getName(), sequence);
+    }
+
+    public void removeLocalTempSequence(Sequence sequence) {
+        if (localTempSequences != null) {
+            modificationId++;
+            localTempSequences.remove(sequence.getName());
+            sequence.invalidate();
+        }
     }
 
     public ArrayList<Table> getLocalTempTables() {
@@ -890,6 +925,13 @@ public class ServerSession extends SessionBase implements InternalSession {
     }
 
     private void cleanTempTables(boolean closeSession) {
+        if (closeSession && localTempSequences != null) {
+            for (Sequence sequence : new ArrayList<>(localTempSequences.values())) {
+                modificationId++;
+                sequence.invalidate();
+            }
+            localTempSequences.clear();
+        }
         if (localTempTables != null && localTempTables.size() > 0) {
             synchronized (database) {
                 for (Table table : new ArrayList<>(localTempTables.values())) {

@@ -359,6 +359,12 @@ public class Schema extends DbObjectBase {
                 session.removeLocalTempTableIndex(index);
                 return true;
             }
+        } else if (type == DbObjectType.SEQUENCE) {
+            Sequence sequence = (Sequence) obj;
+            if (sequence.isTemporary()) {
+                session.removeLocalTempSequence(sequence);
+                return true;
+            }
         } else if (type == DbObjectType.CONSTRAINT) {
             Constraint constraint = (Constraint) obj;
             Table table = constraint.getTable();
@@ -468,7 +474,11 @@ public class Schema extends DbObjectBase {
      * @return the object or null
      */
     public Sequence findSequence(ServerSession session, String sequenceName) {
-        return find(DbObjectType.SEQUENCE, session, sequenceName);
+        Sequence sequence = find(DbObjectType.SEQUENCE, session, sequenceName);
+        if (sequence == null && session != null) {
+            sequence = session.findLocalTempSequence(sequenceName);
+        }
+        return sequence;
     }
 
     /**

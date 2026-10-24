@@ -116,6 +116,7 @@ import com.lealone.sql.ddl.CreateUserDataType;
 import com.lealone.sql.ddl.CreateView;
 import com.lealone.sql.ddl.DeallocateProcedure;
 import com.lealone.sql.ddl.DefinitionStatement;
+import com.lealone.sql.ddl.DiscardTemp;
 import com.lealone.sql.ddl.DropAggregate;
 import com.lealone.sql.ddl.DropCompositeType;
 import com.lealone.sql.ddl.DropConstant;
@@ -420,6 +421,9 @@ public class SQLParserBase implements SQLParser {
                     s = parseCreate();
                 } else if (readIf("DEALLOCATE")) {
                     s = parseDeallocate();
+                } else if (readIf("DISCARD")) {
+                    read("TEMP");
+                    s = new DiscardTemp(session);
                 }
                 break;
             case 'e':
@@ -4570,13 +4574,28 @@ public class SQLParserBase implements SQLParser {
 
         if (readIf("LOCAL")) {
             read("TEMPORARY");
+            if (readIf("SEQUENCE")) {
+                CreateSequence command = parseCreateSequence();
+                command.setTemporary(true);
+                return command;
+            }
             read("TABLE");
             return parseCreateTable(true, false, cached, !memory);
         } else if (readIf("GLOBAL")) {
             read("TEMPORARY");
+            if (readIf("SEQUENCE")) {
+                CreateSequence command = parseCreateSequence();
+                command.setTemporary(true);
+                return command;
+            }
             read("TABLE");
             return parseCreateTable(true, true, cached, !memory);
         } else if (readIf("TEMP") || readIf("TEMPORARY")) {
+            if (readIf("SEQUENCE")) {
+                CreateSequence command = parseCreateSequence();
+                command.setTemporary(true);
+                return command;
+            }
             read("TABLE");
             return parseCreateTable(true, true, cached, !memory);
         } else if (readIf("TABLE")) {
