@@ -182,4 +182,43 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
         assertQueryEquals(-2.0, "SELECT ROUND(-1.5)");
         assertQueryEquals(-3.0, "SELECT ROUND(CAST(-2.5 AS DECIMAL(10,1)))");
     }
+    // 负精度的ROUND: 结果必须是整数, 不能输出科学计数法, 也不能把负标度暴露给JDBC
+    @Test
+    public void testRoundNegativeScale() throws Exception {
+        executeQuery("SELECT ROUND(123.456, -1)");
+        try {
+            assertEquals(120, rs.getInt(1));
+            assertEquals("120", rs.getString(1));
+            assertTrue(rs.getMetaData().getScale(1) >= 0);
+        } finally {
+            closeResultSet();
+        }
+
+        executeQuery("SELECT ROUND(CAST(123.456 AS DECIMAL(10,3)), -2)");
+        try {
+            assertEquals(100, rs.getInt(1));
+            assertEquals("100", rs.getString(1));
+            assertTrue(rs.getMetaData().getScale(1) >= 0);
+        } finally {
+            closeResultSet();
+        }
+
+        // 平局仍然远离0
+        executeQuery("SELECT ROUND(CAST(150 AS DECIMAL(10,0)), -2)");
+        try {
+            assertEquals(200, rs.getInt(1));
+            assertEquals("200", rs.getString(1));
+        } finally {
+            closeResultSet();
+        }
+
+        executeQuery("SELECT ROUND(-123.456, -1)");
+        try {
+            assertEquals(-120, rs.getInt(1));
+            assertEquals("-120", rs.getString(1));
+        } finally {
+            closeResultSet();
+        }
+    }
+
 }
