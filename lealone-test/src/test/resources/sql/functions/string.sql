@@ -20,18 +20,23 @@ select char_length('abc') c1, character_length('abc') c2;
 > 3  3
 > rows: 1
 
--- LEALONE: 与H2不同，OCTET_LENGTH/BIT_LENGTH按UTF-16码元算(2/16*字符数)，
--- H2按UTF-8字节算，'abc'因此是6和48
 select octet_length('abc') c1;
 > C1
 > --
-> 6
+> 3
 > rows: 1
 
 select bit_length('abc') c1;
 > C1
 > --
-> 48
+> 24
+> rows: 1
+
+-- 多字节字符按UTF-8计算：中=3字节，emoji=4字节
+select octet_length('中文') c1, octet_length('😀') c2;
+> C1 C2
+> -- --
+> 6  4
 > rows: 1
 
 -- UPPER/LOWER及其同义词UCASE/LCASE
