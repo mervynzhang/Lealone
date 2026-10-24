@@ -184,6 +184,10 @@ public class ValueLob extends Value {
         return useTableLobStorage;
     }
 
+    public boolean hasHandler() {
+        return handler != null;
+    }
+
     public void setUseTableLobStorage(boolean useTableLobStorage) {
         this.useTableLobStorage = useTableLobStorage;
     }
