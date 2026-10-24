@@ -125,7 +125,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
     // BUG: AVG 对整数列做整数除法，结果被截断。
     // 期望: AVG(1,2)=1.5（H2 返回 DOUBLE 1.5）；实际: 1（类型 INTEGER）。
     // 原因: Avg 聚合复用参数类型，sum/count 走整数除法。
-    @Ignore("BUG: AVG on INTEGER column truncates 1.5 to 1 (result type stays INTEGER); H2 returns 1.5")
     @Test
     public void avgOnIntegerColumnIsTruncated() {
         assertQueryEquals(1.5, "SELECT AVG(x) FROM (SELECT 1 x UNION ALL SELECT 2)");
@@ -134,7 +133,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
 
     // BUG: AVG 对 BIGINT 列更糟，(1,2) 得到 2（既不是 1.5，也不是整数除法的 1）。
     // 期望: 1.5（H2 返回 NUMERIC 1.5000000000）；实际: 2（类型 BIGINT）。
-    @Ignore("BUG: AVG on BIGINT column returns 2 for (1,2); expected 1.5")
     @Test
     public void avgOnBigintColumn() {
         assertQueryEquals(1.5,
