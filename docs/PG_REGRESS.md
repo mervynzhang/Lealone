@@ -235,10 +235,13 @@ PG 支持 `CALL ptest1(y)` / `CALL ptest1($1)`。用例 `procedure.nested_call`�
 ## 七、PG 原文件里到底跳过了什么（如实交代）
 
 1. **`function.sql` / `create_function_0.sql` / `create_function_1.sql` / `create_function_2.sql`
-   在本地这棵 PG 源码树（20devel）里不存在**。`ls src/test/regress/sql | grep function` 只有
-   `create_function_c.sql`、`create_function_sql.sql`、`functional_deps.sql`、`hash_func.sql`、
-   `misc_functions.sql`、`rangefuncs.sql`、`regproc.sql`。所以函数部分的主体用的是
-   `create_function_sql.sql`，过程部分用 `create_procedure.sql`。这不是"我们挑着做"，是素材没有。
+   在本地这棵 PG 源码树（20devel）里不存在**。`ls src/test/regress/sql | grep -iE 'func|proc'`
+   能看到的函数相关文件是 `create_function_c.sql`（C 语言函数）、`create_function_sql.sql`、
+   `functional_deps.sql`、`hash_func.sql`、`misc_functions.sql`、`rangefuncs.sql`、`regproc.sql`、
+   `plpgsql.sql`、`create_procedure.sql` 等，没有 `function.sql` 和 `create_function_0/1/2.sql`。
+   所以函数部分的主体用的是 `create_function_sql.sql`，过程部分用 `create_procedure.sql`。
+   这不是"我们挑着做"，是素材没有；`create_function_c.sql` / `rangefuncs.sql` 分别需要 C 语言
+   函数和 `RETURNS SETOF`，等对应能力有了再纳入。
 2. **`plpgsql.sql`（4756 行 / 935 条语句）整体不适用**：里面 100% 是 `LANGUAGE plpgsql` 的块语言
    与触发器，Lealone 直接报 `FEATURE_NOT_SUPPORTED: LANGUAGE PLPGSQL`。为了不让"整份文件跳过"变成
    一句空话，脚本 `pg/plpgsql.sql` 里按 PG 原文保留了 6 个代表性用例（触发器函数、`RAISE`、
