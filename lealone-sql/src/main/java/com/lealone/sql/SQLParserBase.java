@@ -487,6 +487,8 @@ public class SQLParserBase implements SQLParser {
             case 'T':
                 if (readIf("TRUNCATE")) {
                     s = parseTruncate();
+                } else if (readIf("TABLE")) {
+                    s = parseExplicitTable();
                 }
                 break;
             case 'u':
@@ -1768,6 +1770,7 @@ public class SQLParserBase implements SQLParser {
     protected TableFilter readTableFilter() {
         Table table;
         String alias = null;
+        String[] columnAliases;
         if (readIf("(")) {
             if (isSelect()) {
                 Query query = parseSelectUnion();
@@ -1780,8 +1783,13 @@ public class SQLParserBase implements SQLParser {
                 } else {
                     s = session;
                 }
-                alias = session.getNextSystemIdentifier(sqlCommand);
-                table = TableView.createTempView(s, session.getUser(), alias, query, currentSelect);
+                String viewName = session.getNextSystemIdentifier(sqlCommand);
+                // 派生表的别名和列别名列表要在创建临时视图之前解析
+                alias = readFromAlias(viewName);
+                columnAliases = readDerivedColumnAliases();
+                table = TableView.createTempView(s, session.getUser(), viewName, query, currentSelect,
+                        columnAliases);
+                return new TableFilter(session, table, alias, rightsChecked, currentSelect);
             } else {
                 TableFilter top;
                 top = readTableFilter();
@@ -1791,10 +1799,23 @@ public class SQLParserBase implements SQLParser {
                 if (alias != null) {
                     top.setAlias(alias);
                 }
+                columnAliases = readDerivedColumnAliases();
+                if (columnAliases != null) { // 如 (VALUES(1, 2), (3, 4)) t(a, b)
+                    if (!(top.getTable() instanceof FunctionTable)) {
+                        throw getSyntaxError();
+                    }
+                    ((FunctionTable) top.getTable()).setColumnAliases(columnAliases);
+                }
                 return top;
             }
         } else if (readIf("VALUES")) {
             table = parseValuesTable().getTable();
+            alias = readFromAlias(alias);
+            columnAliases = readDerivedColumnAliases();
+            if (columnAliases != null) {
+                ((FunctionTable) table).setColumnAliases(columnAliases);
+            }
+            return new TableFilter(session, table, alias, rightsChecked, currentSelect);
         } else {
             String tableName = readIdentifierWithSchema(null);
             Schema schema = getSchema();
@@ -1852,11 +1873,20 @@ public class SQLParserBase implements SQLParser {
             alias = readAliasIdentifier();
         } else if (currentTokenType == IDENTIFIER) {
             // left and right are not keywords (because they are functions as well)
-            if (!isToken("LEFT") && !isToken("RIGHT") && !isToken("FULL")) {
+            if (!isToken("LEFT") && !isToken("RIGHT") && !isToken("FULL") && !isToken("USING")) {
                 alias = readAliasIdentifier();
             }
         }
         return alias;
+    }
+
+    // 派生表支持列别名列表，如 (SELECT 1, 2) t(a, b)
+    protected String[] readDerivedColumnAliases() {
+        if (!isToken("(")) {
+            return null;
+        }
+        read("(");
+        return parseColumnList(); // 括号由parseColumnList一起处理掉
     }
 
     protected void parseJoinTableFilter(TableFilter top, final Select command) {
@@ -1907,10 +1937,8 @@ public class SQLParserBase implements SQLParser {
                 // the right hand side is the 'inner' table usually
                 TableFilter newTop = readTableFilter();
                 newTop = readJoin(newTop);
-                Expression on = null;
-                if (readIf("ON")) {
-                    on = readExpression();
-                }
+                // RIGHT JOIN时右边的表先输出，所以合并列取右边的
+                Expression on = readJoinCondition(top, newTop, false);
                 addJoin(newTop, top, true, on);
                 top = newTop;
                 last = newTop;
@@ -1919,10 +1947,7 @@ public class SQLParserBase implements SQLParser {
                 read("JOIN");
                 TableFilter join = readTableFilter();
                 top = readJoin(top);
-                Expression on = null;
-                if (readIf("ON")) {
-                    on = readExpression();
-                }
+                Expression on = readJoinCondition(top, join, true);
                 addJoin(top, join, true, on);
                 last = join;
             } else if (readIf("FULL")) {
@@ -1931,19 +1956,13 @@ public class SQLParserBase implements SQLParser {
                 read("JOIN");
                 TableFilter join = readTableFilter();
                 top = readJoin(top);
-                Expression on = null;
-                if (readIf("ON")) {
-                    on = readExpression();
-                }
+                Expression on = readJoinCondition(top, join, true);
                 addJoin(top, join, false, on);
                 last = join;
             } else if (readIf("JOIN")) {
                 TableFilter join = readTableFilter();
                 top = readJoin(top);
-                Expression on = null;
-                if (readIf("ON")) {
-                    on = readExpression();
-                }
+                Expression on = readJoinCondition(top, join, true);
                 addJoin(top, join, false, on);
                 last = join;
             } else if (readIf("CROSS")) {
@@ -1986,6 +2005,48 @@ public class SQLParserBase implements SQLParser {
             }
         }
         return top;
+    }
+
+    // 解析JOIN的ON或USING子句，USING等价于ON a.col = b.col，
+    // 并且SELECT *时USING列只输出一次
+    protected Expression readJoinCondition(TableFilter left, TableFilter right,
+            boolean skipRightColumns) {
+        if (!readIf("USING")) {
+            if (readIf("ON")) {
+                return readExpression();
+            }
+            return null;
+        }
+        read("(");
+        ArrayList<String> columnNames = Utils.newSmallArrayList();
+        do {
+            columnNames.add(readColumnIdentifier());
+        } while (readIfMore());
+        Expression on = null;
+        for (String columnName : columnNames) {
+            Column leftColumn = left.getTable().findColumn(columnName);
+            Column rightColumn = right.getTable().findColumn(columnName);
+            if (leftColumn == null || rightColumn == null) {
+                throw DbException.get(ErrorCode.COLUMN_NOT_FOUND_1, columnName);
+            }
+            // 被标记的列不会出现在SELECT *里，这样USING列只输出一次
+            if (skipRightColumns) {
+                right.addNaturalJoinColumn(rightColumn);
+            } else {
+                left.addNaturalJoinColumn(leftColumn);
+            }
+            Expression leftExpr = new ExpressionColumn(database, left.getSchemaName(),
+                    left.getTableAlias(), columnName);
+            Expression rightExpr = new ExpressionColumn(database, right.getSchemaName(),
+                    right.getTableAlias(), columnName);
+            Expression equal = new Comparison(session, Comparison.EQUAL, leftExpr, rightExpr);
+            if (on == null) {
+                on = equal;
+            } else {
+                on = new ConditionAndOr(ConditionAndOr.AND, on, equal);
+            }
+        }
+        return on;
     }
 
     /**
@@ -4439,6 +4500,28 @@ public class SQLParserBase implements SQLParser {
         return command;
     }
 
+    // TABLE x 等价于 SELECT * FROM x
+    protected Select parseExplicitTable() {
+        Table table = readTableOrView();
+        Select command = new Select(session);
+        currentSelect = command;
+        ArrayList<Expression> list = Utils.newSmallArrayList();
+        list.add(new Wildcard(null, null));
+        command.setExpressions(list);
+        command.addTableFilter(new TableFilter(session, table, null, rightsChecked, command), true);
+        command.init();
+        return command;
+    }
+
+    // WITH后面的查询体可以是SELECT、VALUES或TABLE
+    protected Query parseWithQuery() {
+        if (readIf("VALUES"))
+            return parseValues();
+        if (readIf("TABLE"))
+            return parseExplicitTable();
+        return parseSelect();
+    }
+
     protected TableFilter parseValuesTable() {
         Schema mainSchema = database.getSchema(session, Constants.SCHEMA_MAIN);
         TableFunction tf = (TableFunction) Function.getFunction(database, "TABLE");
@@ -4982,56 +5065,68 @@ public class SQLParserBase implements SQLParser {
     }
 
     protected Query parseWith() {
-        readIf("RECURSIVE");
-        String tempViewName = readIdentifierWithSchema();
-        Schema schema = getSchema();
-        Table recursiveTable;
-        read("(");
-        ArrayList<Column> columns = Utils.newSmallArrayList();
-        String[] cols = parseColumnList();
-        for (String c : cols) {
-            columns.add(new Column(c, Value.STRING));
-        }
-        Table old = session.findLocalTempTable(tempViewName);
-        if (old != null) {
-            if (!(old instanceof TableView)) {
-                throw DbException.get(ErrorCode.TABLE_OR_VIEW_ALREADY_EXISTS_1, tempViewName);
+        boolean recursive = readIf("RECURSIVE");
+        do { // 支持多个逗号分隔的CTE
+            String tempViewName = readIdentifierWithSchema();
+            Schema schema = getSchema();
+            ArrayList<Column> columns = Utils.newSmallArrayList();
+            String[] cols = null;
+            if (readIf("(")) { // 列名列表是可选的，非递归CTE可以省略
+                cols = parseColumnList(); // 括号由parseColumnList一起处理掉
+                for (String c : cols) {
+                    columns.add(new Column(c, Value.STRING));
+                }
+            } else if (recursive) {
+                // 递归CTE必须先声明列名，否则没法创建用于自引用的临时表
+                throw getSyntaxError();
             }
-            TableView tv = (TableView) old;
-            if (!tv.isTableExpression()) {
-                throw DbException.get(ErrorCode.TABLE_OR_VIEW_ALREADY_EXISTS_1, tempViewName);
+            Table old = session.findLocalTempTable(tempViewName);
+            if (old != null) {
+                if (!(old instanceof TableView)) {
+                    throw DbException.get(ErrorCode.TABLE_OR_VIEW_ALREADY_EXISTS_1, tempViewName);
+                }
+                TableView tv = (TableView) old;
+                if (!tv.isTableExpression()) {
+                    throw DbException.get(ErrorCode.TABLE_OR_VIEW_ALREADY_EXISTS_1, tempViewName);
+                }
+                session.removeLocalTempTable(old);
             }
-            session.removeLocalTempTable(old);
-        }
-        CreateTableData data = new CreateTableData();
-        data.id = database.allocateObjectId();
-        data.columns = columns;
-        data.tableName = tempViewName;
-        data.temporary = true;
-        data.persistData = true;
-        data.persistIndexes = false;
-        data.create = true;
-        data.session = session;
-        recursiveTable = schema.createTable(data);
-        session.addLocalTempTable(recursiveTable);
-        String querySQL;
-        try {
-            read("AS");
-            read("(");
-            Query withQuery = parseSelect();
-            read(")");
-            withQuery.prepare();
-            querySQL = StringUtils.cache(withQuery.getPlanSQL());
-        } finally {
-            session.removeLocalTempTable(recursiveTable);
-        }
-        int id = database.allocateObjectId();
-        TableView view = new TableView(schema, id, tempViewName, querySQL, null, cols, session, true);
-        view.setTableExpression(true);
-        view.setTemporary(true);
-        session.addLocalTempTable(view);
-        view.setOnCommitDrop(true);
-        Query q = parseSelect();
+            Table recursiveTable = null;
+            String querySQL;
+            try {
+                if (recursive) { // 递归CTE先创建一个空临时表，AS里的查询可以引用它自己
+                    CreateTableData data = new CreateTableData();
+                    data.id = database.allocateObjectId();
+                    data.columns = columns;
+                    data.tableName = tempViewName;
+                    data.temporary = true;
+                    data.persistData = true;
+                    data.persistIndexes = false;
+                    data.create = true;
+                    data.session = session;
+                    recursiveTable = schema.createTable(data);
+                    session.addLocalTempTable(recursiveTable);
+                }
+                read("AS");
+                read("(");
+                Query withQuery = parseWithQuery();
+                read(")");
+                withQuery.prepare();
+                querySQL = StringUtils.cache(withQuery.getPlanSQL());
+            } finally {
+                if (recursiveTable != null) {
+                    session.removeLocalTempTable(recursiveTable);
+                }
+            }
+            int id = database.allocateObjectId();
+            TableView view = new TableView(schema, id, tempViewName, querySQL, null, cols, session,
+                    recursive);
+            view.setTableExpression(true);
+            view.setTemporary(true);
+            session.addLocalTempTable(view);
+            view.setOnCommitDrop(true);
+        } while (readIf(","));
+        Query q = parseWithQuery();
         q.setPrepareAlways(true);
         return q;
     }
