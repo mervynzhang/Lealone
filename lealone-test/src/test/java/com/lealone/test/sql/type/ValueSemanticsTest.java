@@ -125,7 +125,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
     // BUG: AVG 对整数列做整数除法，结果被截断。
     // 期望: AVG(1,2)=1.5（H2 返回 DOUBLE 1.5）；实际: 1（类型 INTEGER）。
     // 原因: Avg 聚合复用参数类型，sum/count 走整数除法。
-    @Ignore("BUG: AVG on INTEGER column truncates 1.5 to 1 (result type stays INTEGER); H2 returns 1.5")
     @Test
     public void avgOnIntegerColumnIsTruncated() {
         assertQueryEquals(1.5, "SELECT AVG(x) FROM (SELECT 1 x UNION ALL SELECT 2)");
@@ -134,7 +133,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
 
     // BUG: AVG 对 BIGINT 列更糟，(1,2) 得到 2（既不是 1.5，也不是整数除法的 1）。
     // 期望: 1.5（H2 返回 NUMERIC 1.5000000000）；实际: 2（类型 BIGINT）。
-    @Ignore("BUG: AVG on BIGINT column returns 2 for (1,2); expected 1.5")
     @Test
     public void avgOnBigintColumn() {
         assertQueryEquals(1.5,
@@ -145,7 +143,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
     // 期望: DECIMAL(10,4)/DECIMAL(10,4) 的商标度不超过 20（H2 2.4.240 为 20，H2 1.4 为 15）；
     // 实际: DECIMAL(29,29)，0.33333333333333333333333333333。
     // 影响: 商参与后续运算/比较时精度失真，且结果集元数据不可预期。
-    @Ignore("BUG: DECIMAL(10,4)/DECIMAL(10,4) produces scale 29 instead of <= 20 (H2: 20)")
     @Test
     public void decimalDivisionScaleIsTooLarge() {
         Object o = queryObject("SELECT CAST(1 AS DECIMAL(10,4)) / CAST(3 AS DECIMAL(10,4))");
@@ -158,7 +155,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
     // BUG: 单参数 TRUNC(x) 抛 NPE。
     // 期望: TRUNC(x) 等价于 TRUNC(x, 0)，返回 1（H2 返回 NUMERIC 1）；
     // 实际: General error + NullPointerException（错误码 50000）。
-    @Ignore("BUG: TRUNC(x) with one argument throws NPE (50000); expected TRUNC(x,0)=1")
     @Test
     public void truncWithSingleArgument() {
         assertQueryEquals(1, "SELECT TRUNC(1.9)");
@@ -169,7 +165,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
     // BUG: ROUND 对 DECIMAL 入参先转成 DOUBLE，丢掉标度并按二进制浮点舍入。
     // 期望: ROUND(CAST(1.005 AS DECIMAL(10,3)), 2) = 1.01（H2 返回 NUMERIC(3,2) 1.01）；
     // 实际: 1.0（结果类型 DOUBLE）。
-    @Ignore("BUG: ROUND(DECIMAL, n) converts to DOUBLE, 1.005 -> 1.0 instead of 1.01")
     @Test
     public void roundOnDecimalKeepsDecimalSemantics() {
         assertQueryEquals(new BigDecimal("1.01"),
@@ -181,11 +176,49 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
 
     // BUG: ROUND 的平局舍入方向不是"远离 0"，而是朝 +∞ 取整。
     // 期望: ROUND(-2.5) = -3（H2 为 -3，即 HALF_UP）；实际: -2。
-    @Ignore("BUG: ROUND(-2.5) returns -2 instead of -3 (ties round toward +infinity, H2 rounds away from zero)")
     @Test
     public void roundTieRoundsAwayFromZero() {
         assertQueryEquals(-3.0, "SELECT ROUND(-2.5)");
         assertQueryEquals(-2.0, "SELECT ROUND(-1.5)");
         assertQueryEquals(-3.0, "SELECT ROUND(CAST(-2.5 AS DECIMAL(10,1)))");
     }
+    // 负精度的ROUND: 结果必须是整数, 不能输出科学计数法, 也不能把负标度暴露给JDBC
+    @Test
+    public void testRoundNegativeScale() throws Exception {
+        executeQuery("SELECT ROUND(123.456, -1)");
+        try {
+            assertEquals(120, rs.getInt(1));
+            assertEquals("120", rs.getString(1));
+            assertTrue(rs.getMetaData().getScale(1) >= 0);
+        } finally {
+            closeResultSet();
+        }
+
+        executeQuery("SELECT ROUND(CAST(123.456 AS DECIMAL(10,3)), -2)");
+        try {
+            assertEquals(100, rs.getInt(1));
+            assertEquals("100", rs.getString(1));
+            assertTrue(rs.getMetaData().getScale(1) >= 0);
+        } finally {
+            closeResultSet();
+        }
+
+        // 平局仍然远离0
+        executeQuery("SELECT ROUND(CAST(150 AS DECIMAL(10,0)), -2)");
+        try {
+            assertEquals(200, rs.getInt(1));
+            assertEquals("200", rs.getString(1));
+        } finally {
+            closeResultSet();
+        }
+
+        executeQuery("SELECT ROUND(-123.456, -1)");
+        try {
+            assertEquals(-120, rs.getInt(1));
+            assertEquals("-120", rs.getString(1));
+        } finally {
+            closeResultSet();
+        }
+    }
+
 }
