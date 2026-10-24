@@ -569,12 +569,13 @@ public class PlpgsqlTest extends SqlTestBase {
                 + " BEGIN" //
                 + "   DECLARE param1 INT := 10;" //
                 + "   BEGIN" //
+                + "     outerblock.param1 := 2;" //
                 + "     RAISE NOTICE 'outer=%', outerblock.param1;" //
                 + "     RETURN outerblock.param1 + param1;" //
                 + "   END;" //
                 + " END; $$");
         executeQuery("SELECT plp_label()");
-        assertEquals(11, getIntValue(1));
+        assertEquals(12, getIntValue(1));
 
         // 带标签的循环变量也能被限定引用
         executeUpdate("CREATE OR REPLACE FUNCTION plp_label_loop() RETURNS INT LANGUAGE plpgsql AS $$"

@@ -252,7 +252,7 @@ public class PlpgSqlParser {
         if (t.type == TokenType.IDENTIFIER && !t.quoted && isUnsupportedStatement(t.text))
             throw unsupported("PL/pgSQL statement: " + t.text);
         // 标识符后面跟赋值符号就是赋值语句，否则按内嵌SQL处理
-        if (t.type == TokenType.IDENTIFIER && isAssignmentOperator(tokenAt(pos + 1)))
+        if (t.type == TokenType.IDENTIFIER && isAssignmentStart())
             return parseAssignment();
         return parseSqlStatement();
     }
@@ -269,9 +269,25 @@ public class PlpgSqlParser {
         return t.type == TokenType.OPERATOR && (":=".equals(t.text) || "=".equals(t.text));
     }
 
+    // 简单变量赋值或块标签限定赋值 outerblock.param1 := ...
+    private boolean isAssignmentStart() {
+        if (isAssignmentOperator(tokenAt(pos + 1)))
+            return true;
+        Token dot = tokenAt(pos + 1);
+        return dot.type == TokenType.OPERATOR && ".".equals(dot.text)
+                && tokenAt(pos + 2).type == TokenType.IDENTIFIER
+                && isAssignmentOperator(tokenAt(pos + 3));
+    }
+
     private Assignment parseAssignment() {
         Token target = expectIdentifier();
         Assignment assignment = new Assignment(target.start);
+        if (isOp(".")) {
+            next();
+            assignment.qualifier = target.value;
+            assignment.qualifierQuoted = target.quoted;
+            target = expectIdentifier();
+        }
         assignment.target = target.value;
         assignment.targetQuoted = target.quoted;
         if (!isAssignmentOperator(current()))

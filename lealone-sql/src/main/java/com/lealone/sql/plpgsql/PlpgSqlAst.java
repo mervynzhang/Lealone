@@ -76,6 +76,9 @@ public final class PlpgSqlAst {
     /** 变量赋值，例如 x := a * 2 */
     public static class Assignment extends Node {
 
+        // 块标签限定目标 outerblock.param1
+        public String qualifier;
+        public boolean qualifierQuoted;
         public String target;
         public boolean targetQuoted;
         public String expression;
