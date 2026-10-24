@@ -5151,8 +5151,13 @@ public class SQLParserBase implements SQLParser {
         } else if (readIf("TABLE")) {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "RETURNS TABLE");
         }
-        Column returnColumn = parseColumnWithType(null);
-        command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
+        // VOID不是普通数据类型，单独处理，PL/pgSQL函数可以省略RETURN
+        if (readIf("VOID")) {
+            command.setReturnType("VOID", Value.NULL);
+        } else {
+            Column returnColumn = parseColumnWithType(null);
+            command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
+        }
 
         // LANGUAGE子句和易变性关键字都是可选的，且顺序任意
         boolean deterministic = false;
@@ -5160,11 +5165,7 @@ public class SQLParserBase implements SQLParser {
         while (true) {
             if (readIf("LANGUAGE")) {
                 language = readStringOrIdentifier();
-                if (!"SQL".equalsIgnoreCase(language)
-                        && !"PLPGSQL".equalsIgnoreCase(language)) {
-                    throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                            "LANGUAGE " + language);
-                }
+                checkFunctionLanguage(language);
             } else if (readIf("IMMUTABLE") || readIf("STABLE")) {
                 deterministic = true;
             } else if (readIf("VOLATILE")) {
@@ -5175,6 +5176,19 @@ public class SQLParserBase implements SQLParser {
         }
         read("AS");
         String body = readString();
+        // PostgreSQL也允许AS '函数体' LANGUAGE plpgsql，所以AS之后再解析一次
+        while (true) {
+            if (readIf("LANGUAGE")) {
+                language = readStringOrIdentifier();
+                checkFunctionLanguage(language);
+            } else if (readIf("IMMUTABLE") || readIf("STABLE")) {
+                deterministic = true;
+            } else if (readIf("VOLATILE")) {
+                deterministic = false;
+            } else {
+                break;
+            }
+        }
         command.setDeterministic(deterministic);
         command.setLanguage(language);
         if ("PLPGSQL".equalsIgnoreCase(language)) {
@@ -5191,6 +5205,12 @@ public class SQLParserBase implements SQLParser {
             command.setBody(body, bodySql, indexes);
         }
         return command;
+    }
+
+    private static void checkFunctionLanguage(String language) {
+        if (!"SQL".equalsIgnoreCase(language) && !"PLPGSQL".equalsIgnoreCase(language)) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "LANGUAGE " + language);
+        }
     }
 
     private static boolean isDuplicateParameter(ArrayList<String> parameterNames,
