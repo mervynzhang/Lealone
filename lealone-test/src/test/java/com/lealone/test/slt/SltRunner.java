@@ -88,6 +88,9 @@ public final class SltRunner {
         public String kind; // query | label | statement
         public String subtype; // exception | value | row_count | hash_mismatch | column_count | ...
         public String sql;
+        // 用于生成失败签名的完整SQL(不截断): 超长语句只截断前500字符时,
+        // 两条只有末尾不同的失败会算出同一个签名, 门禁就会把新增失败当成已登记而放行(假绿)
+        public String sqlFull;
         public String expected;
         public String actual;
         public String detail;
@@ -106,7 +109,7 @@ public final class SltRunner {
          * "修好一条、又坏掉另一条"也能被发现(只比计数时二者相抵, 门禁会假绿)。
          */
         public String key() {
-            String text = subtype + "\t" + sql;
+            String text = subtype + "\t" + (sqlFull != null ? sqlFull : sql);
             try {
                 java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
                 byte[] d = md.digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -597,6 +600,7 @@ public final class SltRunner {
                             f.subtype = "expected_error_got_ok";
                             f.line = r.line;
                             f.sql = clip(r.sql, 500);
+                            f.sqlFull = r.sql;
                             f.expected = "error";
                             f.actual = "ok";
                             f.detail = "";
@@ -614,6 +618,7 @@ public final class SltRunner {
                             f.subtype = "stmt_error";
                             f.line = r.line;
                             f.sql = clip(r.sql, 500);
+                            f.sqlFull = r.sql;
                             f.expected = "ok";
                             f.actual = "error";
                             f.detail = clip(ex == null ? "" : ex.getClass().getSimpleName() + ": "
@@ -671,6 +676,7 @@ public final class SltRunner {
                                     lf.subtype = "label_mismatch";
                                     lf.line = r.line;
                                     lf.sql = clip(r.sql, 500);
+                                    lf.sqlFull = r.sql;
                                     lf.expected = "hash " + prev;
                                     lf.actual = "hash " + hash;
                                     lf.detail = "label " + r.label + " sees different results";
@@ -772,6 +778,7 @@ public final class SltRunner {
         f.subtype = subtype;
         f.line = r.line;
         f.sql = clip(r.sql, 500);
+                            f.sqlFull = r.sql;
         f.expected = expected;
         f.actual = actual;
         f.detail = detail;
