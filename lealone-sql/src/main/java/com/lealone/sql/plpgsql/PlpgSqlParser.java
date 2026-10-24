@@ -394,8 +394,18 @@ public class PlpgSqlParser {
             loop.reverse = true;
             next();
         }
-        if (isKeyword("SELECT") || isKeyword("WITH") || isKeyword("VALUES") || isKeyword("TABLE"))
-            throw unsupported("FOR ... IN query");
+        if (isKeyword("EXECUTE"))
+            throw unsupported("FOR ... IN EXECUTE");
+        if (isKeyword("SELECT") || isKeyword("WITH") || isKeyword("VALUES") || isKeyword("TABLE")) {
+            // FOR rec IN <query> LOOP：查询在LOOP之前结束，结果逐行赋给record/row变量
+            loop.query = captureExpression(new String[] { "LOOP" }, new String[0]);
+            expectKeyword("LOOP");
+            parseStatements(loop.statements);
+            expectKeyword("END");
+            expectKeyword("LOOP");
+            parseLoopEndLabel(loop.label);
+            return loop;
+        }
         loop.startExpression = captureExpression(new String[0], new String[] { ".." });
         expectOp("..");
         loop.endExpression = captureExpression(new String[] { "LOOP", "BY" }, new String[0]);

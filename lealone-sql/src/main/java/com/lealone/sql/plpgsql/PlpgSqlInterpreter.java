@@ -867,6 +867,10 @@ public class PlpgSqlInterpreter {
     }
 
     private void executeFor(For node) {
+        if (node.query != null) {
+            executeForQuery(node);
+            return;
+        }
         // 循环上下界和步长只在进入循环时求值一次，此时还看不到循环变量
         int start = evalForBound(node.startExpression);
         int end = evalForBound(node.endExpression);
@@ -903,6 +907,51 @@ public class PlpgSqlInterpreter {
                 } catch (ExitSignal signal) {
                     if (matchesLoopLabel(node.label, signal.label)) {
                         // PostgreSQL在FOR循环结束时按是否迭代过设置FOUND
+                        setFound(iterated);
+                        return;
+                    }
+                    throw signal;
+                }
+            }
+            setFound(iterated);
+        } finally {
+            scope = oldScope;
+        }
+    }
+
+    // FOR target IN <query> LOOP：查询结果先全部取回，再逐行赋给record/%ROWTYPE变量
+    private void executeForQuery(For node) {
+        PlpgSqlScope loopScope = new PlpgSqlScope(scope);
+        loopScope.setLabel(node.label);
+        PlpgSqlScope oldScope = scope;
+        scope = loopScope;
+        try {
+            PlpgSqlVariable target = scope.findVariable(node.variable, node.variableQuoted);
+            if (target == null) {
+                // 没有声明的循环目标按PostgreSQL的规则隐式声明成record变量
+                target = new PlpgSqlVariable(node.variable, node.variableQuoted, false, false);
+                target.setRecord(true);
+                loopScope.declare(target);
+            } else if (!target.isRecord()) {
+                throw PlpgSqlException.raise("42804",
+                        "FOR loop target " + node.variable + " must be a record or row variable");
+            }
+            target.checkCanAssign();
+            PlpgSqlSqlExecutor.QueryRows queryRows = sqlExecutor.queryWithColumns(node.query, scope,
+                    0);
+            boolean iterated = false;
+            for (Value[] row : queryRows.rows) {
+                iterated = true;
+                target.assignRecord(queryRows.columnNames, queryRows.columnTypes, row);
+                try {
+                    executeStatements(node.statements);
+                } catch (ContinueSignal signal) {
+                    if (matchesLoopLabel(node.label, signal.label))
+                        continue;
+                    throw signal;
+                } catch (ExitSignal signal) {
+                    if (matchesLoopLabel(node.label, signal.label)) {
+                        // 和整数范围循环一样，循环结束时按是否迭代过设置FOUND
                         setFound(iterated);
                         return;
                     }
