@@ -349,7 +349,25 @@ public class TableFilter extends ColumnResolverBase {
                 if (cursor.next()) {
                     currentSearchRow = cursor.getSearchRow();
                     current = null;
-                    state = FOUND;
+                    // 墓碑行(基表行已删除)不能作为结果产出，否则会得到一行全NULL的脏数据。
+                    // 二级索引的索引行本身不可信(async维护)，还要确认基表行还在。
+                    while (true) {
+                        boolean deleted = currentSearchRow == null
+                                || currentSearchRow.getColumns() == null;
+                        if (!deleted && !cursor.isSearchRowUpToDate()) {
+                            current = cursor.get();
+                            deleted = current == null || current.getColumns() == null;
+                        }
+                        if (!deleted)
+                            break;
+                        current = null;
+                        if (!cursor.next()) {
+                            currentSearchRow = null;
+                            break;
+                        }
+                        currentSearchRow = cursor.getSearchRow();
+                    }
+                    state = currentSearchRow == null ? AFTER_LAST : FOUND;
                 } else {
                     state = AFTER_LAST;
                 }
