@@ -51,6 +51,10 @@ public class RunScript extends ScriptBase {
         int count = 0;
         try {
             openInput();
+            if (isEncrypted()) {
+                // 先校验密码，避免把解密失败得到的垃圾当SQL执行
+                verifyMagic();
+            }
             BufferedReader reader = new BufferedReader(new InputStreamReader(in, charset));
             // if necessary, strip the BOM from the front of the file
             reader.mark(1);
