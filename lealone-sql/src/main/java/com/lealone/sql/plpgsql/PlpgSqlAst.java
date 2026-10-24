@@ -76,6 +76,9 @@ public final class PlpgSqlAst {
     /** 变量赋值，例如 x := a * 2 */
     public static class Assignment extends Node {
 
+        // 块标签限定目标 outerblock.param1
+        public String qualifier;
+        public boolean qualifierQuoted;
         public String target;
         public boolean targetQuoted;
         public String expression;
@@ -111,6 +114,10 @@ public final class PlpgSqlAst {
     public static class Return extends Node {
 
         public String expression;
+        // RETURN NEXT，expression为null时表示用OUT/TABLE变量组一行
+        public boolean next;
+        // RETURN QUERY，expression是查询文本
+        public boolean query;
 
         public Return(int position) {
             super(position);
@@ -125,6 +132,19 @@ public final class PlpgSqlAst {
         public SqlExec(int position, String sql) {
             super(position);
             this.sql = sql;
+        }
+    }
+
+    /** GET DIAGNOSTICS语句，目前只支持ROW_COUNT */
+    public static class GetDiagnostics extends Node {
+
+        public String target;
+        public boolean targetQuoted;
+        // 诊断项，统一用大写，例如ROW_COUNT
+        public String item;
+
+        public GetDiagnostics(int position) {
+            super(position);
         }
     }
 

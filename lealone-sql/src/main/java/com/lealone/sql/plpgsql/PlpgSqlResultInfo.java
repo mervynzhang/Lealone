@@ -1,0 +1,54 @@
+/*
+ * Copyright Lealone Database Group.
+ * Licensed under the Server Side Public License, v 1.
+ * Initial Developer: zhh
+ */
+package com.lealone.sql.plpgsql;
+
+/**
+ * PL/pgSQL函数的返回形态：标量、VOID、多个OUT参数组成的一行，
+ * 或者RETURNS SETOF/RETURNS TABLE声明的结果集。
+ */
+public class PlpgSqlResultInfo {
+
+    public final String functionName;
+    public final int returnType;
+    // RETURNS SETOF/RETURNS TABLE
+    public final boolean setReturning;
+    public final boolean returnsTable;
+    // 参数模式和OUT/INOUT参数下标
+    public final int[] parameterModes;
+    public final int[] outputIndexes;
+    // SETOF/TABLE结果列；SETOF标量的columnNames为null，列名用函数名
+    public final String[] columnNames;
+    public final int[] columnTypes;
+    public final long[] columnPrecisions;
+    public final int[] columnScales;
+
+    public PlpgSqlResultInfo(String functionName, int returnType, boolean setReturning,
+            boolean returnsTable, int[] parameterModes, int[] outputIndexes, String[] columnNames,
+            int[] columnTypes, long[] columnPrecisions, int[] columnScales) {
+        this.functionName = functionName;
+        this.returnType = returnType;
+        this.setReturning = setReturning;
+        this.returnsTable = returnsTable;
+        this.parameterModes = parameterModes;
+        this.outputIndexes = outputIndexes;
+        this.columnNames = columnNames;
+        this.columnTypes = columnTypes;
+        this.columnPrecisions = columnPrecisions;
+        this.columnScales = columnScales;
+    }
+
+    public boolean hasOutputParameters() {
+        return outputIndexes.length > 0;
+    }
+
+    public boolean hasMultipleOutputParameters() {
+        return outputIndexes.length > 1;
+    }
+
+    public String getColumnName(int i) {
+        return columnNames == null || i >= columnNames.length ? functionName : columnNames[i];
+    }
+}

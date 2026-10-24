@@ -364,6 +364,34 @@ public class SqlFunction extends FunctionAlias {
         return returnType;
     }
 
+    protected int[] getParameterModes() {
+        return parameterModes;
+    }
+
+    protected int[] getOutputIndexes() {
+        return outputIndexes;
+    }
+
+    protected boolean isReturnsTable() {
+        return returnsTable;
+    }
+
+    protected String[] getReturnColumnNames() {
+        return columnNames;
+    }
+
+    protected int[] getReturnColumnTypes() {
+        return columnTypes;
+    }
+
+    protected long[] getReturnColumnPrecisions() {
+        return columnPrecisions;
+    }
+
+    protected int[] getReturnColumnScales() {
+        return columnScales;
+    }
+
     /**
      * 设置函数体。
      *

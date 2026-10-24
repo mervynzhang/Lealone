@@ -17,6 +17,8 @@ public class PlpgSqlScope implements PlpgSqlVariableResolver {
 
     private final PlpgSqlScope parent;
     private final Map<String, PlpgSqlVariable> variables = new LinkedHashMap<>();
+    // 块标签，用于outerblock.param1这种限定引用
+    private String label;
 
     public PlpgSqlScope(PlpgSqlScope parent) {
         this.parent = parent;
@@ -24,6 +26,14 @@ public class PlpgSqlScope implements PlpgSqlVariableResolver {
 
     public PlpgSqlScope getParent() {
         return parent;
+    }
+
+    public String getLabel() {
+        return label;
+    }
+
+    public void setLabel(String label) {
+        this.label = label;
     }
 
     public void declare(PlpgSqlVariable variable) {
@@ -41,6 +51,22 @@ public class PlpgSqlScope implements PlpgSqlVariableResolver {
         if (v != null)
             return v;
         return parent == null ? null : parent.findVariable(name, quoted);
+    }
+
+    @Override
+    public boolean hasLabel(String label) {
+        if (label != null && label.equalsIgnoreCase(this.label))
+            return true;
+        return parent != null && parent.hasLabel(label);
+    }
+
+    @Override
+    public PlpgSqlVariable findVariableByLabel(String label, String name, boolean quoted) {
+        if (label != null && label.equalsIgnoreCase(this.label)) {
+            // 找到指定标签的块后，按正常作用域规则从该块开始向外找
+            return findVariable(name, quoted);
+        }
+        return parent == null ? null : parent.findVariableByLabel(label, name, quoted);
     }
 
     private PlpgSqlVariable findInThisScope(String name, boolean quoted) {

@@ -8,6 +8,7 @@ package com.lealone.test.sql.function;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
 
 import org.junit.Test;
 
@@ -481,6 +482,448 @@ public class PlpgsqlTest extends SqlTestBase {
         stmt = conn.createStatement();
         executeQuery("SELECT plp_persist(6)");
         assertEquals(42, getIntValue(1));
+    }
+
+    // FOUND魔法变量：DML/PERFORM/SELECT INTO之后的值
+    @Test
+    public void testFoundVariable() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_found_t");
+        executeUpdate("CREATE TABLE plp_found_t(a INT)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_found() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r INT := 0; n INT := 0;" //
+                + " BEGIN" //
+                + "   INSERT INTO plp_found_t VALUES(1);" //
+                + "   IF FOUND THEN r := r + 1; END IF;" //
+                + "   UPDATE plp_found_t SET a = 100 WHERE a = 1;" //
+                + "   IF FOUND THEN r := r + 2; END IF;" //
+                + "   DELETE FROM plp_found_t WHERE a = 9999;" //
+                + "   IF NOT FOUND THEN r := r + 4; END IF;" //
+                + "   PERFORM * FROM plp_found_t;" //
+                + "   IF FOUND THEN r := r + 8; END IF;" //
+                + "   SELECT a INTO n FROM plp_found_t WHERE a = 8888;" //
+                + "   IF NOT FOUND THEN r := r + 16; END IF;" //
+                + "   SELECT a INTO n FROM plp_found_t WHERE a = 100;" //
+                + "   IF FOUND THEN r := r + 32; END IF;" //
+                + "   PERFORM * FROM plp_found_t WHERE a = 7777;" //
+                + "   IF NOT FOUND THEN r := r + 64; END IF;" //
+                + "   RETURN r;" //
+                + " END; $$");
+        executeQuery("SELECT plp_found()");
+        assertEquals(127, getIntValue(1));
+
+        // 空DECLARE段也要能解析
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_found_empty_declare() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE" //
+                + " BEGIN" //
+                + "   INSERT INTO plp_found_t VALUES(2);" //
+                + "   IF FOUND THEN RETURN 1; END IF;" //
+                + "   RETURN 0;" //
+                + " END; $$");
+        executeQuery("SELECT plp_found_empty_declare()");
+        assertEquals(1, getIntValue(1));
+    }
+
+    // record和%ROWTYPE变量：SELECT * INTO整行、r.col取字段
+    @Test
+    public void testRecordAndRowType() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_rec_t");
+        executeUpdate("CREATE TABLE plp_rec_t(id INT PRIMARY KEY, name VARCHAR(20))");
+        executeUpdate("INSERT INTO plp_rec_t VALUES(1, 'alice')");
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_rowtype(p INT) RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_rec_t%ROWTYPE;" //
+                + " BEGIN" //
+                + "   SELECT * INTO r FROM plp_rec_t WHERE id = p;" //
+                + "   RETURN r.name;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_rowtype(1)");
+        assertEquals("alice", getStringValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_record(p INT) RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r record;" //
+                + " BEGIN" //
+                + "   SELECT * INTO r FROM plp_rec_t WHERE id = p;" //
+                + "   RAISE NOTICE 'record name = %', r.name;" //
+                + "   RETURN r.name;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_record(1)");
+        assertEquals("alice", getStringValue(1));
+
+        // 给record字段赋值
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_field_set() RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r record;" //
+                + " BEGIN" //
+                + "   SELECT * INTO r FROM plp_rec_t WHERE id = 1;" //
+                + "   r.name := 'changed';" //
+                + "   RETURN r.name;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_field_set()");
+        assertEquals("changed", getStringValue(1));
+
+        // record变量名和聚合函数同名时，函数调用不能被当成record变量
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_func_name() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE sum record;" //
+                + " BEGIN" //
+                + "   SELECT * INTO sum FROM plp_rec_t WHERE id = 1;" //
+                + "   RETURN (SELECT SUM(id) FROM plp_rec_t WHERE id = 1);" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_func_name()");
+        assertEquals(1, getIntValue(1));
+
+        // 没有行时%ROWTYPE是一行NULL，字段读取得到NULL
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_norow(p INT) RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_rec_t%ROWTYPE;" //
+                + " BEGIN" //
+                + "   SELECT * INTO r FROM plp_rec_t WHERE id = p;" //
+                + "   RETURN COALESCE(r.name, 'NULL');" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_norow(99)");
+        assertEquals("NULL", getStringValue(1));
+
+        // 从未赋值的plain record取字段才是55000
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_unassigned() RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r record;" //
+                + " BEGIN RETURN r.name; END; $$");
+        assertSqlState("55000", "SELECT plp_rec_unassigned()");
+
+        // %ROWTYPE声明后字段就是NULL
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_rowtype_null() RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_rec_t%ROWTYPE;" //
+                + " BEGIN RETURN COALESCE(r.name, 'NULL'); END; $$");
+        executeQuery("SELECT plp_rec_rowtype_null()");
+        assertEquals("NULL", getStringValue(1));
+
+        // plain record可以按新查询重新绑定行结构
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_rebind() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r record;" //
+                + " BEGIN" //
+                + "   SELECT id, name INTO r FROM plp_rec_t WHERE id = 1;" //
+                + "   SELECT id, name, CAST(42 AS INT) AS extra INTO r FROM plp_rec_t WHERE id = 1;" //
+                + "   RETURN r.extra;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_rebind()");
+        assertEquals(42, getIntValue(1));
+
+        // %ROWTYPE数组暂不支持，但要报干净的不支持错误
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_array() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_rec_t%ROWTYPE[];" //
+                + " BEGIN RETURN 1; END; $$");
+        executeQueryThanAssertErrorCode("SELECT plp_rec_array()",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+
+        // record当标量用要给出明确的不支持错误，不能漏内部CAST语法错
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_scalar(p INT) RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_rec_t%ROWTYPE;" //
+                + " BEGIN RETURN r; END; $$");
+        executeQueryThanAssertErrorCode("SELECT plp_rec_scalar(1)",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+
+        // 不存在的表%ROWTYPE给出可读的不支持错误
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_badtype() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_no_such_table%ROWTYPE;" //
+                + " BEGIN RETURN 1; END; $$");
+        executeQueryThanAssertErrorCode("SELECT plp_rec_badtype()",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+    }
+
+    // 块标签限定变量名：outerblock.param1
+    @Test
+    public void testBlockLabelQualifiedVariable() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_label() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " <<outerblock>>" //
+                + " DECLARE param1 INT := 1;" //
+                + " BEGIN" //
+                + "   DECLARE param1 INT := 10;" //
+                + "   BEGIN" //
+                + "     outerblock.param1 := 2;" //
+                + "     RAISE NOTICE 'outer=%', outerblock.param1;" //
+                + "     RETURN outerblock.param1 + param1;" //
+                + "   END;" //
+                + " END; $$");
+        executeQuery("SELECT plp_label()");
+        assertEquals(12, getIntValue(1));
+
+        // 带标签的循环变量也能被限定引用
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_label_loop() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE s INT := 0;" //
+                + " BEGIN" //
+                + "   <<lp>> FOR i IN 1..3 LOOP" //
+                + "     s := s + lp.i;" //
+                + "   END LOOP lp;" //
+                + "   RETURN s;" //
+                + " END; $$");
+        executeQuery("SELECT plp_label_loop()");
+        assertEquals(6, getIntValue(1));
+    }
+
+    // 有OUT/INOUT参数时，裸RETURN;和自然结束都返回OUT参数的值
+    @Test
+    public void testOutParameterBareReturn() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_out_bare(i INT, OUT j INT) AS $$"
+                + " BEGIN j := i + 1; RETURN; END $$ LANGUAGE plpgsql");
+        executeQuery("SELECT plp_out_bare(42)");
+        assertEquals(43, getIntValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_inout_natural(INOUT i INT) AS $$"
+                + " BEGIN i := i + 1; END $$ LANGUAGE plpgsql");
+        executeQuery("SELECT plp_inout_natural(42)");
+        assertEquals(43, getIntValue(1));
+
+        // 显式RETURN表达式仍然可用
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_out_value(i INT, OUT j INT) AS $$"
+                + " BEGIN j := i + 1; RETURN j * 2; END $$ LANGUAGE plpgsql");
+        executeQuery("SELECT plp_out_value(42)");
+        assertEquals(86, getIntValue(1));
+
+        // 局部变量遮蔽OUT参数时，返回的仍是OUT参数而不是同名局部变量
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_out_shadow(OUT j INT) AS $$"
+                + " DECLARE j INT := 99; BEGIN RETURN; END $$ LANGUAGE plpgsql");
+        executeQuery("SELECT plp_out_shadow() IS NULL");
+        assertTrue(getBooleanValue(1));
+    }
+
+    // RETURNS TABLE：RETURN QUERY和RETURN NEXT都往结果集追加行
+    @Test
+    public void testReturnsTable() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_setof_t");
+        executeUpdate("CREATE TABLE plp_setof_t(id INT PRIMARY KEY, name VARCHAR(20))");
+        executeUpdate("INSERT INTO plp_setof_t VALUES(1, 'a'), (2, 'b'), (3, 'c')");
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_query(p INT) RETURNS TABLE(id INT, name VARCHAR) LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   RETURN QUERY SELECT id, name FROM plp_setof_t WHERE id >= p ORDER BY id;" //
+                + " END; $$");
+        assertEquals("[2:b, 3:c]", queryRowList(
+                "SELECT id, name FROM plp_table_query(2) ORDER BY id").toString());
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_next() RETURNS TABLE(id INT, name VARCHAR) LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   id := 1; name := 'x'; RETURN NEXT;" //
+                + "   id := 2; name := 'y'; RETURN NEXT;" //
+                + " END; $$");
+        assertEquals("[1:x, 2:y]",
+                queryRowList("SELECT id, name FROM plp_table_next() ORDER BY id").toString());
+
+        // 单列表可以用表达式，多列可以用record变量
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_one() RETURNS TABLE(id INT) LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN NEXT 5; RETURN NEXT 6; END; $$");
+        assertEquals("[5, 6]",
+                queryIntList("SELECT * FROM plp_table_one() ORDER BY 1").toString());
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_record(p INT) RETURNS TABLE(id INT, name VARCHAR) LANGUAGE plpgsql AS $$"
+                + " DECLARE r record;" //
+                + " BEGIN" //
+                + "   SELECT * INTO r FROM plp_setof_t t WHERE t.id = p;" //
+                + "   RETURN NEXT r;" //
+                + " END; $$");
+        assertEquals("[2:b]",
+                queryRowList("SELECT id, name FROM plp_table_record(2)").toString());
+
+        // 声明了TABLE列但一行也没返回时是空结果集
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_empty() RETURNS TABLE(id INT) LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN; END; $$");
+        assertEquals("[]", queryIntList("SELECT * FROM plp_table_empty()").toString());
+    }
+
+    // RETURNS SETOF标量：RETURN NEXT逐行累积
+    @Test
+    public void testReturnsSetofScalar() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_setof_scalar(a INT, b INT) RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " DECLARE i INT;" //
+                + " BEGIN" //
+                + "   FOR i IN a..b LOOP" //
+                + "     RETURN NEXT i + 1;" //
+                + "   END LOOP;" //
+                + "   RETURN;" //
+                + " END; $$");
+        assertEquals("[2, 3, 4]",
+                queryIntList("SELECT * FROM plp_setof_scalar(1, 3) ORDER BY 1").toString());
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_setof_query() RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN QUERY SELECT id FROM plp_setof_t ORDER BY id; END; $$");
+        assertEquals("[1, 2, 3]",
+                queryIntList("SELECT * FROM plp_setof_query() ORDER BY 1").toString());
+
+        // 没有RETURN;时执行到函数结尾也返回已累积的行
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_setof_natural() RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN NEXT 1; RETURN NEXT 2; END; $$");
+        assertEquals("[1, 2]",
+                queryIntList("SELECT * FROM plp_setof_natural() ORDER BY 1").toString());
+    }
+
+    // 多个OUT参数组成一行结果集
+    @Test
+    public void testMultipleOutParameters() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_multi_out(i INT, OUT j INT, OUT k VARCHAR) AS $$"
+                + " BEGIN" //
+                + "   j := i + 1;" //
+                + "   k := 'foo';" //
+                + " END $$ LANGUAGE plpgsql");
+        try (java.sql.ResultSet result = stmt.executeQuery("SELECT * FROM plp_multi_out(42)")) {
+            assertTrue(result.next());
+            assertEquals(43, result.getInt(1));
+            assertEquals("foo", result.getString(2));
+            assertEquals("J", result.getMetaData().getColumnName(1));
+            assertEquals("K", result.getMetaData().getColumnName(2));
+            assertFalse(result.next());
+        }
+
+        // 显式RETURN;和自然结束等价
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_multi_out2(i INT, OUT j INT, OUT k INT) AS $$"
+                + " BEGIN j := i * 2; k := i * 3; RETURN; END $$ LANGUAGE plpgsql");
+        assertEquals("[4:6]", queryRowList("SELECT j, k FROM plp_multi_out2(2)").toString());
+    }
+
+    // 非SETOF函数用RETURN NEXT、SETOF函数用RETURN表达式都要报2F005
+    @Test
+    public void testInvalidReturnForms() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_bad_next() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN NEXT 1; RETURN 1; END; $$");
+        assertSqlState("2F005", "SELECT plp_bad_next()");
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_bad_setof_return() RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN 1; END; $$");
+        assertSqlState("2F005", "SELECT * FROM plp_bad_setof_return()");
+    }
+
+    // plpgsql的SETOF/TABLE函数要能通过SCRIPT重建
+    @Test
+    public void testSetofRoundTrip() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_rt_t");
+        executeUpdate("CREATE TABLE plp_rt_t(id INT PRIMARY KEY, name VARCHAR(20))");
+        executeUpdate("INSERT INTO plp_rt_t VALUES(1, 'a'), (2, 'b')");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_rt(p INT) RETURNS TABLE(id INT, name VARCHAR) LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN QUERY SELECT t.id, t.name FROM plp_rt_t t WHERE t.id >= p ORDER BY t.id; END; $$");
+        String createSql = getCreateSql("PLP_TABLE_RT");
+        assertNotNull(createSql);
+        assertTrue(createSql, createSql.contains("RETURNS TABLE"));
+        assertTrue(createSql, createSql.toLowerCase().contains("language plpgsql"));
+        executeUpdate("DROP FUNCTION plp_table_rt");
+        executeUpdate(createSql);
+        assertEquals("[2:b]", queryRowList("SELECT id, name FROM plp_table_rt(2)").toString());
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_setof_rt() RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN NEXT 1; RETURN NEXT 2; END; $$");
+        String setofSql = getCreateSql("PLP_SETOF_RT");
+        assertNotNull(setofSql);
+        assertTrue(setofSql, setofSql.contains("RETURNS SETOF INT"));
+        executeUpdate("DROP FUNCTION plp_setof_rt");
+        executeUpdate(setofSql);
+        assertEquals("[1, 2]",
+                queryIntList("SELECT * FROM plp_setof_rt() ORDER BY 1").toString());
+    }
+
+    // 标签和表名/别名同名时，label.column要回落到SQL解析
+    @Test
+    public void testLabelFallsBackToSql() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_label_alias_t");
+        executeUpdate("CREATE TABLE plp_label_alias_t(id INT)");
+        executeUpdate("INSERT INTO plp_label_alias_t VALUES(7)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_label_alias() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " <<plp_label_alias_t>>" //
+                + " DECLARE x INT;" //
+                + " BEGIN" //
+                + "   SELECT plp_label_alias_t.id INTO x FROM plp_label_alias_t;" //
+                + "   RETURN x;" //
+                + " END; $$");
+        executeQuery("SELECT plp_label_alias()");
+        assertEquals(7, getIntValue(1));
+    }
+
+    // RETURN QUERY和FOR循环也要按PG语义更新FOUND
+    @Test
+    public void testFoundAfterReturnQueryAndFor() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_found_q_t");
+        executeUpdate("CREATE TABLE plp_found_q_t(a INT)");
+        executeUpdate("INSERT INTO plp_found_q_t VALUES(1)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_found_return_query(p INT) RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   RETURN QUERY SELECT a FROM plp_found_q_t WHERE a = p;" //
+                + "   IF FOUND THEN RETURN NEXT 99; END IF;" //
+                + "   RETURN NEXT 1;" //
+                + " END; $$");
+        assertEquals("[1, 1, 99]",
+                queryIntList("SELECT * FROM plp_found_return_query(1) ORDER BY 1").toString());
+        assertEquals("[1]",
+                queryIntList("SELECT * FROM plp_found_return_query(2) ORDER BY 1").toString());
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_found_for(n INT) RETURNS BOOLEAN LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   FOR i IN 1..n LOOP" //
+                + "     PERFORM * FROM plp_found_q_t WHERE a = 9999;" //
+                + "   END LOOP;" //
+                + "   RETURN FOUND;" //
+                + " END; $$");
+        executeQuery("SELECT plp_found_for(1)");
+        assertTrue(getBooleanValue(1));
+        executeQuery("SELECT plp_found_for(0)");
+        assertFalse(getBooleanValue(1));
+    }
+
+    // ROW_COUNT是最近一条SQL命令的值，utility语句为0，INTO只算第一行
+    @Test
+    public void testRowCountRecentStatement() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_rc_t2");
+        executeUpdate("CREATE TABLE plp_rc_t2(a INT)");
+        executeUpdate("INSERT INTO plp_rc_t2 VALUES(1), (2), (3)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rc_utility() RETURNS BIGINT LANGUAGE plpgsql AS $$"
+                + " DECLARE n BIGINT;" //
+                + " BEGIN" //
+                + "   INSERT INTO plp_rc_t2 VALUES(4);" //
+                + "   CREATE TABLE IF NOT EXISTS plp_rc_tmp(a INT);" //
+                + "   GET DIAGNOSTICS n = ROW_COUNT;" //
+                + "   RETURN n;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rc_utility()");
+        assertEquals(0, getLongValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rc_into() RETURNS BIGINT LANGUAGE plpgsql AS $$"
+                + " DECLARE x INT; n BIGINT;" //
+                + " BEGIN" //
+                + "   SELECT a INTO x FROM plp_rc_t2;" //
+                + "   GET DIAGNOSTICS n = ROW_COUNT;" //
+                + "   RETURN n;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rc_into()");
+        assertEquals(1, getLongValue(1));
+    }
+
+    // GET DIAGNOSTICS ... = ROW_COUNT
+    @Test
+    public void testGetDiagnosticsRowCount() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_rc_t");
+        executeUpdate("CREATE TABLE plp_rc_t(a INT)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_row_count() RETURNS BIGINT LANGUAGE plpgsql AS $$"
+                + " DECLARE n BIGINT := 0;" //
+                + " BEGIN" //
+                + "   INSERT INTO plp_rc_t VALUES(1), (2), (3);" //
+                + "   GET DIAGNOSTICS n = ROW_COUNT;" //
+                + "   RETURN n;" //
+                + " END; $$");
+        executeQuery("SELECT plp_row_count()");
+        assertEquals(3, getLongValue(1));
+    }
+
+    private ArrayList<Integer> queryIntList(String sql) {
+        try (Statement s = conn.createStatement(); ResultSet result = s.executeQuery(sql)) {
+            ArrayList<Integer> list = new ArrayList<>();
+            while (result.next())
+                list.add(result.getInt(1));
+            return list;
+        } catch (SQLException e) {
+            throw DbException.convert(e);
+        }
+    }
+
+    private ArrayList<String> queryRowList(String sql) {
+        try (Statement s = conn.createStatement(); ResultSet result = s.executeQuery(sql)) {
+            ArrayList<String> list = new ArrayList<>();
+            while (result.next())
+                list.add(result.getInt(1) + ":" + result.getString(2));
+            return list;
+        } catch (SQLException e) {
+            throw DbException.convert(e);
+        }
     }
 
     private String getSqlState(String sql) throws Exception {

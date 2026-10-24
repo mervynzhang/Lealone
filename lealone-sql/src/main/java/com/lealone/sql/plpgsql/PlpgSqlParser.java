@@ -18,6 +18,7 @@ import com.lealone.sql.plpgsql.PlpgSqlAst.Continue;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Declaration;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Exit;
 import com.lealone.sql.plpgsql.PlpgSqlAst.For;
+import com.lealone.sql.plpgsql.PlpgSqlAst.GetDiagnostics;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Handler;
 import com.lealone.sql.plpgsql.PlpgSqlAst.If;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Loop;
@@ -39,7 +40,7 @@ import com.lealone.sql.plpgsql.PlpgSqlLexer.TokenType;
 public class PlpgSqlParser {
 
     private static final List<String> UNSUPPORTED_STATEMENTS = Arrays.asList("CASE", "EXECUTE",
-            "FOREACH", "GET", "ASSERT", "OPEN", "FETCH", "CLOSE", "COMMIT", "ROLLBACK",
+            "FOREACH", "ASSERT", "OPEN", "FETCH", "CLOSE", "COMMIT", "ROLLBACK",
             "SAVEPOINT", "RELEASE", "START");
 
     private final String source;
@@ -241,6 +242,8 @@ public class PlpgSqlParser {
             return parseRaise();
         if (isKeyword("PERFORM"))
             return parsePerform();
+        if (isKeyword("GET"))
+            return parseGetDiagnostics();
         if (isKeyword("NULL")) {
             next();
             expectOp(";");
@@ -249,7 +252,7 @@ public class PlpgSqlParser {
         if (t.type == TokenType.IDENTIFIER && !t.quoted && isUnsupportedStatement(t.text))
             throw unsupported("PL/pgSQL statement: " + t.text);
         // 标识符后面跟赋值符号就是赋值语句，否则按内嵌SQL处理
-        if (t.type == TokenType.IDENTIFIER && isAssignmentOperator(tokenAt(pos + 1)))
+        if (t.type == TokenType.IDENTIFIER && isAssignmentStart())
             return parseAssignment();
         return parseSqlStatement();
     }
@@ -266,9 +269,25 @@ public class PlpgSqlParser {
         return t.type == TokenType.OPERATOR && (":=".equals(t.text) || "=".equals(t.text));
     }
 
+    // 简单变量赋值或块标签限定赋值 outerblock.param1 := ...
+    private boolean isAssignmentStart() {
+        if (isAssignmentOperator(tokenAt(pos + 1)))
+            return true;
+        Token dot = tokenAt(pos + 1);
+        return dot.type == TokenType.OPERATOR && ".".equals(dot.text)
+                && tokenAt(pos + 2).type == TokenType.IDENTIFIER
+                && isAssignmentOperator(tokenAt(pos + 3));
+    }
+
     private Assignment parseAssignment() {
         Token target = expectIdentifier();
         Assignment assignment = new Assignment(target.start);
+        if (isOp(".")) {
+            next();
+            assignment.qualifier = target.value;
+            assignment.qualifierQuoted = target.quoted;
+            target = expectIdentifier();
+        }
         assignment.target = target.value;
         assignment.targetQuoted = target.quoted;
         if (!isAssignmentOperator(current()))
@@ -411,13 +430,47 @@ public class PlpgSqlParser {
     private Return parseReturn() {
         Return node = new Return(current().start);
         expectKeyword("RETURN");
+        if (isKeyword("NEXT")) {
+            node.next = true;
+            next();
+            if (isOp(";")) {
+                next();
+                return node;
+            }
+            node.expression = captureExpression(new String[0], new String[] { ";" });
+            expectOp(";");
+            return node;
+        }
+        if (isKeyword("QUERY")) {
+            node.query = true;
+            next();
+            node.expression = captureExpression(new String[0], new String[] { ";" });
+            expectOp(";");
+            return node;
+        }
         if (isOp(";")) {
             next();
             return node;
         }
-        if (isKeyword("NEXT") || isKeyword("QUERY"))
-            throw unsupported("RETURN " + current().text);
         node.expression = captureExpression(new String[0], new String[] { ";" });
+        expectOp(";");
+        return node;
+    }
+
+    private GetDiagnostics parseGetDiagnostics() {
+        GetDiagnostics node = new GetDiagnostics(current().start);
+        expectKeyword("GET");
+        expectKeyword("DIAGNOSTICS");
+        Token target = expectIdentifier();
+        node.target = target.value;
+        node.targetQuoted = target.quoted;
+        if (!isOp("=") && !isOp(":="))
+            throw syntaxError(current(), "expected = in GET DIAGNOSTICS");
+        next();
+        Token item = expectIdentifier();
+        node.item = item.value.toUpperCase();
+        if (isOp(","))
+            throw unsupported("GET DIAGNOSTICS with multiple items");
         expectOp(";");
         return node;
     }
