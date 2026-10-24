@@ -63,3 +63,9 @@ file	random/select/slt_good_107.test	0	0
 file	random/select/slt_good_108.test	0	0
 file	random/select/slt_good_109.test	0	0
 file	random/select/slt_good_10.test	0	0
+file	random/expr/slt_good_25.test	0	0
+file	random/expr/slt_good_26.test	0	0
+file	random/expr/slt_good_31.test	0	0
+file	random/expr/slt_good_33.test	0	0
+file	random/expr/slt_good_35.test	0	0
+file	random/expr/slt_good_36.test	0	0
