@@ -228,7 +228,8 @@ public class FunctionOverloadTest extends SqlTestBase {
 
         // 回放到一个新库
         String dir = newTestDir("overload_replay");
-        String url = "jdbc:lealone:embed:" + dir + "/db1;user=root;password=";
+        String url = "jdbc:lealone:embed:" + dir + "/" + dir.substring(dir.lastIndexOf('/') + 1)
+                + ";user=root;password=";
         try (Connection conn2 = DriverManager.getConnection(url)) {
             try (Statement s = conn2.createStatement()) {
                 for (String line : script.toString().split("\n")) {
@@ -251,7 +252,8 @@ public class FunctionOverloadTest extends SqlTestBase {
     @Test
     public void testOverloadsSurviveRestart() throws Exception {
         String dir = newTestDir("overload_restart");
-        String url = "jdbc:lealone:embed:" + dir + "/db1;user=root;password=";
+        String url = "jdbc:lealone:embed:" + dir + "/" + dir.substring(dir.lastIndexOf('/') + 1)
+                + ";user=root;password=";
         try (Connection conn2 = DriverManager.getConnection(url)) {
             try (Statement s = conn2.createStatement()) {
                 s.executeUpdate("CREATE FUNCTION fr(a INT) RETURNS INT AS $$ SELECT a + 1 $$");
