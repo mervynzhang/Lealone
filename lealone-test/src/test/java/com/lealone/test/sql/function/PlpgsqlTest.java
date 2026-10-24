@@ -632,6 +632,21 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals("[1:x, 2:y]",
                 queryRowList("SELECT id, name FROM plp_table_next() ORDER BY id").toString());
 
+        // 单列表可以用表达式，多列可以用record变量
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_one() RETURNS TABLE(id INT) LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN NEXT 5; RETURN NEXT 6; END; $$");
+        assertEquals("[5, 6]",
+                queryIntList("SELECT * FROM plp_table_one() ORDER BY 1").toString());
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_record(p INT) RETURNS TABLE(id INT, name VARCHAR) LANGUAGE plpgsql AS $$"
+                + " DECLARE r record;" //
+                + " BEGIN" //
+                + "   SELECT * INTO r FROM plp_setof_t t WHERE t.id = p;" //
+                + "   RETURN NEXT r;" //
+                + " END; $$");
+        assertEquals("[2:b]",
+                queryRowList("SELECT id, name FROM plp_table_record(2)").toString());
+
         // 声明了TABLE列但一行也没返回时是空结果集
         executeUpdate("CREATE OR REPLACE FUNCTION plp_table_empty() RETURNS TABLE(id INT) LANGUAGE plpgsql AS $$"
                 + " BEGIN RETURN; END; $$");
