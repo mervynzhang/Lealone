@@ -6,10 +6,13 @@
 package com.lealone.db.index;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.common.logging.Logger;
+import com.lealone.common.logging.LoggerFactory;
 import com.lealone.db.Database;
 import com.lealone.db.DbObjectType;
 import com.lealone.db.async.AsyncPeriodicTask;
@@ -30,6 +33,8 @@ import com.lealone.transaction.Transaction;
 
 public class IndexOperator implements Runnable, SchedulerTaskManager {
 
+    private static final Logger logger = LoggerFactory.getLogger(IndexOperator.class);
+
     private final InternalScheduler scheduler;
     private final StandardTable table;
     private final Index index;
@@ -38,7 +43,9 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
     private final AsyncPeriodicTask task;
 
     private final LinkableList<IndexOperation>[] pendingIosArray;
+    private final boolean[] taskManagerAdded;
     private final AtomicLong indexOperationSize = new AtomicLong(0);
+    private final AtomicBoolean indexOperationErrorLogged = new AtomicBoolean(false);
     private final DbObjectLock lock = new DbObjectLock(DbObjectType.INDEX);
 
     @SuppressWarnings("unchecked")
@@ -53,6 +60,7 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
         task = new AsyncPeriodicTask(0, 100, this);
         scheduler.addPeriodicTask(task);
         pendingIosArray = new LinkableList[scheduler.getSchedulerFactory().getSchedulerCount()];
+        taskManagerAdded = new boolean[pendingIosArray.length];
     }
 
     public boolean hasPendingIndexOperation() {
@@ -133,16 +141,25 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
     private void addIndexOperation(InternalScheduler currentScheduler, IndexOperation io) {
         // 加索引操作的线程(客户端线程或调度线程)可能跟gcCompletedTasks所在的调度线程不同，
         // 不加锁时LinkableList会被并发修改，索引操作会丢失
+        int schedulerId = currentScheduler.getId();
+        boolean needAddTaskManager = false;
         synchronized (pendingIosArray) {
-            LinkableList<IndexOperation> pendingIos = pendingIosArray[currentScheduler.getId()];
+            LinkableList<IndexOperation> pendingIos = pendingIosArray[schedulerId];
             if (pendingIos == null) {
                 pendingIos = new LinkableList<>();
-                pendingIosArray[currentScheduler.getId()] = pendingIos;
-                currentScheduler.addTaskManager(this);
+                pendingIosArray[schedulerId] = pendingIos;
+            }
+            if (!taskManagerAdded[schedulerId]) {
+                taskManagerAdded[schedulerId] = true;
+                needAddTaskManager = true;
             }
             pendingIos.add(io);
         }
         indexOperationSize.incrementAndGet();
+        // 不能持pendingIosArray的锁去注册task manager，scheduler的taskManagers链表有自己的锁，
+        // 反过来scheduler执行gcCompletedTasks时也会用pendingIosArray的锁
+        if (needAddTaskManager)
+            currentScheduler.addTaskManager(this);
 
         // 调用wakeUp会降低一点点性能
         // if (currentScheduler != scheduler)
@@ -157,6 +174,7 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
                 return true;
             else if (pendingIos.isEmpty()) {
                 pendingIosArray[scheduler.getId()] = null;
+                taskManagerAdded[scheduler.getId()] = false;
                 return true;
             }
             IndexOperation io = pendingIos.getHead();
@@ -168,6 +186,7 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
             if (pendingIos.getHead() == null) {
                 pendingIos.setTail(null);
                 pendingIosArray[scheduler.getId()] = null;
+                taskManagerAdded[scheduler.getId()] = false;
                 return true;
             }
             return false;
@@ -177,8 +196,12 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
     private void cancelTask() {
         task.cancel();
         scheduler.removePeriodicTask(task);
-        for (int i = 0; i < pendingIosArray.length; i++)
-            pendingIosArray[i] = null;
+        synchronized (pendingIosArray) {
+            for (int i = 0; i < pendingIosArray.length; i++) {
+                pendingIosArray[i] = null;
+                taskManagerAdded[i] = false;
+            }
+        }
         indexOperationSize.set(0);
     }
 
@@ -247,6 +270,14 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
                     run(io);
                     int i = index.get();
                     lastIos[i] = io;
+                    // 索引项的写入是异步的页操作：先结束本批次，让调度线程执行完这些页操作，
+                    // 否则同一个索引的下一个操作读不到上一个操作刚写入的索引项，旧索引项会残留
+                    if (scheduler.hasPendingPageOperations()) {
+                        schedulers[i].wakeUp();
+                        task.resetLast(); // 让周期任务马上执行，不用等下一次100ms周期
+                        scheduler.wakeUp();
+                        return;
+                    }
                     while (true) {
                         io = io.getNext();
                         if (io == null) {
@@ -345,6 +376,10 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
         } catch (Exception e) {
             if (table.isInvalid()) {
                 cancelTask();
+            } else if (indexOperationErrorLogged.compareAndSet(false, true)) {
+                logger.warn("Failed to run index operation: " + table.getName() + " "
+                        + index.getName() + " " + io.getClass().getSimpleName() + " rowKey="
+                        + io.rowKey, e);
             }
         } finally {
             io.setCompleted(true);
@@ -357,7 +392,9 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
     }
 
     public static void addIndexOperation(ServerSession session, StandardTable table, IndexOperation io) {
-        if (io.rowKey == 0)
+        // 0是合法的rowKey，只有AIO在自增主键场景下rowKey要等主键写成功才确定，才需要用lastIdentity回填；
+        // UIO/RIO的rowKey一定有效，用lastIdentity覆盖会把索引操作当成别的行的
+        if (io instanceof AIO && io.rowKey == 0)
             io.rowKey = session.getLastIdentity();
         // 同一个row key的索引操作必须由同一个调度器按顺序执行，否则并发更新同一个索引key时会丢更新
         InternalScheduler target = getSchedulerByRowKey(session.getScheduler(), io.rowKey);
