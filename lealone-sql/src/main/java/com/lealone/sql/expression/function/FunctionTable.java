@@ -72,6 +72,24 @@ public class FunctionTable extends Table {
         return TableType.FUNCTION_TABLE;
     }
 
+    // 派生表支持列别名列表，如 (VALUES(1, 2), (3, 4)) t(a, b)，用它重命名函数的输出列
+    public void setColumnAliases(String[] columnAliases) {
+        Column[] oldColumns = getColumns();
+        if (columnAliases.length > oldColumns.length) {
+            throw DbException.get(ErrorCode.COLUMN_COUNT_DOES_NOT_MATCH);
+        }
+        Column[] newColumns = new Column[oldColumns.length];
+        for (int i = 0; i < oldColumns.length; i++) {
+            Column c = oldColumns[i];
+            if (i < columnAliases.length) {
+                c = new Column(columnAliases[i], c.getType(), c.getPrecision(), c.getScale(),
+                        c.getDisplaySize());
+            }
+            newColumns[i] = c;
+        }
+        setColumns(newColumns);
+    }
+
     @Override
     public Index getScanIndex(ServerSession session) {
         return new FunctionIndex(this, IndexColumn.wrap(columns));
