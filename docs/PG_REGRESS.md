@@ -55,9 +55,10 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
     -Dtest=PgRegressTest -Dpg.srcdir=/home/jovyan/data/work/postgres/src/test/regress/sql
 ```
 
-**默认门禁**：类名是 `PgRegressTest`，`surefire` 默认就会跑；整轮实测 0.33~0.40 秒（远低于 60 秒的
+**默认门禁**：类名是 `PgRegressTest`，`surefire` 默认就会跑；整轮实测 0.33~0.44 秒（远低于 60 秒的
 门槛），所以既没有 `@Ignore`，也没有在 `pom.xml` 里排除。它只在 `target/test-data/pgregress/`
-下建临时库，跑完自己删掉，不会和别的测试抢数据。
+下建库（每轮开始时先清空该目录），不和别的测试抢数据；跑完把库留在 `target` 下
+（`target` 不入库，门禁前的 `rm -rf lealone-test/target/test-data` 会一并清掉）。
 
 可选系统属性：`-Dpg.dir=<脚本目录>`、`-Dpg.skip=<清单文件>`、`-Dpg.srcdir=<PG sql 目录>`。
 

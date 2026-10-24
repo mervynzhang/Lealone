@@ -40,7 +40,7 @@ public class PgRegressTest {
 
     private static final String RESOURCE_DIR = "pg";
     private static final String SOURCE_DIR = "src/test/resources/pg";
-    // 本套件专用的库目录，跑完整个删掉，不污染 target/test-data 下的其它测试
+    // 本套件专用的库目录，每轮开始先清掉，不和 target/test-data 下的其它测试共用
     private static final String BASE_DIR = "." + File.separator + "target" + File.separator
             + "test-data" + File.separator + "pgregress";
 
@@ -68,7 +68,7 @@ public class PgRegressTest {
         File baseDir = new File(BASE_DIR).getAbsoluteFile();
         if (baseDir.isDirectory())
             FileUtils.deleteRecursive(baseDir.getAbsolutePath(), false);
-        // 每个脚本文件一个持久化库，放在本套件专用的目录里
+        // 每个脚本文件一个持久化库，放在本套件专用的目录里(下一轮开始时先清掉)
         System.setProperty(baseDirKey, baseDir.getPath());
         long start = System.currentTimeMillis();
         PgRegressRunner runner;
@@ -85,7 +85,8 @@ public class PgRegressTest {
                 System.clearProperty(baseDirKey);
             else
                 System.setProperty(baseDirKey, oldBaseDir);
-            FileUtils.deleteRecursive(baseDir.getAbsolutePath(), false);
+            // 库目录不在结束时删: 连接关掉后后台还有 save 线程在收尾, 立刻删文件会打印
+            // "Failed to execute save" 的无害噪音; 下一轮开始时统一清掉, target 目录本来就不入库
         }
         long cost = System.currentTimeMillis() - start;
 
