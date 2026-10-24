@@ -5,7 +5,9 @@
 `lealone-test/src/test/resources/pg/skip-list.txt` 一起，既是测试套件的说明书，也是
 "Lealone 离 PG 还有多远"的度量尺。
 
-- 当前基线：`feature/stored-routines`（`5a25375b5`，SQL 函数 6 个缺陷修复 + PL/pgSQL 第二轮语义补齐：
+- 当前基线：`feature/stored-routines`（`de8f6ee22`；`wip/g2` 工作线在此之上补了 4 个缺口：
+  标量函数进 `FROM`、多 OUT 的 record 调用、`least()/greatest()`、`WITH ORDINALITY`）
+- 上一版基线：`5a25375b5`（SQL 函数 6 个缺陷修复 + PL/pgSQL 第二轮语义补齐：
   FOUND/GET DIAGNOSTICS、裸 RETURN、多 OUT、RETURN NEXT/QUERY、RETURNS TABLE、record/%ROWTYPE、
   块标签限定名、WITH 函数体、CALL 结果集）
 - 上一轮基线：`b388d91b3`（89 用例 / 45 执行 / 53 skip / 101 语句），对比见第六节
@@ -31,7 +33,7 @@ lealone-test/src/test/java/com/lealone/test/pg/
     PgSkipList.java         skip 清单解析、清单与脚本对账、PG 语句计数
 lealone-test/src/test/resources/pg/
     README.md               脚本格式、清单格式、怎么打开被 skip 的用例
-    skip-list.txt           skip/known-fail 清单（60 条，本套件最重要的交付物之一）
+    skip-list.txt           skip/known-fail 清单（49 条，本套件最重要的交付物之一）
     create_function_sql.sql 由 PG create_function_sql.sql 转换（40 个用例）
     create_procedure.sql    由 PG create_procedure.sql 转换（22 个用例）
     plpgsql.sql             由 PG plpgsql.sql 抽样转换（18 个用例）
@@ -70,14 +72,14 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ```
 [pgregress]   create_function_sql.sql  用例 40(执行 15, skip 25)  脚本语句  50(通过  50, 失败 0)  被skip用例占  90 条
 [pgregress]   create_procedure.sql     用例 22(执行  8, skip 14)  脚本语句  26(通过  26, 失败 0)  被skip用例占  61 条
-[pgregress]   plpgsql.sql              用例 23(执行 16, skip  7)  脚本语句  45(通过  45, 失败 0)  被skip用例占  17 条
-[pgregress]   rangefuncs.sql           用例  9(执行  6, skip  3)  脚本语句  21(通过  21, 失败 0)  被skip用例占   9 条
-[pgregress] 合计: 用例 94 (执行 45, skip 49), 脚本语句 142 (通过 142, 失败 0), 耗时 506ms
-[pgregress] skip 清单: 49 条用例, 点名跳过的 PG 语句 278 条
+[pgregress]   plpgsql.sql              用例 23(执行 16, skip  7)  脚本语句  48(通过  48, 失败 0)  被skip用例占  17 条
+[pgregress]   rangefuncs.sql           用例 10(执行  7, skip  3)  脚本语句  27(通过  27, 失败 0)  被skip用例占  12 条
+[pgregress] 合计: 用例 95 (执行 46, skip 49), 脚本语句 151 (通过 151, 失败 0), 耗时 465ms
+[pgregress] skip 清单: 49 条用例, 点名跳过的 PG 语句 275 条
 [pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 150 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  84 条在 skip 清单里
 [pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 23 条)
-[pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 21 条)
+[pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 18 条)
 ```
 
 口径说明：
@@ -88,7 +90,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 49 条 / 278 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 49 条 / 275 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -130,11 +132,25 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | DML 的 INSERT/UPDATE ... RETURNING ... INTO record 不支持(Lealone 引擎没有 DML RETURNING), record 变量本身可用 | 1 | 2 | plpgsql.record |
 | RETURNS RECORD 复合返回类型不支持, 且 leaker_1 用 (f(x)).field 取复合返回值的字段 | 1 | 6 | plpgsql.out_params_exception |
 | Lealone 无 SETOF <表行类型>, 也不支持 $1 位置参数 | 1 | 5 | rangefuncs.setof_composite |
-| WITH ORDINALITY 报 42000 语法错, 且没有 unnest()/generate_series() | 1 | 8 | rangefuncs.with_ordinality |
+| 没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持) | 1 | 5 | rangefuncs.with_ordinality_unnest |
 | Lealone 函数体只允许单条查询, 不支持 INSERT ... RETURNING | 1 | 8 | rangefuncs.insert_returning |
 | RETURNS SETOF <表行类型> 不支持(只支持标量 setof 与 RETURNS TABLE) | 1 | 4 | plpgsql.setof_composite_record |
 
 ## 六、这一轮刷新：解锁了什么
+
+### 本轮（`wip/g2`）：4 个 PG 缺口
+
+| 缺口 | 实现 | 回归脚本变化 |
+| --- | --- | --- |
+| 标量函数进 `FROM` | `FunctionTable` 接受非结果集函数，一行一列、列名用函数名 | `plpgsql.out_assign`/`inout_return` 恢复 PG 原样的 `SELECT * FROM f1(42)` |
+| 多 OUT 的 record 调用 | 值上下文返回 `ValueArray`（`(43, foo)`），`FROM` 里仍展开成多列 | `plpgsql.multi_out` 增加 `SELECT f1(42)` |
+| `least()/greatest()` | 复用 `SystemFunction` 里已有的实现（忽略 NULL、公共类型归并） | `procedure.collation` 恢复 `least('a','b')` |
+| `WITH ORDINALITY` | 函数表追加 `BIGINT` 行号列 | `rangefuncs.with_ordinality` 解锁；`unnest()` 部分拆成 skip 用例 |
+
+执行用例 45 → 46，脚本语句 142 → 151，skip 清单仍是 49 条（`rangefuncs.with_ordinality` 解锁、
+新增 1 条 `rangefuncs.with_ordinality_unnest`）。单元测试见 `PgFunctionFromTest`、`LeastGreatestTest`。
+
+### 上一轮（`b388d91b3` → `5a25375b5`）
 
 基线从 `b388d91b3` 到 `5a25375b5`，SQL 函数修了 6 个缺陷、PL/pgSQL 补齐了 FOUND/OUT/SETOF 等语义。
 逐条核对后删掉 7 行 skip（`function_sql.setof`、`procedure.collation`、`plpgsql.found`、`plpgsql.perform`、
@@ -179,41 +195,19 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 
 ## 七、剩余缺口与缺陷（都已实测复现）
 
-### N1. 标量函数不能出现在 `FROM` 子句里
+### N1-N4 已在本轮补齐（保留编号，便于对照旧版）
 
-```sql
-create function f1(i int, out j int) returns int as $$ begin return i + 1; end $$ language plpgsql;
-select * from f1(42);   -- 90000 Function "F1" must return a result set
-```
+这四条是上一版文档里列的缺口，`wip/g2` 工作线已经补上，PG 回归里对应的断言也恢复成 PG 原样：
 
-PG 对任何函数都允许 `FROM f(...)`（单行结果集），Lealone 只允许 setof/TABLE/多 OUT 的函数。
-`plpgsql.out_assign`、`plpgsql.inout_return` 因此只断言 `SELECT f(42)`（PG 原文里还有 `SELECT * FROM f1(42)`）。
+| 编号 | 原缺口 | 现在的行为 | 验收用例 |
+| --- | --- | --- | --- |
+| N1 | 标量函数不能出现在 `FROM` 里（90000） | 任何函数都能当表函数；标量函数是一行一列，列名用函数名，NULL 也有一行 | `plpgsql.out_assign`、`plpgsql.inout_return` 里恢复了 `SELECT * FROM f1(42)`；`PgFunctionFromTest` |
+| N2 | 多 OUT 函数的 `SELECT f(1)` 报 50000 | 返回 record，`getString()` 是 `(43, foo)`；`SELECT * FROM f(1)` 仍是一行多列 | `plpgsql.multi_out` 增加了 `SELECT f1(42)` 的断言；`PgFunctionFromTest` |
+| N3 | `least()`/`greatest()` 报 42122 | 按 PG 语义实现（忽略 NULL、全 NULL 才返回 NULL、按公共类型归并）；`procedure.collation` 改回 `least('a','b')` | `procedure.collation`；`LeastGreatestTest` |
+| N4 | `WITH ORDINALITY` 报 42000 | 函数表后面可以跟 `WITH ORDINALITY`，追加从 1 开始的 `BIGINT` 行号列；`unnest()`/`generate_series()` 仍然没有 | `rangefuncs.with_ordinality` 解锁（`rangefuncs.with_ordinality_unnest` 继续 skip）；`PgFunctionFromTest` |
 
-### N2. 多 OUT 函数的标量调用拿不到 record
-
-```sql
-create function f1(i int, out j int, out k text) as ... language plpgsql;
-select f1(42);   -- 50000
-```
-
-PG 返回 `(43,foo)`。Lealone 必须写 `SELECT * FROM f1(42)`。用例 `plpgsql.multi_out`。
-
-### N3. 没有 `least()` / `greatest()`
-
-```sql
-select least('a','b');   -- 42122 Column not found
-```
-
-PG 的 `create_procedure.sql:164-170` 用 `least('a','b')` 调过程，这里只能直接传它的结果 `'a'`。
-用例 `procedure.collation`。
-
-### N4. `WITH ORDINALITY` 不支持
-
-```sql
-select * from rngfunct(1) with ordinality as z(a,b,ord);   -- 42000 Syntax error
-```
-
-用例 `rangefuncs.with_ordinality`（这一段同时还依赖 `unnest()`/`generate_series()`）。
+仍然做不到的近亲能力：`(f(1)).field` 取 record 字段、`RETURNS RECORD`/复合类型、`ROWS FROM(...)`
+（多个函数合并成一个表函数）。
 
 ### N5. 过程体的 `BEGIN ATOMIC` 到 `CALL` 时才报错
 
@@ -256,8 +250,8 @@ call pe();                                     -- 42000 Syntax error "BEGIN ATOM
    `RETURN NEXT`/`RETURN QUERY`/`RETURNS TABLE`、`GET DIAGNOSTICS ROW_COUNT`、块标签限定名、函数内 DML；
    触发器、游标、多态参数、`RECORD` + DML `RETURNING`、`RETURNS RECORD`、`EXECUTE`、`CASE` 语句、
    `ASSERT` 的段落仍然 skip 或没抽样。**剩下几百条语句没有逐条登记**，这是本套件目前最大的透明性缺口。
-3. **`rangefuncs.sql`（827 行 / 428 条语句）也只抽样**：转过来 9 个用例（执行 6 个），
-   依赖 `WITH ORDINALITY`、`unnest()`、`generate_series()`、`SETOF <表行类型>` 的段落 skip 或没抽。
+3. **`rangefuncs.sql`（827 行 / 428 条语句）也只抽样**：转过来 10 个用例（执行 7 个），
+   依赖 `unnest()`、`generate_series()`、`SETOF <表行类型>` 的段落 skip 或没抽；`WITH ORDINALITY` 已解锁。
 4. **`portals.sql`**：按要求没纳入（游标/portal 语义，不是函数/过程定义）。
 5. 没转换的 PG 断言：`EXPLAIN` 计划、`\df` 等 psql 元命令、`pg_proc` / `information_schema` 目录查询、
    `GRANT/REVOKE/SET ROLE` 权限、`ALTER FUNCTION/PROCEDURE/ROUTINE`——都随用例一起 skip，
@@ -292,16 +286,14 @@ call pe();                                     -- 42000 Syntax error "BEGIN ATOM
 
 1. **打开用例**：从 `skip-list.txt` 删掉 id → 按 `pg/README.md` 把 `-- PG 期望` 改成 `>` 断言 →
    跑 `-Dtest=PgRegressTest`，红了就说明还没对齐。
-2. **建议新增的用例**（这轮发现、还没登记的缺陷）：
-   * N1 标量函数出现在 `FROM` 里 → 等支持后把 `SELECT * FROM f1(42)` 加回 `plpgsql.out_assign`/`inout_return`；
-   * N2 多 OUT 标量调用 → 等支持后把 `SELECT f1(42)` 加回 `plpgsql.multi_out`；
-   * N3 `least()/greatest()` → 等支持后把 `procedure.collation` 改回 PG 原样的 `least('a','b')`。
+2. **建议新增的用例**（这轮发现、还没登记的缺陷）：见上面"仍然不支持的"清单，
+   下一步优先 `RETURNS RECORD`/复合字段访问和 `ROWS FROM(...)`。
 3. **还能解锁的几格**（谁做完谁就能清空对应清单行）：
    * 触发器 → `plpgsql.trigger_*` 2 条；
    * DML `RETURNING` → `plpgsql.record` 1 条（record 本身已可用）；
    * `RETURNS RECORD`/复合字段 → `plpgsql.out_params_exception` 1 条；
    * `RETURNS SETOF <表行类型>` → `plpgsql.setof_composite_record`、`rangefuncs.setof_composite` 2 条；
    * 过程级 OUT/INOUT → `procedure.inout_params`、`procedure.out_params` 2 条；
-   * 游标 → `plpgsql.cursor` 1 条；`WITH ORDINALITY` → `rangefuncs.with_ordinality` 1 条。
+   * 游标 → `plpgsql.cursor` 1 条；`unnest()`/`generate_series()` → `rangefuncs.with_ordinality_unnest` 1 条。
 4. **补齐 PG 覆盖面**：`plpgsql.sql` 按段登记（尤其是游标、`RETURN QUERY EXECUTE`、`CASE` 语句）；
-   `rangefuncs.sql` 里 `WITH ORDINALITY` 落地后再补；`portals.sql` 如果以后支持游标再纳入。
+   `rangefuncs.sql` 里 `unnest()`/`generate_series()` 落地后再补；`portals.sql` 如果以后支持游标再纳入。
