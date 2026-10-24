@@ -84,6 +84,7 @@
 | 35 | JDBC 客户端的 trace 文件按默认相对路径 `trace.db/` 写到**模块目录**（`lealone-test/trace.db/TraceTestDB.*.trace.db`），在源码树里留下未跟踪残留 | 在 `lealone-test/pom.xml` 的 surefire 配置里把 `client.trace.directory` 指到 `${project.build.directory}/test-data/trace.db`（该目录已被测试启动时的自动清理覆盖） | 修复前跑 `TraceTest` 会在 `lealone-test/trace.db/` 留下 `TraceTestDB.*.trace.db`；修复后同一用例的 trace 落在 `target/test-data/` 下，模块目录干净、`git status` 无残留。补充：`TestBase` 的静态初始化本来也会设置 `client.trace.directory`，所以这条更像"双保险"，残留也可能来自手工探针进程（用仓库根当 CWD） | 已修复 |
 | 50 | **事务里 `TRUNCATE` 会让会话进入不一致状态并静默丢数据（P0）**：`TRUNCATE` 直接 `map.clear()` 清空底层存储（不进 undo log），没法回滚；而它在未提交事务里执行后，实测 `TRUNCATE → INSERT → ROLLBACK` 之后的**后续 INSERT 会被静默丢掉**（1 行数据还在，再插的行不生效，重新打开库也一样）——用户的写入无声消失 | `TruncateTable.update()` 在 `!session.isAutoCommit()` 时抛错（信息里说明"不可回滚，请先提交/回滚，或用 DELETE FROM"）；自动提交下行为不变 | 新增 `TruncateNotRollbackableTest`：事务内 TRUNCATE 必须报错、报错后数据完好（2 行）、之后插入与回滚仍正常、自动提交下 TRUNCATE 正常生效；回退修复后第一个断言就失败（`事务里执行 TRUNCATE 必须报错`）。另附：试过"把 TRUNCATE 声明成 DDL（让其隐式提交）"，实测会让**同事务的 DML 也被提交**且后续回滚行为错乱，已回退 | 已修复 |
 | 47 | SLT 门禁的**失败签名用截断到 500 字符的 SQL** 生成 —— 两条"前 500 字符相同、只有末尾不同"的失败会算出同一个签名，门禁把新增失败当成已登记而放行（假绿） | `Failure` 增加 `sqlFull`（不截断）专用于签名，`sql` 仍截断用于显示；门禁比较、baseline 渲染都不受影响 | 新增 `SltFailureKeyTest`：构造两条只有末尾不同的 600+ 字符 SQL，签名必须不同、同一 SQL 签名必须稳定、显示字段仍然截断；把签名改回截断版本后该用例失败（`只有末尾不同的两条失败不能算出同一个签名`），带修复通过；SLT 门禁仍 PASS（20.8 万条） | 已修复 |
+| 54 | **关连接时等待调度器执行任务没有超时，会永久阻塞**（`ClientSession.execute` 里的 `latch.await()`）：实测偶发情况下客户端调度线程全停在 `NioEventLoop.select`、任务队列不推进，`JdbcPreparedStatementTest` 的 `tearDown` 关连接时因此挂满 300 秒 | 新增 `ClientSession.awaitOrThrow(latch, timeoutMs, operation)`：超时抛 `DbException`（信息里带操作名和超时值），`execute` 里改用 10 秒上限；关连接宁可失败也不永久挂住 | 新增 `ClientSessionAwaitTest`：已 countDown 的 latch 立即返回；永不 countDown 的 latch 在 200ms 内抛 `DbException` 且信息含操作名与超时值。**红对照**：把 `awaitOrThrow` 改回无超时的 `latch.await()` 后，该用例直接挂死（`mvn` 被外壳 90 秒超时杀掉，exit=124） | 已修复 |
 | 53 | **客户端用例偶发挂死时只有"超时 300 秒"一句话，没有任何定位信息**（`JdbcConnectionTest` 在本项目里已偶发出现两次，每次都只能重跑碰运气；`Timeout` 规则不转储线程栈） | 新增 `DiagnosticTimeout` 规则（语义与 `Timeout` 相同，超时时把**全部线程栈**打到标准输出再抛原异常），`ClientTestBase` 改用它 | 新增 `DiagnosticTimeoutTest`：用 1 秒超时包住一个睡 5 秒的语句，断言(1)异常照常抛出且仍是 `TestTimedOutException`、(2)输出里有用例名标记、(3)有线程栈内容、(4)有结束标记；实测输出含 `==== 用例超时线程栈: ... ====` 与全部线程栈。全量套件见批次末尾 | 已修复（可诊断性） |
 | 49 | 精选集扩到 39 个文件后，`random/expr`（约 1 万条/文件，专门覆盖常量折叠与聚合表达式）仍有大量文件没被门禁覆盖 | 又挑出 6 个**实测 0 失败**的 `random/expr/slt_good_{25,26,31,33,35,36}.test` 加入门禁，覆盖提升到 **45 个文件 / 37.6 万条查询 / 11 秒**；`baseline.txt` 与 README 同步更新 | 门禁 `TOTAL 376388 / 376374 通过 / 14 失败 / 2 允许 / 12→12 → +0 PASS`，单次 11 秒；全量套件见批次末尾。另：本轮把 `slt_good_{20,23,27,28}` 的 5 条 `exception` 逐条查过，**全部是 "Division by zero"**（SQLite 返回 NULL 的方言差异），没有新缺陷 | 已修复 |
 | 48 | SLT 门禁的精选集只有 27 个文件（20.8 万条），`random/select/*` 这类"多表 + 复杂 WHERE/GROUP BY"的组合完全没被覆盖 —— 上一轮 `GROUP BY` 别名缺陷正是靠临时扩语料才发现的，说明覆盖面不够是实质风险 | 精选集扩到 **39 个文件**：加入 12 个 `random/select/*`（实测 109,187 条查询 0 失败），门禁覆盖从 20.8 万条提升到 **31.6 万条**，耗时 9s→11s；`baseline.txt` 重新生成（39 file 行 + 12 fail 行，失败签名与原来一致）；README 的规模数据同步更新 | 门禁 `TOTAL 316388 / 316374 通过 / 14 失败 / 2 允许 / 12→12 已登记` → `+0 PASS`；耗时 11 秒；全量套件见批次末尾 | 已修复 |
@@ -111,7 +112,7 @@
 
 | 项 | 观察 |
 |---|---|
-| `JdbcConnectionTest` / `JdbcPreparedStatementTest` 偶发挂死（**根因已抓到，见下**） | 已修过一次（`e215f042a`：客户端事件循环注册失败时挂死整个套件），并在 `ClientTestBase` 加了 `@Rule Timeout(300s)`，让它变成失败而不是永久挂住。本轮全量两连跑里**又出现 1 次**（第 1 次 378 项中 `run(JdbcConnectionTest)` 超时 300 秒，第 2 次全绿），说明**还有第二条挂死路径**没被覆盖。目前没有线程栈；下一步应在超时时打印所有线程栈（`Thread.getAllStackTraces()`）定位，而不是靠猜 |
+| `JdbcConnectionTest` / `JdbcPreparedStatementTest` 偶发挂死（**根因已抓到并已修，见 #54**） | 已修过一次（`e215f042a`：客户端事件循环注册失败时挂死整个套件），并在 `ClientTestBase` 加了 `@Rule Timeout(300s)`，让它变成失败而不是永久挂住。本轮全量两连跑里**又出现 1 次**（第 1 次 378 项中 `run(JdbcConnectionTest)` 超时 300 秒，第 2 次全绿），说明**还有第二条挂死路径**没被覆盖。目前没有线程栈；下一步应在超时时打印所有线程栈（`Thread.getAllStackTraces()`）定位，而不是靠猜 |
 
 **根因（第30轮用新的 `DiagnosticTimeout` 抓到线程栈）**：挂死不在用例主体，而在 `tearDown`：
 `SqlTestBase.tearDownAfter` → `JdbcUtils.closeSilently` → `JdbcConnection.close()` →
@@ -119,7 +120,8 @@
 而线程栈显示当时所有 `CScheduleService-*` 客户端调度线程都停在 `NioEventLoop.select`（空闲），
 任务队列没被处理，于是这个 latch 永远等不到 —— 测试的 `NETWORK_TIMEOUT` 又是 `Integer.MAX_VALUE`，
 没有任何兜底。修复方向：关闭连接必须**有界等待**（超时后强制关闭 socket 并记录告警），或在
-`execute` 的 latch 等待上给出超时 + 兜底执行，不能永久阻塞。
+`execute` 的 latch 等待上给出超时 + 兜底执行，不能永久阻塞。→ **已按第二种修掉，见 #54**（`ClientSession.awaitOrThrow`，10 秒上限）。
+注意：这只消除了"永久挂死"，任务队列不推进这个**诱因本身**还没解决；下次如果再挂，`DiagnosticTimeout` 会直接给出线程栈。
 
 ## 二半、方法论警示（验证时踩过的坑，必须记住）
 
