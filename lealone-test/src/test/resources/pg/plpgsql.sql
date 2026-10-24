@@ -175,15 +175,19 @@ select functest_out(42) r;
 
 -- @case plpgsql.out_assign
 -- @pg plpgsql.sql:1688-1695
--- 适配: 函数体写成一行; 有 OUT 参数时裸 RETURN; 和自然结束都按 PG 语义返回 OUT 参数的值。
---       PG 里 select * from f1(42) 也能拿到一行, Lealone 的标量函数不能当表函数(SELECT * FROM f(1) 报 90000),
---       这里只断言 SELECT f(42)
+-- 适配: 函数体写成一行; 有 OUT 参数时裸 RETURN; 和自然结束都按 PG 语义返回 OUT 参数的值
 create function functest_out2(i int, out j int) as $$ begin j := i + 1; return; end $$ language plpgsql;
 > update count: 0
 
 select functest_out2(42) r;
 > R
 > --
+> 43
+> rows: 1
+
+select * from functest_out2(42);
+> FUNCTEST_OUT2
+> -------------
 > 43
 > rows: 1
 
@@ -199,12 +203,23 @@ select functest_inout(42) r;
 > 43
 > rows: 1
 
+select * from functest_inout(42);
+> FUNCTEST_INOUT
+> --------------
+> 43
+> rows: 1
+
 -- @case plpgsql.multi_out
 -- @pg plpgsql.sql:1720-1728
--- 适配: 函数体写成一行; PG 里 select f1(42) 会返回 record (43,foo), Lealone 标量调用多列函数报 50000,
---       必须写成 SELECT * FROM f1(42), 这里断言表函数形式
+-- 适配: 函数体写成一行; record 在值上下文里用ValueArray表示, getString 是 "(43, foo)"
 create function functest_multi(i int, out j int, out k text) as $$ begin j := i; j := j + 1; k := 'foo'; end$$ language plpgsql;
 > update count: 0
+
+select functest_multi(42);
+> FUNCTEST_MULTI(42)
+> ------------------
+> (43, foo)
+> rows: 1
 
 select * from functest_multi(42);
 > J  K

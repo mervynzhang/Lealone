@@ -66,5 +66,5 @@ plpgsql.polymorphic	plpgsql.sql:1565-1568	1	Lealone 无 anyelement/anyarray 多�
 plpgsql.cursor	plpgsql.sql:1859-1900	6	PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100
 plpgsql.out_params_exception	plpgsql.sql:3609-3638	6	RETURNS RECORD 复合返回类型不支持, 且 leaker_1 用 (f(x)).field 取复合返回值的字段
 rangefuncs.setof_composite	rangefuncs.sql:1-8	5	Lealone 无 SETOF <表行类型>, 也不支持 $1 位置参数
-rangefuncs.with_ordinality	rangefuncs.sql:9-17	8	WITH ORDINALITY 报 42000 语法错, 且没有 unnest()/generate_series()
+rangefuncs.with_ordinality_unnest	rangefuncs.sql:13-17	5	没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持)
 plpgsql.setof_composite_record	plpgsql.sql:1487-1512	4	RETURNS SETOF <表行类型> 不支持(只支持标量 setof 与 RETURNS TABLE)

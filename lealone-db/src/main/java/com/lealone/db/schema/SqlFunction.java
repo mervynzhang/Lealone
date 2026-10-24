@@ -200,8 +200,8 @@ public class SqlFunction extends FunctionAlias {
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                         "RETURNS can not be used with multiple OUT parameters");
             }
-            // 多个OUT参数组成返回行，用只含一行/多列的结果集表示
-            this.returnType = Value.RESULT_SET;
+            // 多个OUT参数组成一行record, 值用ValueArray表示(在FROM里仍然展开成多列)
+            this.returnType = Value.ARRAY;
             this.returnTypeSql = null;
         } else if (!hasDeclaredReturnType && !setReturning) {
             throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
@@ -439,6 +439,11 @@ public class SqlFunction extends FunctionAlias {
     }
 
     @Override
+    public boolean isRecordReturning() {
+        return outputIndexes.length > 1;
+    }
+
+    @Override
     public JavaMethod[] getJavaMethods() {
         return new JavaMethod[] { getSqlJavaMethod() };
     }
@@ -565,8 +570,8 @@ public class SqlFunction extends FunctionAlias {
 
     private Value executeBody(ServerSession session, IExpression[] args, boolean columnList) {
         boolean setReturning = isSetReturning();
-        // setof/table和多个OUT参数都返回结果集
-        boolean rowReturning = setReturning || returnType == Value.RESULT_SET;
+        // setof/table和多个OUT参数需要返回列定义, 但只有setof/table真的返回多行
+        boolean rowReturning = setReturning || isRecordReturning();
         if (columnList && rowReturning) {
             // 只需要返回列的定义，不需要真正执行函数体
             return createEmptyResultSet();
@@ -590,8 +595,8 @@ public class SqlFunction extends FunctionAlias {
             // 任一入参为NULL时不执行函数体, 直接返回NULL
             for (int index : inputIndexes) {
                 if (values[index] == ValueNull.INSTANCE) {
-                    // 返回结果集的函数给空结果集, 否则FROM里会拿到NULL
-                    return rowReturning ? createEmptyResultSet() : ValueNull.INSTANCE;
+                    // setof/table函数给空结果集, 标量/record函数返回NULL
+                    return setReturning ? createEmptyResultSet() : ValueNull.INSTANCE;
                 }
             }
         }
@@ -620,7 +625,7 @@ public class SqlFunction extends FunctionAlias {
                     if (isSetReturning()) {
                         return readSetResult(session, rs);
                     }
-                    if (returnType == Value.RESULT_SET) {
+                    if (isRecordReturning()) {
                         return createRecord(session, rs);
                     }
                     // VOID不关心函数体返回什么
@@ -773,19 +778,18 @@ public class SqlFunction extends FunctionAlias {
         }
     }
 
-    // 多个OUT参数时，把函数体返回的第一行包装成一个结果集
+    // 多个OUT参数时把函数体返回的第一行组装成record, 用ValueArray表示
     private Value createRecord(ServerSession session, ResultSet rs) throws SQLException {
-        SimpleResultSet simple = createResultSet();
-        if (rs.next()) {
-            Object[] row = new Object[outputIndexes.length];
-            for (int i = 0; i < outputIndexes.length; i++) {
-                int type = parameterTypeIds[outputIndexes[i]];
-                Value v = DataType.convertToValue(session, rs.getObject(i + 1), type);
-                row[i] = v.convertTo(type).getObject();
-            }
-            simple.addRow(row);
+        if (!rs.next()) {
+            return ValueNull.INSTANCE;
         }
-        return ValueResultSet.get(simple);
+        Value[] row = new Value[outputIndexes.length];
+        for (int i = 0; i < outputIndexes.length; i++) {
+            int type = parameterTypeIds[outputIndexes[i]];
+            Value v = DataType.convertToValue(session, rs.getObject(i + 1), type);
+            row[i] = v.convertTo(type);
+        }
+        return ValueArray.get(row);
     }
 
     private Value createEmptyResultSet() {

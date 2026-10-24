@@ -95,7 +95,7 @@ SELECT var_count(1, 2, 3);  -- 3
    函数体返回什么、返回多少列都不影响（PG 官方回归 `voidtest5` 的期望输出就是 `(0 rows)`）。
 4. **`RETURNS TABLE(c1 t1, c2 t2, ...)`**：函数返回多行多列，结果列名/类型就是声明的那些。
    至少声明一列，列名不能重复（重名报 `SYNTAX_ERROR_1`）。
-5. **表函数调用**：setof 函数可以出现在 `FROM` 里，调用形式和表一样，可以带参数、别名、
+5. **表函数调用**：函数都可以出现在 `FROM` 里，调用形式和表一样，可以带参数、别名、
    列别名列表，并参与 `WHERE`/`JOIN`/聚合：
 
    ```sql
@@ -104,7 +104,21 @@ SELECT var_count(1, 2, 3);  -- 3
    SELECT u.name FROM pgf_user u JOIN setof_table(2) t ON u.id = t.id;
    SELECT * FROM setof_table(2) AS t(x, y);   -- 列别名列表
    SELECT count(*) FROM setof_int(99);        -- 没有行时是空集
+   -- 标量函数也能当表函数: 只有一行一列, 列名用函数名(和 PostgreSQL 一致)
+   SELECT * FROM add_one(42);                 -- 一行 43
+   -- 多个 OUT 参数的函数: 展开成一行多列
+   SELECT * FROM f(42);                       -- 一行 (j, k)
+   -- WITH ORDINALITY: 最后追加一列从 1 开始的 bigint 行号
+   SELECT * FROM setof_int(2) WITH ORDINALITY AS z(a, ord);
    ```
+
+   `WITH ORDINALITY` 的行号列默认列名是 `ORDINALITY`（Lealone 默认把标识符大写，
+   写 `ordinality` 也能按大小写不敏感解析），类型是 `BIGINT`；可以用列别名列表改名，
+   行号在 `WHERE` 之前算好（所以 `WHERE ord > 1` 过滤后序号不重排）。
+   只有函数后面能跟 `WITH ORDINALITY`，普通表后面跟会报语法错。
+   函数表的 `WITH ORDINALITY` 和列别名列表会出现在生成的视图定义里，
+   所以 `CREATE VIEW v AS SELECT * FROM f() WITH ORDINALITY AS z(a, ord)` 之后重新编译视图不会丢列
+   （`FunctionTable.getSQL()` 输出 `WITH ORDINALITY`，`TableFilter.getPlanSQL()` 输出列别名列表）。
 
 6. **结果校验**：函数体结果集的列数必须和声明的一致，否则报
    `COLUMN_COUNT_DOES_NOT_MATCH`。每一列按位置转换成声明的类型。
@@ -126,9 +140,13 @@ SELECT var_count(1, 2, 3);  -- 3
     返回列按参数声明顺序排列。
     - 恰好一个 `OUT`/`INOUT` 参数时，函数返回一个标量，类型就是该参数的类型，
       调用形式是 `SELECT f(1)`；此时 `RETURNS` 可写可不写，写了必须和该参数类型一致。
-    - 有多个 `OUT`/`INOUT` 参数时，函数返回一个只含一行的结果集，
-      调用形式是 `SELECT * FROM f(1)`（实现上返回类型是 `Value.RESULT_SET`，走既有的 `FunctionTable`）；
-      此时不能再写 `RETURNS`。
+    - 有多个 `OUT`/`INOUT` 参数时，函数返回一行 **record**：
+      - 值上下文（`SELECT f(1)`）里 record 用 `ValueArray` 表示，`getString()` 是 `(43, foo)`，
+        和 PostgreSQL 的 record 文本形式一致（Lealone 的数组元素之间带一个空格，PG 的 record 不带）；
+      - 表上下文（`SELECT * FROM f(1)`）里仍然展开成一列一列，列名用参数名；
+      - `STRICT` 函数入参为 NULL 时 `SELECT f(NULL)` 得到 NULL record，`SELECT * FROM f(NULL)`
+        得到一行全 NULL（PostgreSQL 在这里都是 NULL 记录）。
+      此时不能再写 `RETURNS`。表达式里还不能对 record 取字段（`(f(1)).j` 不支持）。
     - 只有 `OUT` 参数、没有入参时可以直接 `SELECT f()`。
     - `OUT` 参数在函数体里被引用时绑定为 NULL（PostgreSQL 里在 SQL 函数体中引用 OUT 参数是非法的），
       因此不要依赖这种写法。
@@ -197,6 +215,14 @@ SELECT var_count(1, 2, 3);  -- 3
   `JavaFunction` → `FunctionTable` → `FunctionIndex` 这条表函数链路可以直接复用；
   `FunctionTable` 构造时会用 `columnList=true` 调一次函数拿结果列元数据，
   这时只根据声明生成空的结果集，不执行函数体。
+- `FunctionTable` 现在支持三种函数：`Value.RESULT_SET`（setof/table）、record
+  （`Function.isRecordReturning()`，多 OUT 参数）、以及标量（一行一列，列名用函数名）。
+  标量/record 的行是现场组装的（不经过 `ValueResultSet`）。`WITH ORDINALITY` 只是给
+  `FunctionTable` 追加一列 `BIGINT`，读结果集时逐行补行号，不再单独包一层表。
+- `Function.isRecordReturning()`/`FunctionAlias.isRecordReturning()`（默认 `false`）是新钩子，
+  `SqlFunction` 在 OUT 参数个数大于 1 时返回 `true`，`JavaFunction` 转发它；
+  多 OUT 函数的 `returnType` 是 `Value.ARRAY`，值上下文里返回 `ValueArray`（record），
+  `columnList=true` 时仍然返回列定义用的 `ValueResultSet`。
 - `FunctionAlias.isSetReturning()`（默认 `false`）是新增的钩子，`SqlFunction` 在声明了
   `SETOF`/`TABLE` 时返回 `true`，`JavaFunction` 转发它；`Select.prepare()` 用它把
   select 列表里的 setof 函数调用识别出来报 `FEATURE_NOT_SUPPORTED`。
@@ -229,8 +255,9 @@ SELECT var_count(1, 2, 3);  -- 3
 ## 四、明确不做（都不在本次范围内）
 
 - select 列表里展开 setof 函数（`SELECT f(1)` 展开成多行）、以及 `f(1) + 1` 这类嵌套使用
-- `WITH ORDINALITY`；`ROWS n` 只当属性存着，不作为优化器的行数提示
-- 复合类型/`record`/`SETOF <表名>` 的返回类型
+- `ROWS n` 只当属性存着，不作为优化器的行数提示
+- `RETURNS RECORD`/复合类型/`SETOF <表名>` 的返回类型；多 `OUT` 参数函数的 record 值在表达式里不能取字段
+- `ROWS FROM(...)` 多函数合并成一个表函数（单个函数的 `WITH ORDINALITY` 已支持）
 - 按参数类型重载（同名函数不能并存，见第五节）、`ALTER PROCEDURE`/`ALTER ROUTINE`
 - `ALTER FUNCTION ... SET SCHEMA`（换 schema）、`SET configuration_parameter FROM CURRENT`
 - `DROP FUNCTION ... CASCADE/RESTRICT`
@@ -285,13 +312,14 @@ PostgreSQL 允许 `f(int)` 与 `f(varchar)` 并存，Lealone 目前做不到。�
    `Column "L.ID" not found`；只有常量/参数/变量可以作为实参。
 9. `FROM f(1) AS t` 只给表起别名，不会像 PostgreSQL 那样把单列结果的列名改成 `t`；
    要改列名得用列别名列表 `FROM f(1) AS t(x)`。列别名列表允许少于结果列数（PostgreSQL 要求个数相同）。
-10. 标量函数当表函数用（`SELECT * FROM f(1)`）现在会报 `FUNCTION_MUST_RETURN_RESULT_SET_1`；
-    以前会走 `JavaFunction.getValueForColumnList` 的类型转换失败，错误码不明确。
-    只有 setof 函数和“多个 OUT/INOUT 参数”的函数返回类型才是 `Value.RESULT_SET`，可以出现在 FROM 里。
+10. 标量函数当表函数用（`SELECT * FROM f(1)`）已经支持，得到一行一列，列名用函数名
+    （`CREATE ALIAS` 建的标量 Java 函数同样适用）。返回 NULL 时也有一行（值为 NULL），不是空集。
+    只有 `RETURNS SETOF`/`RETURNS TABLE` 的函数返回类型才是 `Value.RESULT_SET`。
 11. 单个 OUT/INOUT 参数等价于标量返回，函数体必须只返回一列：函数体返回多列时建函数就报 22018
     （调用路径也不会再静默取第一列）。
-12. 多个 OUT 参数时函数返回 `ValueResultSet`，所以 `SELECT f(1)` 这种“把整行当一个值”的写法不可用，
-    必须写成 `SELECT * FROM f(1)`；函数体返回 0 行时得到 0 行结果（PostgreSQL 这里返回一行 NULL 记录）。
+12. 多个 OUT 参数时 `SELECT f(1)` 得到 record（`(43, foo)`），`SELECT * FROM f(1)` 得到一行多列；
+    但 record 值不能再参与运算或取字段，只能整体打印/比较。函数体返回 0 行时 `SELECT f(1)` 是 NULL，
+    `SELECT * FROM f(1)` 是一行全 NULL（PostgreSQL 也返回 NULL 记录）。
 13. `VARIADIC` 调用时传单个 NULL 会被当成“一个 NULL 元素”，PostgreSQL 会把它当成 NULL 数组。
 14. `CREATE OR REPLACE FUNCTION` 的报错优先级和 PG 相反：Lealone 先校验函数体再看重名，
     所以“同名函数已存在 + 新函数体非法”时报的是函数体错误，PG 会先报重名。不影响正确性。

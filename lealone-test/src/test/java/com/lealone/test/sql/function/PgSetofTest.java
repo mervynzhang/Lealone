@@ -77,10 +77,9 @@ public class PgSetofTest extends SqlTestBase {
                 + "AS $$ VALUES (1), (2), (3) $$");
         assertEquals("[1, 2, 3]", queryIntList("SELECT * FROM setof_values()").toString());
 
-        // 标量函数不能当表函数用
+        // 标量函数也能当表函数用, 只有一行一列(见PgFunctionFromTest)
         executeUpdate("CREATE OR REPLACE FUNCTION scalar_fn(a INT) RETURNS INT AS $$ SELECT a $$");
-        executeQueryThanAssertErrorCode("SELECT * FROM scalar_fn(1)",
-                ErrorCode.FUNCTION_MUST_RETURN_RESULT_SET_1);
+        assertEquals("[1]", queryIntList("SELECT * FROM scalar_fn(1)").toString());
 
         // select列表里不会展开成多行, 要明确报错
         executeQueryThanAssertErrorCode("SELECT setof_int(1)", ErrorCode.FEATURE_NOT_SUPPORTED_1);

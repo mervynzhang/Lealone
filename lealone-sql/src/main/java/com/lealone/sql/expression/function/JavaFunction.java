@@ -128,6 +128,11 @@ public class JavaFunction extends Function {
     }
 
     @Override
+    public boolean isRecordReturning() {
+        return functionAlias.isRecordReturning();
+    }
+
+    @Override
     public boolean isSetReturning() {
         return functionAlias.isSetReturning();
     }

@@ -33,6 +33,7 @@ import com.lealone.sql.IExpression;
 import com.lealone.sql.StatementBase;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.condition.Comparison;
+import com.lealone.sql.expression.function.FunctionTable;
 import com.lealone.sql.expression.condition.ConditionAndOr;
 import com.lealone.sql.query.Select;
 import com.lealone.storage.page.PageKey;
@@ -610,6 +611,11 @@ public class TableFilter extends ColumnResolverBase {
      * @param isJoin if this is a joined table
      * @return the SQL statement snippet
      */
+    // 函数表带列别名列表时, 生成的SQL里要保留这个列表
+    private boolean isFunctionTableWithColumnAliases() {
+        return table instanceof FunctionTable && ((FunctionTable) table).getColumnAliases() != null;
+    }
+
     public String getPlanSQL(boolean isJoin) {
         StringBuilder buff = new StringBuilder();
         if (isJoin) {
@@ -651,9 +657,20 @@ public class TableFilter extends ColumnResolverBase {
         buff.append(table.getSQL());
         if (alias != null) {
             buff.append(' ').append(session.getDatabase().quoteIdentifier(alias));
-        } else if (isDerivedTable()) {
-            // 派生表的列别名列表必须跟在别名后面，没有别名时补一个
+        } else if (isDerivedTable() || isFunctionTableWithColumnAliases()) {
+            // 派生表/函数表的列别名列表必须跟在别名后面，没有别名时补一个
             buff.append(' ').append(session.getDatabase().quoteIdentifier(table.getName()));
+        }
+        if (isFunctionTableWithColumnAliases()) {
+            // 函数表的列别名列表也要出现在SQL里，否则CREATE VIEW重新编译时列名就丢了
+            String[] functionColumnAliases = ((FunctionTable) table).getColumnAliases();
+            buff.append('(');
+            for (int i = 0; i < functionColumnAliases.length; i++) {
+                if (i > 0)
+                    buff.append(", ");
+                buff.append(session.getDatabase().quoteIdentifier(functionColumnAliases[i]));
+            }
+            buff.append(')');
         }
         if (isDerivedTable()) {
             // 派生表的列别名列表也要出现在SQL里，否则重新编译时列名就丢了

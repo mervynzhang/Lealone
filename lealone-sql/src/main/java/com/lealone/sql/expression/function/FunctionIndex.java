@@ -40,7 +40,8 @@ public class FunctionIndex extends IndexBase {
 
     @Override
     public Cursor find(ServerSession session, SearchRow first, SearchRow last) {
-        if (functionTable.isBufferResultSetToLocalTemp())
+        // WITH ORDINALITY要追加行号列, 统一走缓冲的Result路径
+        if (functionTable.isBufferResultSetToLocalTemp() || functionTable.isWithOrdinality())
             return new FunctionResultCursor(functionTable.getResult(session));
         else
             return new FunctionResultSetCursor(session, functionTable.getResultSet(session));
