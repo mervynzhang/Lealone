@@ -24,19 +24,27 @@ public class ValueExpression extends Expression {
     /**
      * The expression represents ValueNull.INSTANCE.
      */
-    private static final Object NULL = new ValueExpression(ValueNull.INSTANCE);
+    private static final Object NULL = new ValueExpression(ValueNull.INSTANCE, -1, -1, -1);
 
     /**
      * This special expression represents the default value. It is used for
      * UPDATE statements of the form SET COLUMN = DEFAULT. The value is
      * ValueNull.INSTANCE, but should never be accessed.
      */
-    private static final Object DEFAULT = new ValueExpression(ValueNull.INSTANCE);
+    private static final Object DEFAULT = new ValueExpression(ValueNull.INSTANCE, -1, -1, -1);
 
     private final Value value;
 
-    private ValueExpression(Value value) {
+    // 常量折叠后仍然保留声明类型的精度和标度，-1表示使用值自身的
+    private final long precision;
+    private final int scale;
+    private final int displaySize;
+
+    private ValueExpression(Value value, long precision, int scale, int displaySize) {
         this.value = value;
+        this.precision = precision;
+        this.scale = scale;
+        this.displaySize = displaySize;
     }
 
     /**
@@ -67,7 +75,23 @@ public class ValueExpression extends Expression {
         if (value == ValueNull.INSTANCE) {
             return getNull();
         }
-        return new ValueExpression(value);
+        return new ValueExpression(value, -1, -1, -1);
+    }
+
+    /**
+     * Create a new expression with the given value and the declared precision and scale.
+     *
+     * @param value the value
+     * @param precision the declared precision
+     * @param scale the declared scale
+     * @param displaySize the declared display size
+     * @return the expression
+     */
+    public static ValueExpression get(Value value, long precision, int scale, int displaySize) {
+        if (value == ValueNull.INSTANCE) {
+            return getNull();
+        }
+        return new ValueExpression(value, precision, scale, displaySize);
     }
 
     @Override
@@ -110,17 +134,17 @@ public class ValueExpression extends Expression {
 
     @Override
     public int getScale() {
-        return value.getScale();
+        return scale >= 0 ? scale : value.getScale();
     }
 
     @Override
     public long getPrecision() {
-        return value.getPrecision();
+        return precision >= 0 ? precision : value.getPrecision();
     }
 
     @Override
     public int getDisplaySize() {
-        return value.getDisplaySize();
+        return displaySize >= 0 ? displaySize : value.getDisplaySize();
     }
 
     @Override
