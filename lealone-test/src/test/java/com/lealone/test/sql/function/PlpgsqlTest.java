@@ -759,6 +759,13 @@ public class PlpgsqlTest extends SqlTestBase {
                 + "   j := i + 1;" //
                 + "   k := 'foo';" //
                 + " END $$ LANGUAGE plpgsql");
+        // 值上下文里整个record用ValueArray表示
+        executeQuery("SELECT plp_multi_out(42)");
+        assertEquals("(43, foo)", getStringValue(1));
+        executeQuery("SELECT (plp_multi_out(42)).j");
+        assertEquals(43, getIntValue(1));
+        executeQuery("SELECT (plp_multi_out(42)).k");
+        assertEquals("foo", getStringValue(1));
         try (java.sql.ResultSet result = stmt.executeQuery("SELECT * FROM plp_multi_out(42)")) {
             assertTrue(result.next());
             assertEquals(43, result.getInt(1));
@@ -943,6 +950,8 @@ public class PlpgsqlTest extends SqlTestBase {
         executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_ret(i INT, OUT a INT, OUT b VARCHAR) "
                 + "RETURNS RECORD LANGUAGE plpgsql AS $$" //
                 + " BEGIN a := i; b := 'x'; END; $$");
+        executeQuery("SELECT plp_rec_ret(1)");
+        assertEquals("(1, x)", getStringValue(1));
         try (java.sql.ResultSet result = stmt.executeQuery("SELECT * FROM plp_rec_ret(1)")) {
             assertTrue(result.next());
             assertEquals(1, result.getInt(1));
@@ -962,6 +971,15 @@ public class PlpgsqlTest extends SqlTestBase {
         executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_one(i INT, OUT a INT) "
                 + "RETURNS RECORD LANGUAGE plpgsql AS $$ BEGIN a := i * 2; END; $$");
         assertEquals("[6]", queryIntList("SELECT * FROM plp_rec_one(3)").toString());
+        executeQuery("SELECT plp_rec_one(3)");
+        assertEquals("(6)", getStringValue(1));
+        executeQuery("SELECT (plp_rec_one(3)).a");
+        assertEquals(6, getIntValue(1));
+        String oneSql = getCreateSql("PLP_REC_ONE");
+        assertNotNull(oneSql);
+        assertTrue(oneSql, oneSql.contains("RETURNS RECORD"));
+        executeUpdate("DROP FUNCTION plp_rec_one");
+        executeUpdate(oneSql);
         executeQuery("SELECT (plp_rec_one(3)).a");
         assertEquals(6, getIntValue(1));
 

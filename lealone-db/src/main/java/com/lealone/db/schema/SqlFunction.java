@@ -174,7 +174,8 @@ public class SqlFunction extends FunctionAlias {
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                         "RETURNS RECORD requires OUT parameters");
             }
-            this.returnType = Value.RESULT_SET;
+            // record在值上下文里用ValueArray表示，在FROM里展开成OUT参数列
+            this.returnType = Value.ARRAY;
             this.returnTypeSql = "RECORD";
             this.hasDeclaredReturnType = true;
             return;
@@ -597,7 +598,12 @@ public class SqlFunction extends FunctionAlias {
 
     @Override
     public boolean isRecordReturning() {
-        return outputIndexes.length > 1;
+        // RETURNS RECORD和多个OUT/INOUT参数都用ValueArray表示一行record
+        return returnsRecord || outputIndexes.length > 1;
+    }
+
+    protected boolean isReturnsRecord() {
+        return returnsRecord;
     }
 
     @Override

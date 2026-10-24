@@ -149,9 +149,9 @@ public class PlpgSqlInterpreter {
     private Value finishWithoutReturn() {
         if (resultInfo.setReturning)
             return buildSetResult();
-        // RETURNS RECORD和多个OUT参数都返回结果集行
-        if (resultInfo.returnType == Value.RESULT_SET)
-            return buildOutputResultSet();
+        // RETURNS RECORD和多个OUT参数都返回ValueArray形式的一行record
+        if (resultInfo.returnsRecord || resultInfo.hasMultipleOutputParameters())
+            return buildOutputRecord();
         if (resultInfo.hasOutputParameters())
             return getOutputValue();
         if (returnType != Value.UNKNOWN && returnType != Value.NULL)
@@ -170,8 +170,8 @@ public class PlpgSqlInterpreter {
         return value;
     }
 
-    // 多个OUT/INOUT参数组成一行record, 值用ValueArray表示(在FROM里展开成多列)
-    private Value buildOutputResultSet() {
+    // RETURNS RECORD或多个OUT/INOUT参数组成一行record, 值用ValueArray表示
+    private Value buildOutputRecord() {
         int count = resultInfo.outputIndexes.length;
         Value[] row = new Value[count];
         for (int i = 0; i < count; i++) {
@@ -473,7 +473,7 @@ public class PlpgSqlInterpreter {
         if (resultInfo.setReturning)
             throw PlpgSqlException.raise("2F005",
                     "RETURN cannot have a parameter in function returning set");
-        if (resultInfo.returnType == Value.RESULT_SET)
+        if (resultInfo.returnsRecord || resultInfo.hasMultipleOutputParameters())
             throw PlpgSqlException.raise("2F005",
                     "RETURN cannot have a parameter in function with OUT parameters");
         if (returnType == Value.NULL)

@@ -247,6 +247,12 @@ public class JavaFunction extends Function {
 
     @Override
     public Expression[] getExpressionColumns(ServerSession session) {
+        if (isRecordReturning()) {
+            // record的列名/类型来自OUT参数，不能用ValueArray的C1/C2占位列名
+            ValueResultSet rs = getValueForColumnList(session, getArgs());
+            if (rs != null)
+                return getExpressionColumns(session, rs.getResultSet());
+        }
         switch (getType()) {
         case Value.RESULT_SET:
             ValueResultSet rs = getValueForColumnList(session, getArgs());

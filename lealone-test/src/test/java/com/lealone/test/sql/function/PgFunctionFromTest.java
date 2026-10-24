@@ -85,6 +85,10 @@ public class PgFunctionFromTest extends SqlTestBase {
         // 值上下文里record用ValueArray表示, getString是"(43, foo)"
         executeQuery("SELECT from_record(42)");
         assertEquals("(43, foo)", getStringValue(1));
+        executeQuery("SELECT (from_record(42)).j");
+        assertEquals(43, getIntValue(1));
+        executeQuery("SELECT (from_record(42)).k");
+        assertEquals("foo", getStringValue(1));
         // 表上下文里还是多列
         try (ResultSet result = stmt.executeQuery("SELECT * FROM from_record(42)")) {
             ResultSetMetaData meta = result.getMetaData();
@@ -106,6 +110,10 @@ public class PgFunctionFromTest extends SqlTestBase {
                 + "AS $$ BEGIN j := i + 1; k := 'foo'; END $$ LANGUAGE plpgsql");
         executeQuery("SELECT from_record_plpgsql(42)");
         assertEquals("(43, foo)", getStringValue(1));
+        executeQuery("SELECT (from_record_plpgsql(42)).j");
+        assertEquals(43, getIntValue(1));
+        executeQuery("SELECT (from_record_plpgsql(42)).k");
+        assertEquals("foo", getStringValue(1));
         assertEquals("[43]", queryIntList("SELECT j FROM from_record_plpgsql(42)").toString());
 
         // 三列record, 其中一列是NULL

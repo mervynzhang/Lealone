@@ -292,7 +292,7 @@ public class FunctionAlias extends SchemaObjectBase {
     }
 
     /**
-     * 函数是否返回record(有多个OUT/INOUT参数)。record在值上下文里用ValueArray表示。
+     * 函数是否返回record(RETURNS RECORD或有多个OUT/INOUT参数)。record在值上下文里用ValueArray表示。
      *
      * @return 默认不返回record
      */
