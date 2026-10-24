@@ -308,7 +308,32 @@ public class PlpgSqlSqlExecutor {
         }
         if (intoStart < 0)
             return null;
+        return parseInto(sql, intoStart);
+    }
 
+    /**
+     * 拆分INSERT/UPDATE/DELETE/MERGE ... RETURNING ... INTO，
+     * 不是带RETURNING的DML时返回null。
+     */
+    public static SelectInto splitReturningInto(String sql) {
+        if (sql == null)
+            return null;
+        int start = skipWhitespaceAndComments(sql, 0);
+        if (!(wordAt(sql, start, "INSERT") || wordAt(sql, start, "UPDATE")
+                || wordAt(sql, start, "DELETE") || wordAt(sql, start, "MERGE")))
+            return null;
+        int returningPos = findTopLevelKeyword(sql, start, "RETURNING");
+        if (returningPos < 0)
+            return null;
+        int intoPos = findTopLevelKeyword(sql, returningPos + 9, "INTO");
+        if (intoPos < 0)
+            return null;
+        return parseInto(sql, intoPos);
+    }
+
+    // 解析INTO后的目标变量列表，并把INTO子句从SQL里去掉
+    private static SelectInto parseInto(String sql, int intoStart) {
+        int length = sql.length();
         int targetPos = skipWhitespaceAndComments(sql, intoStart + 4);
         boolean strict = false;
         if (wordAt(sql, targetPos, "STRICT")) {
@@ -338,7 +363,7 @@ public class PlpgSqlSqlExecutor {
             }
             if (targetPos < length && sql.charAt(targetPos) == '.') {
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                        "SELECT INTO record field: " + name);
+                        "INTO record field: " + name);
             }
             targets.add(name);
             targetEnd = targetPos;
@@ -350,7 +375,7 @@ public class PlpgSqlSqlExecutor {
             }
         }
         if (targets.isEmpty())
-            throw DbException.getSyntaxError(sql, intoStart, "SELECT INTO without target");
+            throw DbException.getSyntaxError(sql, intoStart, "INTO without target");
         // 把INTO以及目标列表从查询里去掉，保留前后的SQL文本
         String query = (sql.substring(0, intoStart) + " " + sql.substring(targetEnd)).trim();
         return new SelectInto(query, strict, targets.toArray(new String[0]));
