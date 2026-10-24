@@ -1206,8 +1206,12 @@ public class ServerSession extends SessionBase implements InternalSession {
     private ServerSession createNestedSession(User user, boolean add) {
         ServerSession session = database.createSession(user, getScheduler());
         session.setAutoCommit(isAutoCommit());
-        // 嵌套会话(函数体/过程体)沿用SET ROLE切出来的角色，权限检查口径和调用方一致
-        session.setCurrentRole(currentRole);
+        // 嵌套会话(函数体/过程体)沿用SET ROLE切出来的角色，权限检查口径和调用方一致；
+        // 换用户时(SECURITY DEFINER以属主身份执行)不能带调用方的角色集，
+        // 否则definer函数体里再调用受限例程会按调用方的角色判权，definer语义就不成立了
+        if (user == getUser()) {
+            session.setCurrentRole(currentRole);
+        }
         if (add) {
             if (nestedSessions == null) {
                 nestedSessions = new ArrayList<>();
