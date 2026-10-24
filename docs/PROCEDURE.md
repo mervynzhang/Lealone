@@ -183,6 +183,8 @@ call p('x');            -- varchar 版本还在
   里的语句并拼成过程体/函数体；函数体按语句分别做参数名替换（`SqlFunctionBodyParser.parseAtomicBody`），
   执行时 `SqlFunction.executeAtomicBody()` 顺序执行、最后一条查询的结果作为返回值；
   过程体直接复用原来的语句串执行路径。`LealoneSQLParser.splitStatements()` 是两者共用的拆分工具。
+- **DROP 依赖检查**：`DROP PROCEDURE`/`DROP FUNCTION` 如果还有其它例程在函数体/DEFAULT里调用它，
+  按RESTRICT语义报90107（Lealone没有实现CASCADE）；依赖分析是文本级的，同名重载按名字匹配。
 - **过程体里做 DDL**：`BEGIN ATOMIC ... END` 过程体里可以执行 `CREATE TABLE`/`ALTER TABLE`/`DROP TABLE`
   这类 DDL，按顺序执行；建过程时逐条 prepare 校验语法，引用的表可能还没建出来（过程体自己建的），
   这种 `TABLE_OR_VIEW_NOT_FOUND` 推迟到 `CALL` 时校验。过程体改成**按原文切分**（`splitStatementsRaw`），

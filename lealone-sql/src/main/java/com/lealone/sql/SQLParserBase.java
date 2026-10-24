@@ -116,6 +116,7 @@ import com.lealone.sql.ddl.CreateUserDataType;
 import com.lealone.sql.ddl.CreateView;
 import com.lealone.sql.ddl.DeallocateProcedure;
 import com.lealone.sql.ddl.DefinitionStatement;
+import com.lealone.sql.ddl.DiscardTemp;
 import com.lealone.sql.ddl.DropAggregate;
 import com.lealone.sql.ddl.DropCompositeType;
 import com.lealone.sql.ddl.DropConstant;
@@ -421,6 +422,9 @@ public class SQLParserBase implements SQLParser {
                     s = parseCreate();
                 } else if (readIf("DEALLOCATE")) {
                     s = parseDeallocate();
+                } else if (readIf("DISCARD")) {
+                    read("TEMP");
+                    s = new DiscardTemp(session);
                 }
                 break;
             case 'e':
@@ -4571,13 +4575,28 @@ public class SQLParserBase implements SQLParser {
 
         if (readIf("LOCAL")) {
             read("TEMPORARY");
+            if (readIf("SEQUENCE")) {
+                CreateSequence command = parseCreateSequence();
+                command.setTemporary(true);
+                return command;
+            }
             read("TABLE");
             return parseCreateTable(true, false, cached, !memory);
         } else if (readIf("GLOBAL")) {
             read("TEMPORARY");
+            if (readIf("SEQUENCE")) {
+                CreateSequence command = parseCreateSequence();
+                command.setTemporary(true);
+                return command;
+            }
             read("TABLE");
             return parseCreateTable(true, true, cached, !memory);
         } else if (readIf("TEMP") || readIf("TEMPORARY")) {
+            if (readIf("SEQUENCE")) {
+                CreateSequence command = parseCreateSequence();
+                command.setTemporary(true);
+                return command;
+            }
             read("TABLE");
             return parseCreateTable(true, true, cached, !memory);
         } else if (readIf("TABLE")) {
@@ -5418,8 +5437,12 @@ public class SQLParserBase implements SQLParser {
             read("BY");
             // uppercase if not quoted
             command.setPassword(ValueExpression.get(ValueString.get(readColumnIdentifier())));
+        } else if (currentTokenType == END || isToken(";") || isToken("ADMIN")) {
+            // PostgreSQL允许CREATE USER不带密码，这里落成空密码，方便只用于属主/授权的用户
+            command.setPassword(ValueExpression.get(ValueString.get("")));
         } else {
-            throw getSyntaxError();
+            // 拼错的PASSWORD等属性仍然按语法错误处理，和以前一样报42001
+            throw DbException.getSyntaxError(sqlCommand, parseIndex, "PASSWORD, SALT, IDENTIFIED");
         }
         if (readIf("ADMIN")) {
             command.setAdmin(true);
@@ -6690,7 +6713,7 @@ public class SQLParserBase implements SQLParser {
             SetSession command = new SetSession(session, SessionSetting.SCHEMA);
             command.setString(readAliasIdentifier());
             return command;
-        } else if (readIf(SessionSetting.SCHEMA_SEARCH_PATH.getName())) {
+        } else if (readIf("SEARCH_PATH") || readIf(SessionSetting.SCHEMA_SEARCH_PATH.getName())) {
             readIfEqualOrTo();
             SetSession command = new SetSession(session, SessionSetting.SCHEMA_SEARCH_PATH);
             ArrayList<String> list = Utils.newSmallArrayList();

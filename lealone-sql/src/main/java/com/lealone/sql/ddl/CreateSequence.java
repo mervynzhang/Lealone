@@ -34,6 +34,7 @@ public class CreateSequence extends SchemaStatement {
     private Expression cacheSize;
     private boolean belongsToTable;
     private boolean transactional;
+    private boolean temporary;
 
     public CreateSequence(ServerSession session, Schema schema) {
         super(session, schema);
@@ -84,6 +85,10 @@ public class CreateSequence extends SchemaStatement {
         this.transactional = transactional;
     }
 
+    public void setTemporary(boolean temporary) {
+        this.temporary = temporary;
+    }
+
     @Override
     public int update() {
         DbObjectLock lock = schema.tryExclusiveLock(DbObjectType.SEQUENCE, session);
@@ -105,7 +110,13 @@ public class CreateSequence extends SchemaStatement {
         Sequence sequence = new Sequence(schema, id, sequenceName, startValue, inc, cache, min, max,
                 cycle, belongsToTable);
         sequence.setTransactional(transactional);
-        schema.add(session, sequence, lock);
+        if (temporary) {
+            // 临时序列只属于当前会话，不进schema/元数据，也不进SCRIPT
+            sequence.setTemporary(true);
+            session.addLocalTempSequence(sequence);
+        } else {
+            schema.add(session, sequence, lock);
+        }
         return 0;
     }
 

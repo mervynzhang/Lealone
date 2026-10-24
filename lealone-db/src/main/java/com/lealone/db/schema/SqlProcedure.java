@@ -109,6 +109,13 @@ public class SqlProcedure extends SchemaObjectBase {
         return parameterDefaults != null;
     }
 
+    /**
+     * 参数DEFAULT表达式的SQL文本，没有DEFAULT的位置是null。
+     */
+    public String[] getParameterDefaultsSQL() {
+        return parameterDefaults;
+    }
+
     // 第inputIndex个入参的参数名(按入参顺序)
     public String getInputParameterName(int inputIndex) {
         return parameters[inputIndexes[inputIndex]].getName();

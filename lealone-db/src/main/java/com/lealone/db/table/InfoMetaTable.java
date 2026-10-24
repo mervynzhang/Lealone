@@ -49,6 +49,7 @@ import com.lealone.db.row.Row;
 import com.lealone.db.row.SearchRow;
 import com.lealone.db.schema.Constant;
 import com.lealone.db.schema.FunctionAlias;
+import com.lealone.db.schema.RoutineDependencyAnalyzer;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SchemaObject;
 import com.lealone.db.schema.Sequence;
@@ -1477,8 +1478,7 @@ public class InfoMetaTable extends MetaTable {
             break;
         }
         case ROUTINE_ROUTINE_USAGE:
-            // 依赖关系还没有填充(需要分析函数体/默认值表达式)，先返回空表，
-            // 查询能正常执行，等依赖分析做好后再补行
+            addRoutineRoutineUsage(rows, catalog, session);
             break;
         case SERVICES: {
             for (SchemaObject obj : database.getAllSchemaObjects(DbObjectType.SERVICE)) {
@@ -1535,10 +1535,6 @@ public class InfoMetaTable extends MetaTable {
         }
     }
 
-    private String getRoutineSpecificName(SchemaObject obj) {
-        return identifier(obj.getName()) + "_" + obj.getId();
-    }
-
     private static String getParameterModeString(int mode) {
         if (mode == SqlFunction.PARAM_OUT) {
             return "OUT";
@@ -1550,28 +1546,31 @@ public class InfoMetaTable extends MetaTable {
 
     private void addFunctionParameters(ArrayList<Row> rows, String catalog, SqlFunction function) {
         String schema = identifier(function.getSchema().getName());
-        String specificName = getRoutineSpecificName(function);
+        String specificName = RoutineDependencyAnalyzer.getSpecificName(function);
+        String[] defaults = function.getParameterDefaultsSQL();
         for (int i = 0; i < function.getParameterCount(); i++) {
             String typeSql = function.getParameterTypeSQL(i);
             add(rows, createParameterRow(catalog, schema, specificName, i + 1,
                     getParameterModeString(function.getParameterMode(i)),
-                    function.getParameterName(i), typeSql));
+                    function.getParameterName(i), typeSql, defaults == null ? null : defaults[i]));
         }
     }
 
     private void addProcedureParameters(ArrayList<Row> rows, String catalog, SqlProcedure procedure) {
         String schema = identifier(procedure.getSchema().getName());
-        String specificName = getRoutineSpecificName(procedure);
+        String specificName = RoutineDependencyAnalyzer.getSpecificName(procedure);
+        String[] defaults = procedure.getParameterDefaultsSQL();
         for (int i = 0; i < procedure.getParameterCount(); i++) {
             String typeSql = procedure.getParameterTypeSQL(i);
             add(rows, createParameterRow(catalog, schema, specificName, i + 1,
                     getParameterModeString(procedure.getParameterMode(i)),
-                    procedure.getParameter(i).getName(), typeSql));
+                    procedure.getParameter(i).getName(), typeSql,
+                    defaults == null ? null : defaults[i]));
         }
     }
 
     private static String[] createParameterRow(String catalog, String schema, String specificName,
-            int ordinal, String mode, String parameterName, String typeSql) {
+            int ordinal, String mode, String parameterName, String typeSql, String defaultValue) {
         String[] values = new String[24];
         values[0] = catalog;
         values[1] = schema;
@@ -1584,6 +1583,7 @@ public class InfoMetaTable extends MetaTable {
         values[8] = typeSql;
         values[17] = typeSql;
         values[22] = typeSql;
+        values[23] = defaultValue;
         return values;
     }
 
@@ -1612,7 +1612,7 @@ public class InfoMetaTable extends MetaTable {
                 // SPECIFIC_SCHEMA
                 identifier(obj.getSchema().getName()),
                 // SPECIFIC_NAME
-                getRoutineSpecificName(obj),
+                RoutineDependencyAnalyzer.getSpecificName(obj),
                 // ROUTINE_TYPE
                 routineType,
                 // DATA_TYPE
@@ -1629,6 +1629,28 @@ public class InfoMetaTable extends MetaTable {
                 securityType,
                 // EXTERNAL_LANGUAGE
                 routineLanguage.toLowerCase());
+    }
+
+    private void addRoutineRoutineUsage(ArrayList<Row> rows, String catalog, ServerSession session) {
+        for (SchemaObject source : RoutineDependencyAnalyzer.getAllRoutines(session)) {
+            ArrayList<SchemaObject> targets = RoutineDependencyAnalyzer
+                    .findReferencedRoutines(session, source);
+            for (SchemaObject target : targets) {
+                add(rows,
+                        // SPECIFIC_CATALOG
+                        catalog,
+                        // SPECIFIC_SCHEMA
+                        identifier(source.getSchema().getName()),
+                        // SPECIFIC_NAME
+                        RoutineDependencyAnalyzer.getSpecificName(source),
+                        // ROUTINE_CATALOG
+                        catalog,
+                        // ROUTINE_SCHEMA
+                        identifier(target.getSchema().getName()),
+                        // ROUTINE_NAME: 和PostgreSQL一样放被引用例程的SPECIFIC_NAME
+                        RoutineDependencyAnalyzer.getSpecificName(target));
+            }
+        }
     }
 
     private static String getPgProcArgTypes(SqlFunction function) {

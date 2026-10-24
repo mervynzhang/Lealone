@@ -32,9 +32,9 @@ lealone-test/src/test/java/com/lealone/test/pg/
     PgSkipList.java         skip 清单解析、清单与脚本对账、PG 语句计数
 lealone-test/src/test/resources/pg/
     README.md               脚本格式、清单格式、怎么打开被 skip 的用例
-    skip-list.txt           skip/known-fail 清单（16 条，本套件最重要的交付物之一）
+    skip-list.txt           skip/known-fail 清单（14 条，本套件最重要的交付物之一）
     create_function_sql.sql 由 PG create_function_sql.sql 转换（40 个用例）
-    create_procedure.sql    由 PG create_procedure.sql 转换（24 个用例）
+    create_procedure.sql    由 PG create_procedure.sql 转换（25 个用例）
     plpgsql.sql             由 PG plpgsql.sql 抽样转换（23 个用例）
     rangefuncs.sql          由 PG rangefuncs.sql 抽样转换（10 个用例）
 docs/PG_REGRESS.md          本文档
@@ -69,13 +69,13 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 34, skip  6)  脚本语句 137(通过 137, 失败 0)  被skip用例占  22 条
-[pgregress]   create_procedure.sql     用例 25(执行 19, skip  6)  脚本语句  90(通过  90, 失败 0)  被skip用例占  17 条
+[pgregress]   create_function_sql.sql  用例 40(执行 35, skip  5)  脚本语句 143(通过 143, 失败 0)  被skip用例占  17 条
+[pgregress]   create_procedure.sql     用例 25(执行 19, skip  6)  脚本语句  91(通过  91, 失败 0)  被skip用例占  17 条
 [pgregress]   plpgsql.sql              用例 23(执行 20, skip  3)  脚本语句  62(通过  62, 失败 0)  被skip用例占   6 条
 [pgregress]   rangefuncs.sql           用例 10(执行 10, skip  0)  脚本语句  40(通过  40, 失败 0)  被skip用例占   0 条
-[pgregress] 合计: 用例 98 (执行 83, skip 15), 脚本语句 329 (通过 329, 失败 0), 耗时 997ms
-[pgregress] skip 清单: 15 条用例, 点名跳过的 PG 语句 79 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中  42 条在 skip 清单里
+[pgregress] 合计: 用例 98 (执行 84, skip 14), 脚本语句 336 (通过 336, 失败 0), 耗时 1059ms
+[pgregress] skip 清单: 14 条用例, 点名跳过的 PG 语句 85 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中  48 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  27 条在 skip 清单里
 [pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 10 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 0 条)
@@ -89,27 +89,40 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 15 条 / 79 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 14 条 / 85 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
-| Lealone 无 SET search_path, CREATE USER 必须带 PASSWORD | 1 | 4 | function_sql.setup |
 | LEAKPROOF 属性和pg_proc.proleakproof已支持, 但缺少函数级权限模型(SET SESSION AUTHORIZATION/OWNER权限)和建函数的LEAKPROOF权限校验 | 1 | 16 | function_sql.leakproof |
-| Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD | 1 | 3 | function_sql.sql_body_tempseq |
+| Lealone 无 SQL 标准函数体(RETURN表达式), pg_get_functiondef 本身已支持 | 1 | 13 | function_sql.pg_get_functiondef_sqlbody |
 | Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转 | 1 | 3 | function_sql.or_replace_window |
-| select列表里的setof展开已支持, 但SQL函数的SETOF体不会内联进执行计划(EXPLAIN只有函数表), 且脚本无法断言多行计划文本 | 1 | 10 | function_sql.setof_inline |
+| BEGIN ATOMIC和EXPLAIN(COSTS OFF)已支持, 但setof函数内联与select列表里的setof展开仍不支持 | 1 | 10 | function_sql.setof_inline |
 | Lealone 无 CREATE OPERATOR CLASS/分区操作符类 | 1 | 6 | function_sql.partition_ops |
-| Lealone 的 CALL 不区分函数与过程 | 1 | 1 | procedure.call_random |
+| Lealone 的 CALL 不区分函数与过程 | 2 | 3 | procedure.call_random, procedure.call_function |
 | Lealone客户端没有psql元命令(\df); pg_get_functiondef()本身已支持 | 1 | 1 | procedure.psql_meta |
-| Lealone 的 CALL 不区分函数与过程 | 1 | 2 | procedure.call_function |
 | GRANT/REVOKE EXECUTE ON PROCEDURE 的解析已支持, 但 Lealone 无 SET ROLE/PUBLIC 角色, 过程权限也不参与调用检查 | 1 | 10 | procedure.privileges |
 | Lealone 不支持 ALTER ROUTINE/DROP ROUTINE(ALTER PROCEDURE/DROP PROCEDURE 已支持) | 1 | 5 | procedure.routine_syntax |
-| 只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节 | 1 | 2 | plpgsql.trigger_room |
-| 只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节 | 1 | 2 | plpgsql.trigger_raise |
+| 只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节 | 2 | 4 | plpgsql.trigger_room, plpgsql.trigger_raise |
 | PL/pgSQL 游标(DECLARE CURSOR/OPEN/FETCH/CLOSE)与 refcursor 门户都不支持, 评估见docs第十二节 | 1 | 6 | plpgsql.cursor |
 | 不支持命名 OUT 参数占位(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150) | 1 | 8 | procedure.out_params_named |
 
+
 ## 六、这一轮刷新：解锁了什么
+
+### 本轮（`wip/r6d`）：SET search_path、临时序列/DISCARD TEMP、依赖分析
+
+| 用例 | 之前 | 现在 | 靠什么能力 |
+| --- | --- | --- | --- |
+| `function_sql.setup` | skip（无 SET search_path / CREATE USER 必须带密码） | 执行 5 条语句 | `SET search_path` 作为 `SET SCHEMA_SEARCH_PATH` 的别名；`CREATE USER` 允许不带密码；脚本额外加 `SET SCHEMA temp_func_test`（Lealone 的 DDL 按当前 schema 建对象） |
+| `function_sql.sql_body_tempseq` | skip（无 TEMP SEQUENCE/DISCARD） | 执行 3 条语句 | `CREATE TEMP SEQUENCE`（会话级）+ `DISCARD TEMP`（连带删除依赖它的函数） |
+
+统计变化：执行 82 → 84，skip 16 → 14，脚本语句 327 → 336（+9；其中 setup 5 条、tempseq 3 条，另 1 条是
+`procedure.drop_and_call` 里为了满足新的依赖检查而补的 `DROP PROCEDURE ptest3`）。
+
+另外把 `INFORMATION_SCHEMA.ROUTINE_ROUTINE_USAGE` 从空表填上了：建函数/过程时按 SQL 文本分析函数体
+（和参数 DEFAULT 表达式）里的调用，查询时解析成被引用例程的 `SPECIFIC_NAME`。`DROP FUNCTION/PROCEDURE`
+在还有其它例程引用时按 RESTRICT 语义报 90107（不是 PG 的 2BP01），没有实现 CASCADE。
+`information_schema` 用例里的 DEFAULT 也恢复成 PG 原样了（`parameter_default` 不再是 NULL）。
 
 r5 rebase 到 `dbf8768af` 后复用主干的无名参数/`$n`、`RETURN expr`、多语句函数体和 `FOR ... IN <query>`，
 仅保留多态/数组改动；解锁 `function_sql.sql_body_polymorphic`、`function_sql.anyarray_setof`、
@@ -142,20 +155,6 @@ skip 原因缩小为"命名 OUT 参数占位 + 过程 VARIADIC"（命名**入参
 | `procedure.out_params_named`（新增 skip） | — | — | 命名实参 `a => null` 与过程的 `VARIADIC` 仍不支持 |
 
 统计变化：用例 96 → 97，执行 56 → 60，skip 40 → 37，脚本语句 207 → 227（失败 0）。
-
-### 本轮续：目标列表里的SRF展开（ProjectSet）+ SQL标准体函数定义的目录查询
-
-* **目标列表里的setof函数现在按行展开**（类似 PostgreSQL 的 ProjectSet）：单个 SRF 行数 = 函数行数，
-  多个 SRF 按最长的对齐、短的补 NULL，非 SRF 列每行复制；展开在 ORDER BY/LIMIT/DISTINCT 之前完成，
-  每输入行各自算一次（`select unnest(a) from t` 是每条记录展开）。
-  实现复用了 FROM 里的 `FunctionTable` 链路（`FunctionTable.getResult()`），算子走既有的 yieldable 查询链
-  （`QProjectSet extends QFlat`，展开中途可以让出执行权，`LocalResult` 满内存上限后落盘）。
-  GROUP BY/聚合里的 SRF、以及多列 SRF 仍报 `50100`。用例：`com.lealone.test.sql.query.ProjectSetTest`。
-  同时新增内置函数 `GENERATE_SERIES(start, stop[, step])`，让 `select generate_series(1,3)` 在目标列表里也能用。
-* **`function_sql.pg_get_functiondef_sqlbody` 解锁**：`RETURN <expr>` 体被规范化成 `AS 'SELECT ...'`，
-  `BEGIN ATOMIC` 体原样保留；没有 `regproc` 类型所以直接传函数名。
-
-统计变化：执行 82 → 83，skip 16 → 15，脚本语句 327 → 329（失败 0）。
 
 ## 七、剩余缺口与缺陷（都已实测复现）
 
@@ -245,24 +244,23 @@ proisstrict/prosecdef/proleakproof/prosrc）和内置函数 `pg_get_functiondef(
   external_language` 等列，同名重载用 `specific_name`（名字_id）区分；
 * `INFORMATION_SCHEMA.ROUTINE_ROUTINE_USAGE`：列齐全但**依赖关系还没有填充**，查询返回 0 行。
 
-`function_sql.information_schema` 已从 skip 移到执行（6 条语句），但**只覆盖视图本身**：
-DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`parameter_default` 如实断言 NULL；
-函数之间的依赖关系没有分析，`routine_routine_usage` 如实断言 0 行；PG 原文件的
-`routine_sequence_usage`/`routine_column_usage`/`routine_table_usage` 也没有转换。
-等 DEFAULT 和依赖分析合入后，再把脚本恢复成 PG 原样并补上预期行。
+`function_sql.information_schema` 已从 skip 移到执行（6 条语句）：DEFAULT 参数已经恢复成 PG 原样，
+`parameter_default` 显示 DEFAULT 表达式的 SQL 文本（例如 `1`、`'foo'`）；函数之间的依赖关系现在会
+填进 `routine_routine_usage`，但这条用例里的两个函数互不调用，所以仍断言 0 行。PG 原文件的
+`routine_sequence_usage`/`routine_column_usage`/`routine_table_usage` 还没有转换。
 
 ### 仍然不支持的（清单里都有用例）
 
 * **多态类型**：`anyelement`/`anyarray`/`anynonarray` 已支持声明、调用和返回；`anyenum` 仍只有伪类型建模，没有枚举域约束。
 * **函数体/过程体里做 DDL**：`function_sql.ddl_in_body`、`procedure.utility_body`（`50100 函数体只能是查询或带 RETURNING 的 DML`）。
-* **SQL 标准函数体**：`RETURN 表达式`、`BEGIN ATOMIC` 和多语句体已支持；`sql_body_tempseq` 仍依赖 TEMP SEQUENCE/DISCARD。
+* **SQL 标准函数体**：`RETURN 表达式`、`BEGIN ATOMIC` 和多语句体已支持；`CREATE TEMP SEQUENCE` + `DISCARD TEMP` 也已支持，`sql_body_tempseq` 已解锁。
 * **过程的 VARIADIC / 命名 OUT 参数占位**：`procedure.out_params_named`（过程 VARIADIC 报
   `50100 VARIADIC parameter in CREATE PROCEDURE`，`CALL p(a => null)` 里的 OUT 参数名还不认）。
 * **游标/触发器**：`plpgsql.cursor`、`plpgsql.trigger_*`。
 * **数组能力**：`ARRAY[...]`、`array_append`、`array_length`、数组 `||` 已支持；完整 PG 数组运算符/函数仍未覆盖。
-* **目录与 DDL 属性**：`ALTER FUNCTION` 的属性组合 +
+* **目录与 DDL 属性**：`pg_get_functiondef_sqlbody`（依赖 SQL 标准函数体）、`ALTER FUNCTION` 的属性组合 +
   `SET search_path`（`or_replace_window`）、`CREATE OPERATOR CLASS`（1）。
-  `information_schema.pg_proc`、`PARAMETERS`、`ROUTINES`、`ROUTINE_ROUTINE_USAGE`（空表）和
+  `information_schema.pg_proc`、`PARAMETERS`、`ROUTINES`、`ROUTINE_ROUTINE_USAGE`（已填函数间引用）和
   `pg_get_functiondef()` 本分支已经补上。
 * **CALL 语义与 psql 元命令**：`CALL` 不区分函数与过程（`call_random`、`call_function`）、
   `\df`/`psql` 元命令（`psql_meta`、`ambiguous_drop`）、`ALTER ROUTINE`/`DROP ROUTINE`（`routine_syntax`）。
@@ -287,7 +285,7 @@ DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`paramete
    routine_column_usage/routine_table_usage`、`GRANT/REVOKE/SET ROLE` 权限、`ALTER FUNCTION/PROCEDURE/ROUTINE`
    ——都随用例一起 skip，原因写在清单里，没有偷偷删。`pg_proc` 查询已经改成等价的
    `INFORMATION_SCHEMA.PG_PROC` 查询；`information_schema` 用例里的 PARAMETERS/ROUTINES 查询也执行了，
-   但 DEFAULT 和 routine_routine_usage 的依赖行还是空的（见第六节）。
+   DEFAULT 已恢复、`routine_routine_usage` 的依赖行也填上了（见第六节）。
 
 ## 九、转换/适配规则
 

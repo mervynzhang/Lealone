@@ -12,7 +12,9 @@ import com.lealone.db.DbObjectType;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.lock.DbObjectLock;
 import com.lealone.db.schema.FunctionAlias;
+import com.lealone.db.schema.RoutineDependencyAnalyzer;
 import com.lealone.db.schema.Schema;
+import com.lealone.db.schema.SchemaObject;
 import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.session.ServerSession;
 import com.lealone.sql.SQLStatement;
@@ -91,6 +93,13 @@ public class DropFunctionAlias extends SchemaStatement {
             }
         }
         if (functionAlias != null) {
+            // 有其它函数/过程引用了它时按RESTRICT语义报依赖错误(Lealone没有CASCADE实现)
+            ArrayList<SchemaObject> dependents = RoutineDependencyAnalyzer
+                    .findDependentRoutines(session, functionAlias);
+            if (!dependents.isEmpty()) {
+                throw DbException.get(ErrorCode.CANNOT_DROP_2, functionAlias.getSQL(),
+                        dependents.get(0).getSQL());
+            }
             schema.remove(session, functionAlias, lock);
         }
         return 0;

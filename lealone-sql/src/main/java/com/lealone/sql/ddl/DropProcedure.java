@@ -11,7 +11,9 @@ import com.lealone.common.exceptions.DbException;
 import com.lealone.db.DbObjectType;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.lock.DbObjectLock;
+import com.lealone.db.schema.RoutineDependencyAnalyzer;
 import com.lealone.db.schema.Schema;
+import com.lealone.db.schema.SchemaObject;
 import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.session.ServerSession;
 import com.lealone.sql.SQLStatement;
@@ -92,6 +94,13 @@ public class DropProcedure extends SchemaStatement {
             }
         }
         if (procedure != null) {
+            // 有其它例程引用它时按RESTRICT语义报依赖错误
+            ArrayList<SchemaObject> dependents = RoutineDependencyAnalyzer
+                    .findDependentRoutines(session, procedure);
+            if (!dependents.isEmpty()) {
+                throw DbException.get(ErrorCode.CANNOT_DROP_2, procedure.getSQL(),
+                        dependents.get(0).getSQL());
+            }
             schema.remove(session, procedure, lock);
         }
         return 0;

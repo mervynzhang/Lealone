@@ -300,6 +300,18 @@ public class Sequence extends SchemaObjectBase {
      * @return the next value
      */
     public long getNext(ServerSession session) {
+        if (isTemporary()) {
+            // 临时序列不进schema/元数据，不需要加锁和flush
+            long value = this.value.getAndAdd(increment);
+            if (increment > 0 && value > maxValue || increment < 0 && value < minValue) {
+                if (cycle) {
+                    this.value.set(increment > 0 ? minValue : maxValue);
+                    return this.value.getAndAdd(increment);
+                }
+                throw DbException.get(ErrorCode.SEQUENCE_EXHAUSTED, getName());
+            }
+            return value;
+        }
         tryLock(session);
         boolean needsFlush = false;
         long retVal;

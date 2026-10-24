@@ -483,6 +483,10 @@ select a, b from cp_test order by b;
 > 1 xyzzy
 > rows: 5
 
+-- 适配: ptest3的函数体里CALL了ptest1, 新的DROP依赖检查会报90107;
+--       先把依赖方ptest3删掉, 再删ptest1
+drop procedure ptest3;
+> update count: 0
 drop procedure ptest1;
 > update count: 0
 

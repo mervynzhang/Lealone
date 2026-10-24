@@ -507,5 +507,10 @@ public interface SQLStatement extends SQLCommand {
      */
     int ALTER_PROCEDURE = 154;
 
+    /**
+     * The type of a DISCARD TEMP statement.
+     */
+    int DISCARD_TEMP = 155;
+
     String INTERNAL_SAVEPOINT = "_INTERNAL_SAVEPOINT_";
 }
