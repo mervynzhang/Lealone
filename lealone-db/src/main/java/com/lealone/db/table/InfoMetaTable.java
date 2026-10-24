@@ -891,7 +891,7 @@ public class InfoMetaTable extends MetaTable {
                             // JAVA_METHOD
                             alias.getJavaMethodName(),
                             // DATA_TYPE
-                            "" + DataType.convertTypeToSQLType(method.getDataType()),
+                            "" + getMetaSqlType(method.getDataType()),
                             // TYPE_NAME
                             getMetaTypeName(method.getDataType()),
                             // COLUMN_COUNT INT
@@ -1542,6 +1542,13 @@ public class InfoMetaTable extends MetaTable {
             return "INOUT";
         }
         return "IN";
+    }
+
+    // 同上: UNKNOWN没有对应的DataType, 用OTHER兜底, 不能让整张元表不可用
+    private static int getMetaSqlType(int type) {
+        if (type == Value.UNKNOWN)
+            return java.sql.Types.OTHER;
+        return DataType.convertTypeToSQLType(type);
     }
 
     // 触发器函数的返回类型是Value.UNKNOWN, 没有对应的DataType,
