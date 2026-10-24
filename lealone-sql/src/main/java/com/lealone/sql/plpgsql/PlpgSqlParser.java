@@ -273,8 +273,30 @@ public class PlpgSqlParser {
     private boolean isAssignmentStart() {
         if (isAssignmentOperator(tokenAt(pos + 1)))
             return true;
-        Token dot = tokenAt(pos + 1);
-        return dot.type == TokenType.OPERATOR && ".".equals(dot.text)
+        Token next = tokenAt(pos + 1);
+        if (next.type == TokenType.OPERATOR && "[".equals(next.text)) {
+            int i = pos + 2;
+            int depth = 1;
+            while (i < tokens.size() && depth > 0) {
+                Token t = tokens.get(i);
+                if (t.type == TokenType.OPERATOR) {
+                    if ("[".equals(t.text))
+                        depth++;
+                    else if ("]".equals(t.text))
+                        depth--;
+                }
+                i++;
+            }
+            if (depth != 0)
+                return false;
+            if (tokenAt(i).type == TokenType.OPERATOR && ".".equals(tokenAt(i).text)) {
+                if (tokenAt(i + 1).type != TokenType.IDENTIFIER)
+                    return false;
+                i += 2;
+            }
+            return isAssignmentOperator(tokenAt(i));
+        }
+        return next.type == TokenType.OPERATOR && ".".equals(next.text)
                 && tokenAt(pos + 2).type == TokenType.IDENTIFIER
                 && isAssignmentOperator(tokenAt(pos + 3));
     }
@@ -290,6 +312,17 @@ public class PlpgSqlParser {
         }
         assignment.target = target.value;
         assignment.targetQuoted = target.quoted;
+        if (isOp("[")) {
+            next();
+            assignment.arrayIndex = captureExpression(new String[0], new String[] { "]" });
+            expectOp("]");
+            if (isOp(".")) {
+                next();
+                Token field = expectIdentifier();
+                assignment.arrayField = field.value;
+                assignment.arrayFieldQuoted = field.quoted;
+            }
+        }
         if (!isAssignmentOperator(current()))
             throw syntaxError(current(), "expected := or =");
         next();
@@ -634,16 +667,17 @@ public class PlpgSqlParser {
                 break;
             if (t.type == TokenType.OPERATOR) {
                 String text = t.text;
-                if ("(".equals(text) || "[".equals(text)) {
-                    depth++;
-                } else if (")".equals(text) || "]".equals(text)) {
-                    depth--;
-                } else if (depth == 0 && caseDepth == 0 && contains(stopOperators, text)) {
+                if (depth == 0 && caseDepth == 0 && contains(stopOperators, text)) {
                     String expression = slice(startToken, i);
                     if (expression.isEmpty())
                         throw syntaxError(t, "missing expression");
                     pos = i;
                     return expression;
+                }
+                if ("(".equals(text) || "[".equals(text)) {
+                    depth++;
+                } else if (")".equals(text) || "]".equals(text)) {
+                    depth--;
                 }
             } else if (t.type == TokenType.IDENTIFIER && !t.quoted) {
                 if ("CASE".equalsIgnoreCase(t.text)) {

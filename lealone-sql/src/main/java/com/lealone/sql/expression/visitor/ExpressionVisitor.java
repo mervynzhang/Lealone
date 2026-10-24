@@ -6,6 +6,7 @@
 package com.lealone.sql.expression.visitor;
 
 import com.lealone.sql.expression.Alias;
+import com.lealone.sql.expression.CompositeCastExpression;
 import com.lealone.sql.expression.CompositeFieldExpression;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.ExpressionColumn;
@@ -53,6 +54,10 @@ public interface ExpressionVisitor<R> {
 
     default R visitCompositeField(CompositeFieldExpression e) {
         return e.getBase().accept(this);
+    }
+
+    default R visitCompositeCast(CompositeCastExpression e) {
+        return e.getExpression().accept(this);
     }
 
     R visitExpressionList(ExpressionList e);

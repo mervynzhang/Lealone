@@ -12,7 +12,10 @@ import com.lealone.common.exceptions.DbException;
 import com.lealone.common.logging.Logger;
 import com.lealone.common.logging.LoggerFactory;
 import com.lealone.common.util.MathUtils;
+import com.lealone.db.api.ErrorCode;
 import com.lealone.db.result.SimpleResultSet;
+import com.lealone.db.schema.CompositeType;
+import com.lealone.db.schema.Schema;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
@@ -276,8 +279,15 @@ public class PlpgSqlInterpreter {
         for (int i = 0; i < parameterNames.length; i++) {
             PlpgSqlVariable variable = new PlpgSqlVariable(parameterNames[i], false, false, false);
             int type = Value.UNKNOWN;
-            if (parameterTypes != null && i < parameterTypes.length)
-                type = resolveType(parameterTypes[i]);
+            if (parameterTypes != null && i < parameterTypes.length) {
+                CompositeType compositeType = findCompositeType(parameterTypes[i]);
+                if (compositeType != null) {
+                    variable.setCompositeType(compositeType);
+                    type = Value.ARRAY;
+                } else {
+                    type = resolveType(parameterTypes[i]);
+                }
+            }
             variable.setType(type);
             Value value = parameterValues != null && i < parameterValues.length
                     ? parameterValues[i]
@@ -286,6 +296,19 @@ public class PlpgSqlInterpreter {
             scope.declare(variable);
             parameterVariables[i] = variable;
         }
+    }
+
+    private CompositeType findCompositeType(String typeName) {
+        if (typeName == null || session == null)
+            return null;
+        String name = PlpgSqlSqlExecutor.compactTypeName(typeName);
+        if (name.endsWith("[]"))
+            return null;
+        String schemaName = session.getCurrentSchemaName();
+        if (schemaName == null)
+            return null;
+        Schema schema = session.getDatabase().findSchema(session, schemaName);
+        return schema == null ? null : schema.findCompositeType(session, name);
     }
 
     private void executeBlock(Block block) {
@@ -325,8 +348,14 @@ public class PlpgSqlInterpreter {
             PlpgSqlVariable variable = new PlpgSqlVariable(declaration.name,
                     declaration.nameQuoted, declaration.constant, declaration.notNull);
             String typeName = declaration.typeName == null ? "" : declaration.typeName.trim();
-            boolean recordType = isRecordType(typeName);
-            if (recordType) {
+            boolean recordArrayType = isRecordArrayType(typeName);
+            boolean recordType = !recordArrayType && isRecordType(typeName);
+            if (recordArrayType) {
+                variable.setRecordArray(true);
+                PlpgSqlSqlExecutor.QueryRows rowType = sqlExecutor
+                        .resolveRowType(normalizeRowTypeName(typeName));
+                variable.declareRecordArrayFields(rowType.columnNames, rowType.columnTypes);
+            } else if (recordType) {
                 variable.setRecord(true);
                 if (!"record".equalsIgnoreCase(typeName)) {
                     // tab%ROWTYPE在声明时解析出列名和类型，解析失败时给出可读的错误
@@ -341,15 +370,15 @@ public class PlpgSqlInterpreter {
             if (declaration.constant && declaration.defaultExpression == null)
                 throw PlpgSqlException.raise("42601",
                         "constant " + declaration.name + " must have a default value");
-            if (recordType && declaration.defaultExpression != null)
+            if ((recordType || recordArrayType) && declaration.defaultExpression != null)
                 throw DbException.getUnsupportedException(
                         "PL/pgSQL default value for record variable: " + declaration.name);
             // 默认值表达式在变量加入作用域之前求值，这样同名变量可以引用外层的
-            Value value = !recordType && declaration.defaultExpression != null
+            Value value = !recordType && !recordArrayType && declaration.defaultExpression != null
                     ? sqlExecutor.evalExpression(declaration.defaultExpression, scope)
                     : ValueNull.INSTANCE;
             scope.declare(variable);
-            if (recordType) {
+            if (recordType || recordArrayType) {
                 if (declaration.notNull)
                     throw PlpgSqlException.notNullViolation(declaration.name);
             } else {
@@ -361,6 +390,33 @@ public class PlpgSqlInterpreter {
     private static boolean isRecordType(String typeName) {
         String compact = PlpgSqlSqlExecutor.compactTypeName(typeName);
         return "record".equalsIgnoreCase(compact) || compact.toLowerCase().endsWith("%rowtype");
+    }
+
+    // t%ROWTYPE[]和t[]%ROWTYPE两种写法都表示行数组
+    private static boolean isRecordArrayType(String typeName) {
+        String compact = PlpgSqlSqlExecutor.compactTypeName(typeName).toLowerCase();
+        if (compact.endsWith("[]")) {
+            String base = compact.substring(0, compact.length() - 2);
+            return base.endsWith("%rowtype");
+        }
+        if (compact.endsWith("%rowtype")) {
+            String table = compact.substring(0, compact.length() - 8);
+            return table.endsWith("[]");
+        }
+        return false;
+    }
+
+    private static String normalizeRowTypeName(String typeName) {
+        String compact = PlpgSqlSqlExecutor.compactTypeName(typeName);
+        if (compact.endsWith("[]"))
+            compact = compact.substring(0, compact.length() - 2);
+        if (compact.toLowerCase().endsWith("%rowtype")) {
+            String table = compact.substring(0, compact.length() - 8);
+            if (table.endsWith("[]"))
+                table = table.substring(0, table.length() - 2);
+            return table + "%ROWTYPE";
+        }
+        return compact;
     }
 
     private int resolveType(String typeName) {
@@ -454,6 +510,25 @@ public class PlpgSqlInterpreter {
     private void executeAssignment(Assignment node) {
         PlpgSqlVariable variable;
         Value value = null;
+        if (node.arrayIndex != null) {
+            variable = node.qualifier == null ? findVariable(node.target, node.targetQuoted)
+                    : scope.findVariableByLabel(node.qualifier, node.target, node.targetQuoted);
+            if (variable == null)
+                throw PlpgSqlException.raise("42703",
+                        "variable " + node.target + " does not exist");
+            if (!variable.isRecordArray())
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "PL/pgSQL variable " + node.target + " is not a record array");
+            variable.checkCanAssign();
+            int index = sqlExecutor.evalExpression(node.arrayIndex, scope).getInt();
+            value = sqlExecutor.evalExpression(node.expression, scope);
+            if (node.arrayField != null) {
+                variable.setRecordArrayField(index, node.arrayField, value);
+            } else {
+                variable.setRecordArrayElement(index, value);
+            }
+            return;
+        }
         if (node.qualifier != null) {
             variable = scope.findVariableByLabel(node.qualifier, node.target, node.targetQuoted);
             if (variable == null) {
@@ -562,11 +637,21 @@ public class PlpgSqlInterpreter {
             row[0] = convertColumnValue(0, value);
             return row;
         }
-        // 多列时允许表达式是一个record变量
+        // 多列时允许表达式是一个record变量或ValueArray(例如arr[1])
         PlpgSqlVariable record = scope.findVariable(expression.trim(), false);
-        if (record == null || !record.isRecord())
+        if (record == null || !record.isRecord()) {
+            Value value = sqlExecutor.evalExpression(expression, scope);
+            if (value != null && value.getType() == Value.ARRAY) {
+                Value[] list = ((ValueArray) value).getList();
+                if (list.length == count) {
+                    for (int i = 0; i < count; i++)
+                        row[i] = convertColumnValue(i, list[i]);
+                    return row;
+                }
+            }
             throw DbException.getUnsupportedException(
                     "PL/pgSQL RETURN NEXT with multiple columns requires a record variable");
+        }
         if (record.getRecordFieldCount() != count)
             throw PlpgSqlException.raise("42804",
                     "RETURN NEXT record has " + record.getRecordFieldCount()

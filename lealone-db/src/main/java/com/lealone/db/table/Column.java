@@ -20,6 +20,7 @@ import com.lealone.db.Mode;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.lock.DbObjectLock;
 import com.lealone.db.row.Row;
+import com.lealone.db.schema.CompositeType;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.Sequence;
 import com.lealone.db.session.ServerSession;
@@ -70,6 +71,8 @@ public class Column {
     private int scale;
     private int displaySize;
     private Table table;
+    // 复合类型列，类型值用ValueArray表示
+    private CompositeType compositeType;
     private String name;
     private int columnId;
     private boolean nullable = true;
@@ -146,6 +149,8 @@ public class Column {
      * @return the value
      */
     public Value convert(Value v) {
+        if (compositeType != null)
+            return compositeType.convert(v);
         try {
             return v.convertTo(type);
         } catch (DbException e) {
@@ -412,7 +417,9 @@ public class Column {
         if (!exceptName && name != null) {
             buff.append(quoteIdentifier(name)).append(' ');
         }
-        if (originalSQL != null) {
+        if (compositeType != null) {
+            buff.append(quoteIdentifier(compositeType.getName()));
+        } else if (originalSQL != null) {
             buff.append(originalSQL);
         } else {
             if (type == Value.JAVA_OBJECT && table != null)
@@ -478,6 +485,14 @@ public class Column {
 
     public String getOriginalSQL() {
         return originalSQL;
+    }
+
+    public CompositeType getCompositeType() {
+        return compositeType;
+    }
+
+    public void setCompositeType(CompositeType compositeType) {
+        this.compositeType = compositeType;
     }
 
     public IExpression getDefaultExpression() {
@@ -732,6 +747,7 @@ public class Column {
         defaultExpression = source.defaultExpression;
         defaultExpressionEvaluator = source.defaultExpressionEvaluator;
         originalSQL = source.originalSQL;
+        compositeType = source.compositeType;
         // autoIncrement, start, increment is not set
         convertNullToDefault = source.convertNullToDefault;
         sequence = source.sequence;

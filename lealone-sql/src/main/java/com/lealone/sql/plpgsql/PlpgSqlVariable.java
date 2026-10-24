@@ -5,9 +5,13 @@
  */
 package com.lealone.sql.plpgsql;
 
+import java.util.HashMap;
+
 import com.lealone.common.exceptions.DbException;
 import com.lealone.db.api.ErrorCode;
+import com.lealone.db.schema.CompositeType;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueNull;
 
 /**
@@ -34,6 +38,11 @@ public class PlpgSqlVariable {
     private boolean tableColumn;
     // tab%ROWTYPE声明的行类型，字段结构固定；plain record每次赋值可以换行结构
     private boolean rowTypeDeclared;
+    // tab%ROWTYPE[]数组：每个下标对应一行，行值同样用ValueArray表示
+    private boolean recordArray;
+    private HashMap<Integer, Value[]> recordArrayValues;
+    // 复合类型参数，字段访问用CompositeType的列元数据
+    private CompositeType compositeType;
 
     public PlpgSqlVariable(String name, boolean nameQuoted, boolean constant, boolean notNull) {
         this.name = name;
@@ -67,6 +76,9 @@ public class PlpgSqlVariable {
     }
 
     public Value getValue() {
+        if (recordArray)
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "PL/pgSQL record array variable " + name + " must be used as arr[index]");
         if (record)
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                     "PL/pgSQL record variable " + name + " can only be used as record.field");
@@ -75,6 +87,33 @@ public class PlpgSqlVariable {
 
     public boolean isRecord() {
         return record;
+    }
+
+    public boolean isRecordArray() {
+        return recordArray;
+    }
+
+    public boolean isComposite() {
+        return compositeType != null;
+    }
+
+    public CompositeType getCompositeType() {
+        return compositeType;
+    }
+
+    public void setCompositeType(CompositeType compositeType) {
+        this.compositeType = compositeType;
+    }
+
+    public void setRecordArray(boolean recordArray) {
+        this.recordArray = recordArray;
+    }
+
+    public void declareRecordArrayFields(String[] fieldNames, int[] fieldTypes) {
+        this.recordArray = true;
+        this.recordFieldNames = fieldNames.clone();
+        this.recordFieldTypes = fieldTypes.clone();
+        this.recordArrayValues = new HashMap<>();
     }
 
     public boolean isTableColumn() {
@@ -158,6 +197,96 @@ public class PlpgSqlVariable {
         }
     }
 
+    // 读复合类型变量的一个字段
+    public Value getCompositeField(String fieldName) {
+        int index = compositeType.findColumn(fieldName);
+        if (index < 0)
+            throw PlpgSqlException.raise("42703",
+                    "composite variable \"" + name + "\" has no field \"" + fieldName + "\"");
+        Value v = value;
+        if (v == null || v == ValueNull.INSTANCE)
+            return ValueNull.INSTANCE;
+        return ((ValueArray) v).getList()[index];
+    }
+
+    // 读数组元素；未赋值时返回一行全NULL，和PostgreSQL的未初始化行数组一致
+    public Value getRecordArrayElement(int index) {
+        checkArrayIndex(index);
+        Value[] row = recordArrayValues.get(index);
+        if (row == null) {
+            row = new Value[recordFieldNames.length];
+            for (int i = 0; i < row.length; i++)
+                row[i] = ValueNull.INSTANCE;
+        }
+        return ValueArray.get(row);
+    }
+
+    public Value getRecordArrayField(int index, String fieldName) {
+        checkArrayIndex(index);
+        Value[] row = recordArrayValues.get(index);
+        if (row == null)
+            return ValueNull.INSTANCE;
+        int fieldIndex = findRecordFieldIndex(fieldName);
+        return row[fieldIndex];
+    }
+
+    public void setRecordArrayElement(int index, Value value) {
+        checkArrayIndex(index);
+        if (value == null || value == ValueNull.INSTANCE) {
+            Value[] row = new Value[recordFieldNames.length];
+            for (int i = 0; i < row.length; i++)
+                row[i] = ValueNull.INSTANCE;
+            recordArrayValues.put(index, row);
+            return;
+        }
+        if (value.getType() != Value.ARRAY)
+            throw PlpgSqlException.raise("42804",
+                    "record array " + name + " element must be a row value");
+        Value[] list = ((ValueArray) value).getList();
+        if (list.length != recordFieldNames.length)
+            throw PlpgSqlException.raise("42804", "record array " + name + " element has "
+                    + list.length + " fields but expected " + recordFieldNames.length);
+        Value[] row = new Value[list.length];
+        for (int i = 0; i < list.length; i++) {
+            Value v = list[i] == null ? ValueNull.INSTANCE : list[i];
+            if (recordFieldTypes[i] != Value.UNKNOWN)
+                v = v.convertTo(recordFieldTypes[i]);
+            row[i] = v;
+        }
+        recordArrayValues.put(index, row);
+    }
+
+    public void setRecordArrayField(int index, String fieldName, Value value) {
+        checkArrayIndex(index);
+        if (value == null)
+            value = ValueNull.INSTANCE;
+        Value[] row = recordArrayValues.get(index);
+        if (row == null) {
+            row = new Value[recordFieldNames.length];
+            for (int i = 0; i < row.length; i++)
+                row[i] = ValueNull.INSTANCE;
+            recordArrayValues.put(index, row);
+        }
+        int fieldIndex = findRecordFieldIndex(fieldName);
+        if (recordFieldTypes[fieldIndex] != Value.UNKNOWN)
+            value = value.convertTo(recordFieldTypes[fieldIndex]);
+        row[fieldIndex] = value;
+    }
+
+    private void checkArrayIndex(int index) {
+        if (index < 1)
+            throw PlpgSqlException.raise("2202E", "array subscript outside bounds: " + index);
+    }
+
+    private int findRecordFieldIndex(String fieldName) {
+        for (int i = 0; i < recordFieldNames.length; i++) {
+            if (recordFieldNames[i].equalsIgnoreCase(fieldName))
+                return i;
+        }
+        throw PlpgSqlException.raise("42703",
+                "record array \"" + name + "\" has no field \"" + fieldName + "\"");
+    }
+
     public Value getRecordField(String fieldName) {
         int index = findRecordField(fieldName);
         return recordFieldValues[index];
@@ -231,6 +360,9 @@ public class PlpgSqlVariable {
     public void setValue(Value value) {
         if (value == null)
             value = ValueNull.INSTANCE;
+        if (recordArray)
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "PL/pgSQL record array variable " + name + " must be assigned as arr[index]");
         if (record) {
             if (value == ValueNull.INSTANCE) {
                 if (rowTypeDeclared && recordFieldValues != null) {
