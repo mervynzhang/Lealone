@@ -153,6 +153,7 @@ import com.lealone.sql.dml.Restore;
 import com.lealone.sql.dml.RunScript;
 import com.lealone.sql.dml.SetDatabase;
 import com.lealone.sql.dml.SetSession;
+import com.lealone.sql.dml.SetSessionAuthorization;
 import com.lealone.sql.dml.SetStatement;
 import com.lealone.sql.dml.TransactionStatement;
 import com.lealone.sql.dml.Update;
@@ -471,6 +472,8 @@ public class SQLParserBase implements SQLParser {
                     s = parseGrantRevoke(SQLStatement.REVOKE);
                 } else if (readIf("RUNSCRIPT")) {
                     s = parseRunScript();
+                } else if (readIf("RESET")) {
+                    s = parseReset();
                 } else if (readIf("RELEASE")) {
                     s = parseReleaseSavepoint();
                 } else if (readIf("REPAIR")) {
@@ -6166,8 +6169,23 @@ public class SQLParserBase implements SQLParser {
         return command;
     }
 
+    protected StatementBase parseReset() {
+        // 只支持RESET SESSION AUTHORIZATION
+        read("SESSION");
+        read("AUTHORIZATION");
+        // 不写用户名表示恢复成登录用户
+        SetSessionAuthorization command = new SetSessionAuthorization(session);
+        return command;
+    }
+
     protected StatementBase parseSet() {
-        if (readIf("@")) { // session变量
+        if (readIf("SESSION")) {
+            // SET SESSION AUTHORIZATION <user>
+            read("AUTHORIZATION");
+            SetSessionAuthorization command = new SetSessionAuthorization(session);
+            command.setUserName(readAliasIdentifier());
+            return command;
+        } else if (readIf("@")) { // session变量
             return parseSetVariable();
         } else if (readIf(DbSetting.LLM.getName())) {
             readIfEqualOrTo();

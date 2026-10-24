@@ -86,7 +86,10 @@ public class ServerSession extends SessionBase implements InternalSession {
 
     private Database database;
     private ConnectionInfo connectionInfo;
+    // 登录(认证)用户, RESET SESSION AUTHORIZATION 时恢复成它
     private final User user;
+    // 当前用户, SET SESSION AUTHORIZATION 只改这个
+    private User currentUser;
     private final int id;
     private final ArrayList<Lock> locks = new ArrayList<>();
     private Random random;
@@ -141,6 +144,7 @@ public class ServerSession extends SessionBase implements InternalSession {
         this.queryTimeout = database.getSettings().maxQueryTimeout;
         this.queryCacheSize = database.getSettings().queryCacheSize;
         this.user = user;
+        this.currentUser = user;
         this.id = id;
         this.lockTimeout = database.getSettings().defaultLockTimeout;
         this.currentSchemaName = Constants.SCHEMA_MAIN;
@@ -410,7 +414,16 @@ public class ServerSession extends SessionBase implements InternalSession {
     }
 
     public User getUser() {
+        return currentUser;
+    }
+
+    // 登录(认证)用户, 与当前用户相同除非执行过SET SESSION AUTHORIZATION
+    public User getSessionUser() {
         return user;
+    }
+
+    public void setCurrentUser(User currentUser) {
+        this.currentUser = currentUser;
     }
 
     public int getLockTimeout() {
