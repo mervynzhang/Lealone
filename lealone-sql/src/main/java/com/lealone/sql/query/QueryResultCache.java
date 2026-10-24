@@ -97,7 +97,8 @@ class QueryResultCache {
     private boolean sameResultAsLast(Value[] params) {
         if (!cacheableChecked) {
             long max = select.getMaxDataModificationId();
-            noCache = max == Long.MAX_VALUE;
+            // 关联子查询的结果依赖于外层查询的当前行，所以不能缓存
+            noCache = max == Long.MAX_VALUE || select.isCorrelated();
             cacheableChecked = true;
         }
         if (noCache) {

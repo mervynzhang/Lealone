@@ -33,6 +33,7 @@ import com.lealone.sql.expression.Parameter;
 import com.lealone.sql.expression.SelectOrderBy;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.condition.Comparison;
+import com.lealone.sql.expression.visitor.CorrelatedVisitor;
 import com.lealone.sql.expression.visitor.ExpressionVisitor;
 import com.lealone.sql.expression.visitor.ExpressionVisitorFactory;
 import com.lealone.sql.expression.visitor.MaxModificationIdVisitor;
@@ -316,6 +317,15 @@ public abstract class Query extends ManipulationStatement implements com.lealone
     @Override
     public boolean isDeterministic() {
         return accept(ExpressionVisitorFactory.getDeterministicVisitor());
+    }
+
+    /**
+     * 当前查询是否引用了外层查询的列，也就是是否是关联子查询。
+     * 关联子查询的结果依赖于外层查询的当前行，所以不能缓存它的结果。
+     */
+    public boolean isCorrelated() {
+        Boolean b = accept(new CorrelatedVisitor(getFilters()));
+        return b == null || !b;
     }
 
     /**
