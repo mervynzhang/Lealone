@@ -5,6 +5,7 @@
  */
 package com.lealone.sql.expression.function;
 
+import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Calendar;
 
@@ -293,7 +294,13 @@ public class NumericFunction extends BuiltInFunction {
             if (v0.getType() == Value.DECIMAL) {
                 // DECIMAL转成DOUBLE会丢掉标度，所以直接对BigDecimal四舍五入
                 int n = v1 == null ? 0 : v1.getInt();
-                result = ValueDecimal.get(v0.getBigDecimal().setScale(n, RoundingMode.HALF_UP));
+                BigDecimal bd = v0.getBigDecimal().setScale(n, RoundingMode.HALF_UP);
+                // 负的精度(例如ROUND(123.456,-1))会让BigDecimal保留负标度，
+                // 结果变成1.2E+2这种科学计数法，而且JDBC的ResultSetMetaData.getScale()不允许负数。
+                // 按精度舍入之后一定是整数，把标度归到0。
+                if (n < 0)
+                    bd = bd.setScale(0);
+                result = ValueDecimal.get(bd);
                 break;
             }
             double f = v1 == null ? 1. : Math.pow(10., v1.getDouble()); // 小数位是2，相当于先求10的2次方

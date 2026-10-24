@@ -16,6 +16,7 @@
 |---|---|---|---|---|
 | 1 | 关联子查询只在最内层与外层关联时，中间层子查询结果被跨外层行复用，返回上一行的过期值（静默错数据） | `CorrelatedVisitor` 展开嵌套子查询，并把嵌套查询自己的 `TableFilter` 并入"自己的列"集合 | 新增 `CorrelatedSubqueryTest` 4 例；回退本改动后正好两条嵌套用例变红（`expected:<2> but was:<1>`），两条对照仍绿 | 已修复 |
 | 2 | 异步提交回调在事务已结束时会丢失（语句挂死），重复提交时会重复执行（客户端收到两次响应） | `undoLog == null` 时补调 `asyncCommitComplete()`；`asyncCommitComplete()` 先取走 `asyncTask` 再置空，保证恰好一次 | 新增 `AsyncCommitCallbackTest` 2 例；去掉补调 → 30s 超时"没有回调"；去掉取走置空 → `expected:<1> but was:<2>` | 已修复 |
+| 4 | `ROUND(x, 负精度)` 输出科学计数法且标度为负（`ROUND(123.456,-1)` 得 `1.2E+2`、`DECIMAL(2,-1)`），JDBC `getScale()` 非法 | DECIMAL 分支按负精度舍入后把标度归到 0 | 新增 `ValueSemanticsTest.testRoundNegativeScale`（4 组断言含平局远离 0）；回退修复后正好该用例变红 | 已修复 |
 | 3 | 二级索引"复用游标缓存行"的优化被自己的 `row = null` 抵消，覆盖索引查询每返回一行读两次主表 | 删掉 `next()` 里的 `row = null`（每条索引项开始校验时 `getIndexKey` 会自己清 row，所以不会读到上一条的行） | 新增 `CoveredIndexScanTest` 2 例；插桩实测 500 行查询：修复后主表读 500 次（1 次/行），恢复该行后 1000 次（2 次/行） | 已修复 |
 
 ## 二、待修复（按优先级）
@@ -28,7 +29,6 @@
 | 4 | 未提交插入回滚时取 `getPageListener()` 无判空 → NPE | `AOTransactionMap.java:660` | 与 `UndoLogRecord.java:86-91` 的加固统一 |
 | 5 | 列存表 `columnIndexes == null` 被当成"不加载任何列"：`SCRIPT` 导出直接 NPE，重启后 checkpoint NPE，`CREATE INDEX`/`ExternalService` 读到 NULL | `CursorParameters` / `BTreeCursor:58` / `ColumnStorageLeafPage.getValue` | 需在存储层归一根治，`92080a980` 只堵了一个入口 |
 | 6 | `ValueMap.getJson` 把嵌套 map/list 输出成带引号字符串、控制字符产生非法 JSON；`ValueArray.get(java.sql.Array)` 全转 String、primitive 数组 CCE、null 元素 NPE | `ValueMap.java:101-124`、`ValueArray.java:49-62` | 静默给错数据，建议改用现成 Json 编码器 |
-| 7 | `ROUND(x, 负精度)` 输出科学计数法且 scale 为负（JDBC `getScale()` 非法） | `NumericFunction.java:293-298` | 本批新引入的回归 |
 | 9 | `OCTET_LENGTH`/`BIT_LENGTH` 对 BINARY/BLOB 仍按十六进制字符数计算（`X'41'`→2，应 1），且改为每行整串物化 | `StringFunction.java:144-155` | 二进制走 `getPrecision()`，文本才按 UTF-8 |
 | 10 | 行值 IN 的显式列表不走三值逻辑：`(1,NULL) IN ((1,2),(3,4))` 得 FALSE，应为 NULL | `ConditionIn.java:61-84`、`ConditionInConstantSet.java:67-79` | 单元素列表路径却正确，需统一 |
 
