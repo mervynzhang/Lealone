@@ -75,10 +75,32 @@ public class BTreeCursor<K, V> implements StorageMapCursor<K, V> {
                 return false;
             }
             if (pos.index < map.getChildPageCount(pos.page)) {
+                // 子页在遍历过程中被切割或删除了，它的ref会重定向到父节点，
+                // 从父节点的第一个子页往下找会把父节点左边已经遍历过的记录再遍历一遍，
+                // 所以只能按最后返回的key从根节点重新定位
+                if (pos.page.getChildPageReference(pos.index).isDataStructureChanged()) {
+                    reposition();
+                    continue;
+                }
                 min(pos.page.getChildPage(pos.index++), null);
             }
         }
         return false;
+    }
+
+    private void reposition() {
+        K from = key;
+        pos = null;
+        if (from == null) {
+            min(map.getRootPage(), parameters.from);
+            return;
+        }
+        min(map.getRootPage(), from);
+        // min定位到>=from的第一个位置，跳过已经返回过的那个key
+        while (pos != null && pos.index < pos.page.getKeyCount()
+                && map.getKeyType().compare(pos.page.getKey(pos.index), from) <= 0) {
+            pos.index++;
+        }
     }
 
     /**

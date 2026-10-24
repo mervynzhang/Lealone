@@ -379,18 +379,22 @@ public abstract class PageOperations {
                 return PageOperationResult.LOCKED;
             PageReference parentRef = pRef.getParentRef();
             Page parent = parentRef.getOrReadPage();
+            // 父节点只有当前这一个子页时不能删除它，否则父节点会变成一个没有children的node page，
+            // 其他线程定位leaf page时可能正好走到这个空节点上，所以先保留，等以后有新数据继续复用
+            if (!parentRef.isRoot() && parent.getChildren().length == 1) {
+                parentRef.unlock();
+                return PageOperationResult.SUCCEEDED;
+            }
             int index = parent.getPageIndex(key);
             parent = parent.copy();
             parent.remove(index);
-            parentRef.replacePage(parent);
-            // 先看看父节点是否需要删除
             if (parent.isEmpty()) {
-                // 如果是root node page，那么直接替换
+                // 只有root node page会走到这里，直接替换成空的leaf page，
+                // 不能先把没有children的node page发布出去
                 // 新的空页面占用的内存大小不必再计入，原页面已经算在内了
-                if (parentRef.isRoot())
-                    parent.map.newRoot(parent.map.createEmptyPage(false));
-                else
-                    asyncRemovePage(scheduler, waitingIfLocked, null, parentRef, key);
+                parent.map.newRoot(parent.map.createEmptyPage(false));
+            } else {
+                parentRef.replacePage(parent);
             }
             // 非root page被删除后，原有的ref被废弃
             PageInfo pInfoOld = pRef.getPageInfo();
