@@ -10,11 +10,13 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.common.util.MathUtils;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.index.Index;
 import com.lealone.db.index.IndexColumn;
 import com.lealone.db.result.LocalResult;
 import com.lealone.db.result.Result;
+import com.lealone.db.result.SimpleResultSet;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
@@ -24,7 +26,9 @@ import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueNull;
 import com.lealone.db.value.ValueResultSet;
+import com.lealone.sql.IExpression;
 import com.lealone.sql.expression.Expression;
+import com.lealone.sql.expression.ExpressionColumn;
 
 /**
  * A table backed by a system or user-defined function that returns a result set.
@@ -44,14 +48,21 @@ public class FunctionTable extends Table {
         this.function = function;
         functionExpr = function.optimize(session);
         int type = function.getType();
-        if (type != Value.RESULT_SET) {
-            throw DbException.get(ErrorCode.FUNCTION_MUST_RETURN_RESULT_SET_1, function.getName());
+        if (type == Value.RESULT_SET) {
+            ValueResultSet template = function.getValueForColumnList(session, function.getArgs());
+            if (template == null) {
+                throw DbException.get(ErrorCode.FUNCTION_MUST_RETURN_RESULT_SET_1,
+                        function.getName());
+            }
+            setColumns(readColumns(template.getResultSet()));
+        } else {
+            // 标量函数也能出现在FROM里, 当成只有一行一列的表, 列名用函数名(和PostgreSQL一致)
+            setColumns(new Column[] { createColumn(function.getName(), type) });
         }
-        ValueResultSet template = function.getValueForColumnList(session, function.getArgs());
-        if (template == null) {
-            throw DbException.get(ErrorCode.FUNCTION_MUST_RETURN_RESULT_SET_1, function.getName());
-        }
-        ResultSet rs = template.getResultSet();
+    }
+
+    // 从函数返回的结果集元数据里读出列定义
+    private static Column[] readColumns(ResultSet rs) {
         try {
             ResultSetMetaData meta = rs.getMetaData();
             int columnCount = meta.getColumnCount();
@@ -61,10 +72,16 @@ public class FunctionTable extends Table {
                         DataType.getValueTypeFromResultSet(meta, i + 1), meta.getPrecision(i + 1),
                         meta.getScale(i + 1), meta.getColumnDisplaySize(i + 1));
             }
-            setColumns(cols);
+            return cols;
         } catch (SQLException e) {
             throw DbException.convert(e);
         }
+    }
+
+    private static Column createColumn(String name, int type) {
+        DataType dataType = DataType.getDataType(type);
+        return new Column(name, type, dataType.defaultPrecision, dataType.defaultScale,
+                dataType.defaultDisplaySize);
     }
 
     @Override
@@ -153,20 +170,21 @@ public class FunctionTable extends Table {
      * @return the result
      */
     public Result getResult(ServerSession session) {
-        ValueResultSet v = getValueResultSet(session);
-        if (v == null) {
-            return null;
+        Value v = getFunctionValue(session);
+        if (v.getType() != Value.RESULT_SET) {
+            return createScalarResult(session, v);
         }
-        if (cachedResult != null && cachedValue == v) {
+        ValueResultSet value = (ValueResultSet) v;
+        if (cachedResult != null && cachedValue == value) {
             cachedResult.reset();
             return cachedResult;
         }
-        ResultSet rs = v.getResultSet();
+        ResultSet rs = value.getResultSet();
         LocalResult result = LocalResult.read(session, Expression.getExpressionColumns(session, rs), rs,
                 0);
         if (function.isDeterministic()) {
             cachedResult = result;
-            cachedValue = v;
+            cachedValue = value;
         }
         return result;
     }
@@ -178,16 +196,44 @@ public class FunctionTable extends Table {
      * @return the result set
      */
     public ResultSet getResultSet(ServerSession session) {
-        ValueResultSet v = getValueResultSet(session);
-        return v == null ? null : v.getResultSet();
+        Value v = getFunctionValue(session);
+        if (v.getType() == Value.RESULT_SET) {
+            return ((ValueResultSet) v).getResultSet();
+        }
+        return createScalarResultSet(v);
     }
 
-    private ValueResultSet getValueResultSet(ServerSession session) {
+    private Value getFunctionValue(ServerSession session) {
         Value v = functionExpr.getValue(session);
-        if (v == ValueNull.INSTANCE) {
-            return null;
+        return v == null ? ValueNull.INSTANCE : v;
+    }
+
+    // 标量函数: 一行一列, 返回NULL时也是一行
+    private LocalResult createScalarResult(ServerSession session, Value v) {
+        IExpression[] expressions = createExpressions();
+        LocalResult result = new LocalResult(session, expressions, expressions.length);
+        result.addRow(new Value[] { v });
+        result.done();
+        return result;
+    }
+
+    private ResultSet createScalarResultSet(Value v) {
+        Column column = getColumns()[0];
+        SimpleResultSet simple = new SimpleResultSet();
+        simple.setAutoClose(false);
+        simple.addColumn(column.getName(), DataType.convertTypeToSQLType(column.getType()),
+                MathUtils.convertLongToInt(column.getPrecision()), column.getScale());
+        simple.addRow(v.getObject());
+        return simple;
+    }
+
+    private IExpression[] createExpressions() {
+        Column[] cols = getColumns();
+        IExpression[] expressions = new IExpression[cols.length];
+        for (int i = 0; i < cols.length; i++) {
+            expressions[i] = new ExpressionColumn(database, cols[i]);
         }
-        return (ValueResultSet) v;
+        return expressions;
     }
 
     boolean isBufferResultSetToLocalTemp() {
