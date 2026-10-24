@@ -83,6 +83,7 @@ import com.lealone.sql.config.Config;
 import com.lealone.sql.config.LealoneConfig;
 import com.lealone.sql.ddl.AlterDatabase;
 import com.lealone.sql.ddl.AlterIndexRename;
+import com.lealone.sql.ddl.AlterProcedure;
 import com.lealone.sql.ddl.AlterSchemaRename;
 import com.lealone.sql.ddl.AlterSqlFunction;
 import com.lealone.sql.ddl.AlterSequence;
@@ -5242,9 +5243,15 @@ public class SQLParserBase implements SQLParser {
                 read(")");
             }
         }
-        // LANGUAGE子句可以写在AS之前也可以写在之后，过程和函数一样只支持SQL/PLPGSQL
-        while (readIf("LANGUAGE")) {
-            command.setLanguage(readProcedureLanguage());
+        // LANGUAGE子句和过程属性都是可选的，且顺序任意，和函数的属性是同一套
+        FunctionAttributes attributes = new FunctionAttributes();
+        String language = "SQL";
+        while (true) {
+            if (readIf("LANGUAGE")) {
+                language = readProcedureLanguage();
+            } else if (!readFunctionAttribute(attributes)) {
+                break;
+            }
         }
         // 标准SQL的函数体写成BEGIN ATOMIC ... END，里面可以有多条语句
         if (readIf("BEGIN")) {
@@ -5255,9 +5262,16 @@ public class SQLParserBase implements SQLParser {
             read("AS");
             command.setBody(readString());
         }
-        while (readIf("LANGUAGE")) {
-            command.setLanguage(readProcedureLanguage());
+        // PostgreSQL也允许AS '过程体' LANGUAGE plpgsql，所以AS之后再解析一次
+        while (true) {
+            if (readIf("LANGUAGE")) {
+                language = readProcedureLanguage();
+            } else if (!readFunctionAttribute(attributes)) {
+                break;
+            }
         }
+        command.setLanguage(language);
+        command.setAttributes(attributes);
         return command;
     }
 
@@ -5332,14 +5346,18 @@ public class SQLParserBase implements SQLParser {
         command.setProcedureName(procedureName);
         ifExists = readIfExists(ifExists);
         command.setIfExists(ifExists);
-        parseDropProcedureArguments(command);
+        int[][] arguments = parseProcedureArguments();
+        if (arguments != null) {
+            command.setArgumentTypeIds(arguments[0]);
+            command.setArgumentModes(arguments[1]);
+        }
         return command;
     }
 
-    // 读取DROP PROCEDURE name(类型列表)里的参数，每个参数前面可以写IN/OUT/INOUT
-    private void parseDropProcedureArguments(DropProcedure command) {
+    // 读取DROP/ALTER PROCEDURE name(类型列表)里的参数，每个参数前面可以写IN/OUT/INOUT
+    private int[][] parseProcedureArguments() {
         if (!readIf("(")) {
-            return;
+            return null;
         }
         ArrayList<Integer> typeIds = Utils.newSmallArrayList();
         ArrayList<Integer> modes = Utils.newSmallArrayList();
@@ -5369,8 +5387,7 @@ public class SQLParserBase implements SQLParser {
             } while (readIf(","));
             read(")");
         }
-        command.setArgumentTypeIds(toIntArray(typeIds));
-        command.setArgumentModes(toIntArray(modes));
+        return new int[][] { toIntArray(typeIds), toIntArray(modes) };
     }
 
     protected CreateFunctionAlias parseCreateFunctionAlias(boolean force) {
@@ -5867,6 +5884,50 @@ public class SQLParserBase implements SQLParser {
         return command;
     }
 
+    protected StatementBase parseAlterProcedure() {
+        boolean ifExists = readIfExists(false);
+        String procedureName = readIdentifierWithSchema();
+        AlterProcedure command = new AlterProcedure(session, getSchema());
+        command.setProcedureName(procedureName);
+        command.setIfExists(ifExists);
+        int[][] arguments = parseProcedureArguments();
+        if (arguments != null) {
+            command.setArgumentTypeIds(arguments[0]);
+            command.setArgumentModes(arguments[1]);
+        }
+        if (readIf("RENAME")) {
+            read("TO");
+            command.setNewName(readUniqueIdentifier());
+        } else if (readIf("OWNER")) {
+            read("TO");
+            command.setOwnerName(readUniqueIdentifier());
+        } else if (readIf("SET")) {
+            if (isToken("SCHEMA")) {
+                // 换schema要移动对象，这里不支持
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "ALTER PROCEDURE ... SET SCHEMA");
+            }
+            String name = readColumnIdentifier();
+            if (!readIf("=")) {
+                readIf("TO");
+            }
+            command.setConfigItem(name, readFunctionConfigValue());
+        } else if (readIf("RESET")) {
+            if (readIf("ALL")) {
+                command.setResetAll(true);
+            } else {
+                command.setResetConfigName(readColumnIdentifier());
+            }
+        } else {
+            FunctionAttributes attributes = new FunctionAttributes();
+            if (!readFunctionAttribute(attributes)) {
+                throw getSyntaxError();
+            }
+            command.setAttributes(attributes);
+        }
+        return command;
+    }
+
     protected Query parseWith() {
         boolean recursive = readIf("RECURSIVE");
         do { // 支持多个逗号分隔的CTE
@@ -5996,6 +6057,8 @@ public class SQLParserBase implements SQLParser {
             return parseAlterView();
         } else if (readIf("FUNCTION")) {
             return parseAlterSqlFunction();
+        } else if (readIf("PROCEDURE")) {
+            return parseAlterProcedure();
         } else if (readIf("DATABASE")) {
             return parseAlterDatabase();
         } else if (readIf("CATALOG")) {

@@ -140,7 +140,9 @@ public class AlterSqlFunction extends SchemaStatement {
             schema.rename(session, sqlFunction, newName, lock);
             return 0;
         }
-        applyAttributes(sqlFunction);
+        if (attributes != null) {
+            attributes.applyTo(sqlFunction);
+        }
         if (sqlFunction.isSecurityDefiner() && sqlFunction.getOwnerName() == null) {
             // SECURITY DEFINER时属主默认是执行ALTER的用户
             sqlFunction.setOwnerName(session.getUser().getName());
@@ -162,36 +164,5 @@ public class AlterSqlFunction extends SchemaStatement {
         }
         db.updateMeta(session, sqlFunction);
         return 0;
-    }
-
-    private void applyAttributes(SqlFunction function) {
-        if (attributes == null) {
-            return;
-        }
-        if (attributes.getVolatility() != null) {
-            function.setVolatility(attributes.getVolatility());
-        }
-        if (attributes.getStrict() != null) {
-            function.setStrict(attributes.getStrict().booleanValue());
-        }
-        if (attributes.getSecurityDefiner() != null) {
-            function.setSecurityDefiner(attributes.getSecurityDefiner().booleanValue());
-        }
-        if (attributes.getLeakproof() != null) {
-            function.setLeakproof(attributes.getLeakproof().booleanValue());
-        }
-        if (attributes.getWindow() != null) {
-            function.setWindow(attributes.getWindow().booleanValue());
-        }
-        if (attributes.getCost() != null) {
-            function.setCost(attributes.getCost());
-        }
-        if (attributes.getRows() != null) {
-            function.setRows(attributes.getRows());
-        }
-        for (String[] item : attributes.getConfigItems()) {
-            function.removeConfigItem(item[0]);
-            function.addConfigItem(item[0], item[1]);
-        }
     }
 }

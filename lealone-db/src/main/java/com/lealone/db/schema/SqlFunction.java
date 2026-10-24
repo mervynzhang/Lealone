@@ -798,7 +798,7 @@ public class SqlFunction extends FunctionAlias {
     }
 
     // COST/ROWS是浮点数，整数时不带小数点，读起来和PostgreSQL的DDL一致
-    private static String formatNumber(double value) {
+    static String formatNumber(double value) {
         if (value == Math.floor(value) && !Double.isInfinite(value)) {
             return Long.toString((long) value);
         }

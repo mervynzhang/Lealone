@@ -32,6 +32,8 @@ public class CreateProcedure extends SchemaStatement {
     private String body;
     private String language;
     private boolean atomicBody;
+    // CREATE PROCEDURE里可选的属性，和函数的属性是同一套
+    private FunctionAttributes attributes;
     private boolean ifNotExists;
     private final ArrayList<Column> parameters = new ArrayList<>();
     private final ArrayList<Integer> parameterModes = new ArrayList<>();
@@ -68,6 +70,10 @@ public class CreateProcedure extends SchemaStatement {
 
     public void setIfNotExists(boolean ifNotExists) {
         this.ifNotExists = ifNotExists;
+    }
+
+    public void setAttributes(FunctionAttributes attributes) {
+        this.attributes = attributes;
     }
 
     public void addParameter(Column parameter, int mode) {
@@ -172,6 +178,13 @@ public class CreateProcedure extends SchemaStatement {
         checkOutputParameters();
         SqlProcedure procedure = new SqlProcedure(schema, getObjectId(), procedureName, body,
                 language, atomicBody, parameters.toArray(new Column[0]), toIntArray(parameterModes));
+        if (attributes != null) {
+            attributes.applyTo(procedure);
+        }
+        // SECURITY DEFINER时属主默认是创建者，要持久化下来
+        if (procedure.isSecurityDefiner() && procedure.getOwnerName() == null) {
+            procedure.setOwnerName(session.getUser().getName());
+        }
         schema.add(session, procedure, lock);
         return 0;
     }
