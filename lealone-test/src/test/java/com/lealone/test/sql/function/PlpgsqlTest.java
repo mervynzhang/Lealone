@@ -971,6 +971,15 @@ public class PlpgsqlTest extends SqlTestBase {
         executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_one(i INT, OUT a INT) "
                 + "RETURNS RECORD LANGUAGE plpgsql AS $$ BEGIN a := i * 2; END; $$");
         assertEquals("[6]", queryIntList("SELECT * FROM plp_rec_one(3)").toString());
+        executeQuery("SELECT plp_rec_one(3)");
+        assertEquals("(6)", getStringValue(1));
+        executeQuery("SELECT (plp_rec_one(3)).a");
+        assertEquals(6, getIntValue(1));
+        String oneSql = getCreateSql("PLP_REC_ONE");
+        assertNotNull(oneSql);
+        assertTrue(oneSql, oneSql.contains("RETURNS RECORD"));
+        executeUpdate("DROP FUNCTION plp_rec_one");
+        executeUpdate(oneSql);
         executeQuery("SELECT (plp_rec_one(3)).a");
         assertEquals(6, getIntValue(1));
 
