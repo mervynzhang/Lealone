@@ -89,7 +89,8 @@ public class TestBase extends Assert {
     private boolean edge = false;
 
     private String host = Constants.DEFAULT_HOST;
-    private int port = Constants.DEFAULT_TCP_PORT;
+    // 多个worktree并行时可以用-Dlealone.test.port指定各自的服务端端口, 默认还是9210
+    private int port = Integer.getInteger("lealone.test.port", Constants.DEFAULT_TCP_PORT);
 
     private String netFactoryName = Constants.DEFAULT_NET_FACTORY_NAME;
 
