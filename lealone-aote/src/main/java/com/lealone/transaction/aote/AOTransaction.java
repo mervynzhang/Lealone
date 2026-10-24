@@ -278,9 +278,13 @@ public class AOTransaction implements Transaction {
     @Override
     public void asyncCommitComplete() {
         commitFinal();
-        if (asyncTask != null) {
+        // 回调只跑一次：writeRedoLog 发现事务已结束时会补调本方法(否则语句等不到响应)，
+        // 那种情况下第一次提交已经跑过回调，这里必须先取走再置空，避免客户端收到两次响应
+        Runnable task = asyncTask;
+        asyncTask = null;
+        if (task != null) {
             try {
-                asyncTask.run();
+                task.run();
             } catch (Exception e) {
                 throw DbException.convert(e);
             }
