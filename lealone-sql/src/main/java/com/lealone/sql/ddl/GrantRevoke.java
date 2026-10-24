@@ -15,7 +15,9 @@ import com.lealone.db.auth.Right;
 import com.lealone.db.auth.RightOwner;
 import com.lealone.db.auth.Role;
 import com.lealone.db.lock.DbObjectLock;
+import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
+import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.service.Service;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Table;
@@ -96,6 +98,14 @@ public class GrantRevoke extends AuthStatement {
 
     public void addService(Service service) {
         dbObjects.add(service);
+    }
+
+    public void addProcedure(SqlProcedure procedure) {
+        dbObjects.add(procedure);
+    }
+
+    public void addFunction(FunctionAlias function) {
+        dbObjects.add(function);
     }
 
     /**
