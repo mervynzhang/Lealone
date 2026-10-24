@@ -77,6 +77,10 @@ public class SqlFunction extends FunctionAlias {
 
     // RETURNS SETOF/RETURNS TABLE声明的结果列，标量函数时都为null
     private boolean returnsTable;
+    // RETURNS RECORD：返回行由OUT/INOUT参数定义
+    private boolean returnsRecord;
+    // RETURNS SETOF <表名>时保存表名用于getCreateSQL
+    private String setofTableName;
     private String[] columnNames;
     private String[] columnTypeSqls;
     private int[] columnTypes;
@@ -159,6 +163,21 @@ public class SqlFunction extends FunctionAlias {
             this.returnTypeSql = returnTypeSql;
             this.returnType = returnType;
         }
+        // RETURNS RECORD的行结构由OUT/INOUT参数决定
+        if (returnsRecord) {
+            boolean setReturning = isSetReturning();
+            if (setReturning) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "RETURNS RECORD cannot be used with SETOF/TABLE");
+            }
+            if (outputIndexes.length == 0) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "RETURNS RECORD requires OUT parameters");
+            }
+            this.returnType = Value.RESULT_SET;
+            this.returnTypeSql = "RECORD";
+            return;
+        }
         // RETURNS SETOF/RETURNS TABLE声明的结果列，和OUT/INOUT参数不能同时用
         boolean setReturning = isSetReturning();
         if (outputIndexes.length == 1) {
@@ -187,6 +206,14 @@ public class SqlFunction extends FunctionAlias {
             throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
                     "RETURNS is required when there is no OUT parameter");
         }
+    }
+
+    public void setReturnsRecord(boolean returnsRecord) {
+        this.returnsRecord = returnsRecord;
+    }
+
+    public void setSetofTableName(String setofTableName) {
+        this.setofTableName = setofTableName;
     }
 
     public void setStrict(boolean strict) {
@@ -451,8 +478,11 @@ public class SqlFunction extends FunctionAlias {
             buff.append(parameterTypes[i]);
         }
         buff.append(')');
-        // 有OUT/INOUT参数时RETURNS可以省略，返回类型由参数推导
-        if (outputIndexes.length == 0) {
+        // 有OUT/INOUT参数时RETURNS可以省略，返回类型由参数推导；
+        // RETURNS RECORD虽然由OUT参数定义形状，但要把RECORD关键字写回去才能回放
+        if (outputIndexes.length > 0 && returnsRecord) {
+            buff.append(" RETURNS RECORD");
+        } else if (outputIndexes.length == 0) {
             buff.append(" RETURNS ");
             if (isSetReturning()) {
                 if (returnsTable) {
@@ -465,7 +495,11 @@ public class SqlFunction extends FunctionAlias {
                     }
                     buff.append(')');
                 } else {
-                    buff.append("SETOF ").append(columnTypeSqls[0]);
+                    buff.append("SETOF ");
+                    if (setofTableName != null)
+                        buff.append(setofTableName);
+                    else
+                        buff.append(columnTypeSqls[0]);
                 }
             } else {
                 buff.append(returnTypeSql);

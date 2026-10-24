@@ -177,6 +177,35 @@ public class PlpgSqlVariable {
         return recordFieldValues[index];
     }
 
+    // 复合值是否整体为NULL：未赋值或所有字段都是NULL
+    public boolean isRecordNull() {
+        if (!recordAssigned || recordFieldValues == null)
+            return true;
+        for (Value fieldValue : recordFieldValues) {
+            if (fieldValue != null && fieldValue != ValueNull.INSTANCE)
+                return false;
+        }
+        return true;
+    }
+
+    // RAISE NOTICE '%', r时按PostgreSQL的(字段值,字段值)格式输出整行
+    public String getRecordString() {
+        if (!recordAssigned)
+            throw PlpgSqlException.raise("55000",
+                    "record \"" + name + "\" is not assigned yet");
+        StringBuilder buff = new StringBuilder();
+        buff.append('(');
+        for (int i = 0; i < recordFieldValues.length; i++) {
+            if (i > 0)
+                buff.append(',');
+            Value fieldValue = recordFieldValues[i];
+            if (fieldValue != null && fieldValue != ValueNull.INSTANCE)
+                buff.append(fieldValue.getString());
+        }
+        buff.append(')');
+        return buff.toString();
+    }
+
     public void setRecordField(String fieldName, Value value) {
         int index = findRecordField(fieldName);
         if (value == null)

@@ -63,7 +63,8 @@ public class PlpgSqlFunction extends SqlFunction {
         long[] columnPrecisions = null;
         int[] columnScales = null;
         if (setReturning) {
-            columnNames = returnsTable ? getReturnColumnNames() : null;
+            // SETOF <表名>也有列名；SETOF标量时返回null，列名用函数名
+            columnNames = getReturnColumnNames();
             columnTypes = getReturnColumnTypes();
             columnPrecisions = getReturnColumnPrecisions();
             columnScales = getReturnColumnScales();

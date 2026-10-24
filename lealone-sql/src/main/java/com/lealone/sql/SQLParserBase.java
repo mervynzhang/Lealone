@@ -152,6 +152,7 @@ import com.lealone.sql.dml.SetStatement;
 import com.lealone.sql.dml.TransactionStatement;
 import com.lealone.sql.dml.Update;
 import com.lealone.sql.expression.Alias;
+import com.lealone.sql.expression.CompositeFieldExpression;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.ExpressionColumn;
 import com.lealone.sql.expression.ExpressionList;
@@ -2914,6 +2915,10 @@ public class SQLParserBase implements SQLParser {
                 } else {
                     read(")");
                 }
+                if (readIf(".")) {
+                    String fieldName = readColumnIdentifier();
+                    r = CompositeFieldExpression.create(session, database, r, fieldName);
+                }
             }
             break;
         case TRUE:
@@ -5235,8 +5240,15 @@ public class SQLParserBase implements SQLParser {
                             dataType.defaultScale);
                 } else {
                     Column returnColumn = parseColumnWithType(null);
-                    command.setSetofReturnType(returnColumn.getOriginalSQL(), returnColumn.getType(),
-                            returnColumn.getPrecision(), returnColumn.getScale());
+                    if (returnColumn.getTable() != null
+                            && returnColumn.getType() == Value.JAVA_OBJECT) {
+                        // SETOF <表名>：返回表的所有列
+                        command.setSetofTableReturnType(returnColumn.getTable());
+                    } else {
+                        command.setSetofReturnType(returnColumn.getOriginalSQL(),
+                                returnColumn.getType(), returnColumn.getPrecision(),
+                                returnColumn.getScale());
+                    }
                 }
             } else if (readIf("TABLE")) {
                 read("(");
@@ -5274,6 +5286,8 @@ public class SQLParserBase implements SQLParser {
                 }
                 command.setTableReturnType(columnNameArray, columnTypeSqlArray, columnTypeArray,
                         columnPrecisionArray, columnScaleArray);
+            } else if (readIf("RECORD")) {
+                command.setRecordReturnType();
             } else if (readIf("VOID")) {
                 // VOID不是普通数据类型，单独处理，PL/pgSQL函数可以省略RETURN
                 command.setReturnType("VOID", Value.NULL);

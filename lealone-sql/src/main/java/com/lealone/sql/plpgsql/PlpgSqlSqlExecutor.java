@@ -15,6 +15,7 @@ import com.lealone.db.api.ErrorCode;
 import com.lealone.db.result.Result;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueNull;
 import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.PreparedSQLStatement;
@@ -433,10 +434,22 @@ public class PlpgSqlSqlExecutor {
             if (currentTokenType == IDENTIFIER && resolver != null) {
                 PlpgSqlVariable variable = resolver.findVariable(currentToken, currentTokenQuoted);
                 if (variable != null && canSubstitute()) {
-                    if (variable.isRecord())
+                    if (variable.isRecord()) {
+                        // record变量支持IS [NOT] NULL和RAISE整行输出，其他标量用法暂不支持
+                        read();
+                        if (readIf("IS")) {
+                            boolean not = readIf("NOT");
+                            if (readIf("NULL")) {
+                                boolean isNull = variable.isRecordNull();
+                                if (not)
+                                    isNull = !isNull;
+                                return ValueExpression.get(ValueBoolean.get(isNull));
+                            }
+                        }
                         throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                                 "PL/pgSQL record variable " + variable.getName()
                                         + " can only be used as record.field");
+                    }
                     read();
                     return ValueExpression.get(variable.getValue());
                 }

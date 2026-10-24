@@ -148,7 +148,8 @@ public class PlpgSqlInterpreter {
     private Value finishWithoutReturn() {
         if (resultInfo.setReturning)
             return buildSetResult();
-        if (resultInfo.hasMultipleOutputParameters())
+        // RETURNS RECORD和多个OUT参数都返回结果集行
+        if (resultInfo.returnType == Value.RESULT_SET)
             return buildOutputResultSet();
         if (resultInfo.hasOutputParameters())
             return getOutputValue();
@@ -483,7 +484,7 @@ public class PlpgSqlInterpreter {
         if (resultInfo.setReturning)
             throw PlpgSqlException.raise("2F005",
                     "RETURN cannot have a parameter in function returning set");
-        if (resultInfo.hasMultipleOutputParameters())
+        if (resultInfo.returnType == Value.RESULT_SET)
             throw PlpgSqlException.raise("2F005",
                     "RETURN cannot have a parameter in function with OUT parameters");
         if (returnType == Value.NULL)
@@ -512,9 +513,9 @@ public class PlpgSqlInterpreter {
         Value[] row = new Value[count];
         if (expression == null) {
             // RETURNS TABLE：列变量里就是当前行的值
-            if (!resultInfo.returnsTable && count == 1)
+            if (!resultInfo.returnsTable)
                 throw PlpgSqlException.raise("2F005",
-                        "RETURN NEXT requires an expression in a scalar set-returning function");
+                        "RETURN NEXT requires an expression in a set-returning function");
             for (int i = 0; i < count; i++) {
                 PlpgSqlVariable variable = tableColumnVariables == null
                         || i >= tableColumnVariables.length ? null : tableColumnVariables[i];
@@ -856,8 +857,14 @@ public class PlpgSqlInterpreter {
                     buff.append('%');
                     i++;
                 } else if (argIndex < node.arguments.size()) {
-                    Value value = sqlExecutor.evalExpression(node.arguments.get(argIndex++), scope);
-                    buff.append(valueToString(value));
+                    String argument = node.arguments.get(argIndex++);
+                    String recordString = formatRecordArgument(argument);
+                    if (recordString != null) {
+                        buff.append(recordString);
+                    } else {
+                        Value value = sqlExecutor.evalExpression(argument, scope);
+                        buff.append(valueToString(value));
+                    }
                 } else {
                     throw PlpgSqlException.raise("22023",
                             "too few parameters specified for RAISE");
@@ -869,6 +876,14 @@ public class PlpgSqlInterpreter {
         if (argIndex < node.arguments.size())
             throw PlpgSqlException.raise("22023", "too many parameters specified for RAISE");
         return buff.toString();
+    }
+
+    // RAISE的参数是record变量时输出整行(字段值,字段值)
+    private String formatRecordArgument(String argument) {
+        PlpgSqlVariable variable = scope.findVariable(argument.trim(), false);
+        if (variable != null && variable.isRecord())
+            return variable.getRecordString();
+        return null;
     }
 
     private static String valueToString(Value value) {

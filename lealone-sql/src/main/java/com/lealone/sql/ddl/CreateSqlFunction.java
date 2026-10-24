@@ -16,6 +16,9 @@ import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.session.ServerSession;
+import com.lealone.db.table.Column;
+import com.lealone.db.table.Table;
+import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
 import com.lealone.sql.PreparedSQLStatement;
 import com.lealone.sql.SQLStatement;
@@ -42,6 +45,10 @@ public class CreateSqlFunction extends SchemaStatement {
     // RETURNS SETOF/RETURNS TABLE声明的结果列
     private boolean returnColumns;
     private boolean returnsTable;
+    // RETURNS RECORD由OUT/INOUT参数定义返回行
+    private boolean returnsRecord;
+    // RETURNS SETOF <表名>时原样保留表名用于SCRIPT回放
+    private String setofTableName;
     private String[] columnNames;
     private String[] columnTypeSqls;
     private int[] columnTypes;
@@ -88,6 +95,46 @@ public class CreateSqlFunction extends SchemaStatement {
 
     public void setLanguage(String language) {
         this.language = language;
+    }
+
+    /**
+     * 设置RETURNS RECORD，返回行的形状由OUT/INOUT参数决定。
+     */
+    public void setRecordReturnType() {
+        returnsRecord = true;
+    }
+
+    /**
+     * 设置RETURNS SETOF <表名>，结果列就是表的列。
+     */
+    public void setSetofTableReturnType(Table table) {
+        Column[] columns = table.getColumns();
+        int count = columns.length;
+        String[] names = new String[count];
+        String[] typeSqls = new String[count];
+        int[] types = new int[count];
+        long[] precisions = new long[count];
+        int[] scales = new int[count];
+        for (int i = 0; i < count; i++) {
+            Column column = columns[i];
+            names[i] = column.getName();
+            int type = column.getType();
+            types[i] = type;
+            String typeSql = column.getOriginalSQL();
+            if (typeSql == null)
+                typeSql = DataType.getDataType(type).name;
+            typeSqls[i] = typeSql;
+            precisions[i] = column.getPrecision();
+            scales[i] = column.getScale();
+        }
+        returnColumns = true;
+        // getCreateSQL里用不带schema的表名，回放时按当前schema解析
+        setofTableName = session.getDatabase().quoteIdentifier(table.getName());
+        columnNames = names;
+        columnTypeSqls = typeSqls;
+        columnTypes = types;
+        columnPrecisions = precisions;
+        columnScales = scales;
     }
 
     /**
@@ -277,6 +324,10 @@ public class CreateSqlFunction extends SchemaStatement {
         if (!plpgsql && ifNotExists && schema.findFunction(session, functionName) != null)
             return 0;
         // 先校验语言和函数体，非法时不改动已有的函数
+        if (returnsRecord && getOutputParameterCount() == 0) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "RETURNS RECORD requires OUT parameters");
+        }
         if (plpgsql) {
             PlpgSqlParser.parse(body);
             // PL/pgSQL的数组参数还没有实现
@@ -318,7 +369,11 @@ public class CreateSqlFunction extends SchemaStatement {
         if (returnColumns) {
             function.setReturnColumns(returnsTable, columnNames, columnTypeSqls, columnTypes,
                     columnPrecisions, columnScales);
+            if (setofTableName != null)
+                function.setSetofTableName(setofTableName);
         }
+        if (returnsRecord)
+            function.setReturnsRecord(true);
         function.setReturnType(returnTypeSql, returnType);
         function.setBody(body, bodySql, bodyParameterIndexes);
         function.setDeterministic(deterministic);
