@@ -5,7 +5,6 @@
  */
 package com.lealone.test.sql.expression;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.test.sql.SqlAssertTestBase;
@@ -13,7 +12,7 @@ import com.lealone.test.sql.SqlAssertTestBase;
 /**
  * 谓词与三值逻辑：AND/OR/NOT 真值表、IS [NOT] NULL、行值、IN/NOT IN、LIKE ESCAPE、CASE。
  * <p>
- * 期望值以 SQL 标准 / H2 语义为准。已确认不符合标准的断言放在 {@code @Ignore("BUG: ...")} 里。
+ * 期望值以 SQL 标准 / H2 语义为准。
  */
 public class PredicateLogicTest extends SqlAssertTestBase {
 
@@ -26,6 +25,20 @@ public class PredicateLogicTest extends SqlAssertTestBase {
             assertQueryEquals(expected, "SELECT " + expr);
     }
 
+    // 行值 IN 也必须是三值逻辑: 含 NULL 的行值无法判定, 结果是 UNKNOWN 而不是 FALSE
+    @Test
+    public void rowValueInUsesThreeValuedLogic() {
+        assertQueryNull("SELECT (1, NULL) IN ((1, 2), (3, 4))");
+        assertQueryNull("SELECT (1, 2) IN ((1, NULL), (3, 4))");
+        assertQueryNull("SELECT (NULL, NULL) IN ((1, 2))");
+        assertQueryNull("SELECT (1, NULL) NOT IN ((1, 2), (3, 4))");
+        assertQueryTrue("SELECT (1, 2) IN ((1, 2), (3, 4))");
+        // 含 NULL 的行值即使两边完全一样也无法判定, 标准/PostgreSQL 都是 UNKNOWN
+        assertQueryNull("SELECT (1, NULL) IN ((1, NULL))");
+        assertQueryFalse("SELECT (1, 2) IN ((1, 3), (3, 4))");
+        assertQueryFalse("SELECT (1, 2) NOT IN ((1, 2), (3, 4))");
+    }
+
     @Test
     public void andTruthTable() {
         Boolean[][] table = { //
@@ -33,12 +46,8 @@ public class PredicateLogicTest extends SqlAssertTestBase {
                 { Boolean.FALSE, Boolean.FALSE, Boolean.FALSE }, // FALSE AND ..
                 { null, Boolean.FALSE, null } }; // NULL AND ..
         for (int i = 0; i < 3; i++)
-            for (int j = 0; j < 3; j++) {
-                // NULL AND FALSE 目前返回 NULL，见 andWithFalseOnRight，这里先跳过这个格子
-                if (i == 2 && j == 1)
-                    continue;
+            for (int j = 0; j < 3; j++)
                 assertTruth(VALUES[i] + " AND " + VALUES[j], table[i][j]);
-            }
     }
 
     @Test
@@ -160,16 +169,6 @@ public class PredicateLogicTest extends SqlAssertTestBase {
         assertQueryFalse("SELECT 3 BETWEEN 1 AND 2");
     }
 
-    // ------------------------------------------------------------------
-    // 以下为已确认缺陷（期望值按 SQL 标准与 H2 2.4.240 实测）
-    // ------------------------------------------------------------------
-
-    // BUG: 左操作数为 NULL 时 AND 没有和右边的 FALSE 做短路求值，返回 UNKNOWN。
-    // 期望: NULL AND FALSE = FALSE（H2/PostgreSQL 均为 false，FALSE 是 AND 的"零元"）；
-    // 实际: NULL。
-    // 更矛盾的是 NOT(NULL AND FALSE) 返回 true（等价于认为它是 FALSE），
-    // 而 (NULL AND FALSE) = FALSE 返回 NULL，同一个表达式在不同上下文结果不一致。
-    @Ignore("BUG: NULL AND FALSE returns NULL instead of FALSE; NOT(NULL AND FALSE) returns true")
     @Test
     public void andWithFalseOnRight() {
         assertQueryFalse("SELECT NULL AND FALSE");
@@ -178,10 +177,6 @@ public class PredicateLogicTest extends SqlAssertTestBase {
         assertQueryTrue("SELECT NOT (NULL AND FALSE)");
     }
 
-    // BUG: 行值全为 NULL 时 IS NULL 应为 TRUE（SQL:1999 起行值构造器语义，H2 返回 true）。
-    // 期望: (NULL,NULL) IS NULL = true, (NULL,NULL) IS NOT NULL = false；
-    // 实际: false / true，即 Lealone 把行值当成"非 NULL 的复合值"。
-    @Ignore("BUG: (NULL,NULL) IS NULL returns false, should be true (H2: true)")
     @Test
     public void rowValueIsNull() {
         assertQueryTrue("SELECT (NULL, NULL) IS NULL");
@@ -191,10 +186,6 @@ public class PredicateLogicTest extends SqlAssertTestBase {
         assertQueryFalse("SELECT (1, NULL) IS NULL");
     }
 
-    // BUG: 行值比较没有做三值逻辑，含 NULL 的行比较直接返回 TRUE/FALSE 而不是 UNKNOWN。
-    // 期望: (1,NULL) = (1,NULL) 为 NULL，(NULL,2) IN ((1,2)) 为 NULL（H2 均为 null）；
-    // 实际: true / false。
-    @Ignore("BUG: row value comparison with NULL returns TRUE/FALSE instead of UNKNOWN (H2: null)")
     @Test
     public void rowValueComparisonIsThreeValued() {
         assertQueryNull("SELECT (1, NULL) = (1, NULL)");
