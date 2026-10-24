@@ -47,4 +47,31 @@ public class LealoneSQLParser extends SQLParserBase {
         }
         return argList.toArray(new Expression[0]);
     }
+
+    /**
+     * 判断过程体里是否有查询语句。只切词不解析语句，避免解析WITH时在会话里创建临时视图。
+     * CALL语句按查询执行时Statement.execute()才能拿到过程体最后一条查询的结果集。
+     */
+    public static boolean hasQueryStatement(ServerSession session, String body) {
+        LealoneSQLParser parser = new LealoneSQLParser(session);
+        parser.initialize(body);
+        parser.read();
+        boolean statementStart = true;
+        while (parser.currentTokenType != END) {
+            if (statementStart) {
+                String token = parser.currentToken;
+                if ("SELECT".equalsIgnoreCase(token) || "VALUES".equalsIgnoreCase(token)
+                        || "TABLE".equalsIgnoreCase(token) || "WITH".equalsIgnoreCase(token)
+                        || "(".equals(token)) {
+                    return true;
+                }
+                statementStart = false;
+            }
+            if (parser.currentTokenType == KEYWORD && ";".equals(parser.currentToken)) {
+                statementStart = true;
+            }
+            parser.read();
+        }
+        return false;
+    }
 }
