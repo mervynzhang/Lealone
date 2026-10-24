@@ -498,7 +498,7 @@ public class InfoMetaTable extends MetaTable {
                             // IS_NULLABLE
                             c.isNullable() ? "YES" : "NO",
                             // DATA_TYPE
-                            "" + DataType.convertTypeToSQLType(c.getType()),
+                            "" + getMetaSQLType(c.getType()),
                             // CHARACTER_MAXIMUM_LENGTH
                             "" + c.getPrecisionAsInt(),
                             // CHARACTER_OCTET_LENGTH
@@ -514,7 +514,7 @@ public class InfoMetaTable extends MetaTable {
                             // COLLATION_NAME
                             collation,
                             // TYPE_NAME
-                            identifier(DataType.getDataType(c.getType()).name),
+                            identifier(getMetaTypeName(c.getType())),
                             // NULLABLE
                             "" + (c.isNullable() ? DatabaseMetaData.columnNullable
                                     : DatabaseMetaData.columnNoNulls),
@@ -891,7 +891,7 @@ public class InfoMetaTable extends MetaTable {
                             // JAVA_METHOD
                             alias.getJavaMethodName(),
                             // DATA_TYPE
-                            "" + DataType.convertTypeToSQLType(method.getDataType()),
+                            "" + getMetaSQLType(method.getDataType()),
                             // TYPE_NAME
                             getMetaTypeName(method.getDataType()),
                             // COLUMN_COUNT INT
@@ -1550,6 +1550,14 @@ public class InfoMetaTable extends MetaTable {
         if (type == Value.UNKNOWN)
             return "UNKNOWN";
         return DataType.getDataType(type).name;
+    }
+
+    // 有的函数/列类型未知(Value.UNKNOWN), convertTypeToSQLType会直接抛异常,
+    // 那样任何一次 information_schema 查询都会跟着失败, 这里退化成OTHER
+    private static int getMetaSQLType(int type) {
+        if (type == Value.UNKNOWN)
+            return java.sql.Types.OTHER;
+        return DataType.convertTypeToSQLType(type);
     }
 
     private void addFunctionParameters(ArrayList<Row> rows, String catalog, SqlFunction function) {
