@@ -95,6 +95,13 @@ public class CheckpointService implements Runnable {
         logSyncService.wakeUp(); // 唤醒执行检查点
     }
 
+    // CHECKPOINT SYNC用: 等这次checkpoint真正把脏页写完再返回
+    public void executeCheckpointSync() {
+        if (isClosed)
+            return;
+        executeCheckpoint(true, false, true);
+    }
+
     // 按周期自动触发
     @Override
     public void run() {
@@ -226,6 +233,10 @@ public class CheckpointService implements Runnable {
     }
 
     private void executeCheckpoint(boolean force, boolean isClosing) {
+        executeCheckpoint(force, isClosing, false);
+    }
+
+    private void executeCheckpoint(boolean force, boolean isClosing, boolean sync) {
         if (maps.isEmpty())
             return;
         boolean needSave = collectDirtyMemory();
@@ -235,8 +246,8 @@ public class CheckpointService implements Runnable {
                 || isClosed // 关闭前要刷脏页
                 || lastSavedAt + checkpointPeriod < System.currentTimeMillis()) // 周期超过阈值了
         {
-            if (isClosing) { // 正在关闭时，直接用当前线程保存
-                save(force, true);
+            if (isClosing || sync) { // 正在关闭或SYNC时，直接用当前线程保存
+                save(force, isClosing);
             } else {
                 workingThread = new Thread(() -> {
                     save(force, false);
@@ -280,8 +291,8 @@ public class CheckpointService implements Runnable {
                 long size = map.collectDirtyMemory();
                 e.getValue().set(size);
                 boolean needSave;
-                if (isClosing) { // 关闭时不能只看脏页内存，有些脏页可能挂在没有标记为脏的父节点下面
-                    needSave = map.hasUnsavedChanges();
+                if (isClosing) { // 关闭时必须保存：shutdown hook路径不会调用Storage.close，跳过就会丢更新
+                    needSave = true;
                 } else {
                     needSave = map.hasUnsavedChanges()
                             && (force || (size > 0 && size > map.getCacheSize()));
@@ -292,7 +303,10 @@ public class CheckpointService implements Runnable {
                         workingThread.setName("Saving-" + map.getName());
                     map.setLastTransactionId(lastTransactionId);
                     try {
-                        map.save(Math.max(size, 4096));
+                        if (isClosing)
+                            map.saveForClosing(Math.max(size, 4096));
+                        else
+                            map.save(Math.max(size, 4096));
                     } finally {
                         map.setLastTransactionId(-1);
                     }
