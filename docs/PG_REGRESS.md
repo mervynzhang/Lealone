@@ -68,13 +68,13 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 15, skip 25)  脚本语句  50(通过  50, 失败 0)  被skip用例占  90 条
+[pgregress]   create_function_sql.sql  用例 40(执行 16, skip 24)  脚本语句  58(通过  58, 失败 0)  被skip用例占  86 条
 [pgregress]   create_procedure.sql     用例 22(执行  8, skip 14)  脚本语句  26(通过  26, 失败 0)  被skip用例占  61 条
 [pgregress]   plpgsql.sql              用例 23(执行 16, skip  7)  脚本语句  45(通过  45, 失败 0)  被skip用例占  17 条
 [pgregress]   rangefuncs.sql           用例  9(执行  6, skip  3)  脚本语句  21(通过  21, 失败 0)  被skip用例占   9 条
-[pgregress] 合计: 用例 94 (执行 45, skip 49), 脚本语句 142 (通过 142, 失败 0), 耗时 506ms
-[pgregress] skip 清单: 49 条用例, 点名跳过的 PG 语句 278 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 150 条在 skip 清单里
+[pgregress] 合计: 用例 94 (执行 46, skip 48), 脚本语句 150 (通过 150, 失败 0), 耗时 452ms
+[pgregress] skip 清单: 48 条用例, 点名跳过的 PG 语句 274 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 146 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  84 条在 skip 清单里
 [pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 23 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 21 条)
@@ -88,7 +88,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 49 条 / 278 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 48 条 / 274 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -105,7 +105,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 anyarray/anyelement 多态类型 | 3 | 15 | function_sql.sql_body_polymorphic, function_sql.anyarray_setof, procedure.polymorphic |
 | Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD | 1 | 3 | function_sql.sql_body_tempseq |
 | Lealone 没有 information_schema.routines 等视图 | 1 | 19 | function_sql.information_schema |
-| Lealone 不支持按参数类型重载 | 2 | 15 | function_sql.overload, procedure.ambiguous_drop |
+| 存储过程不支持按参数类型重载(CREATE FUNCTION 已支持, 见 docs/PG_FUNCTION.md 第五节) | 1 | 11 | procedure.ambiguous_drop |
 | Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转 | 1 | 3 | function_sql.or_replace_window |
 | Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN | 1 | 10 | function_sql.setof_inline |
 | Lealone 函数体只允许单条查询(不支持 INSERT ... RETURNING) | 1 | 6 | function_sql.void_insert |
@@ -153,6 +153,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | `function_sql.setof` | skip（generate_series + select 列表展开） | 执行 2 条语句 | body 换成 `SYSTEM_RANGE` + `SELECT * FROM f()` |
 | `function_sql.strict` | 已执行（缺 F_2） | 执行 13 条语句 | 补上 `CALLED ON NULL INPUT` |
 | `procedure.collation` | skip（CALL 结果集拿不到） | 执行 2 条语句 | `CALL` 结果集 + 过程体 `SELECT ? = ?` |
+| `function_sql.overload` | skip（不支持按参数类型重载） | 执行 8 条语句 | `CREATE/DROP FUNCTION` 按参数类型重载（见 docs/PG_FUNCTION.md 第五节） |
 
 新加的用例（都是 PG 原文段落）：
 
