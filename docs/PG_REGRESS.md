@@ -5,9 +5,10 @@
 `lealone-test/src/test/resources/pg/skip-list.txt` 一起，既是测试套件的说明书，也是
 "Lealone 离 PG 还有多远"的度量尺。
 
-- 当前基线：`feature/stored-routines`（`b388d91b3`，已合入 SETOF/TABLE、OUT/INOUT/STRICT/VARIADIC、
-  PL/pgSQL 子集、调用期类型转换）
-- 上一轮基线：`9261ba9bd`（只有标量 SQL 函数/过程），对比见第六节
+- 当前基线：`feature/stored-routines`（`5a25375b5`，SQL 函数 6 个缺陷修复 + PL/pgSQL 第二轮语义补齐：
+  FOUND/GET DIAGNOSTICS、裸 RETURN、多 OUT、RETURN NEXT/QUERY、RETURNS TABLE、record/%ROWTYPE、
+  块标签限定名、WITH 函数体、CALL 结果集）
+- 上一轮基线：`b388d91b3`（89 用例 / 45 执行 / 53 skip / 101 语句），对比见第六节
 - 对照的 PG 源码：本地 `postgres` 20devel 的 `src/test/regress/sql/`
 - 只加测试代码和资源，**没有改任何产品代码**；发现的缺陷都记在第七节，不在本工作线修
 
@@ -67,15 +68,15 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 14, skip 26)  脚本语句  45(通过  45, 失败 0)  被skip用例占  92 条
-[pgregress]   create_procedure.sql     用例 22(执行  7, skip 15)  脚本语句  24(通过  24, 失败 0)  被skip用例占  63 条
-[pgregress]   plpgsql.sql              用例 18(执行  7, skip 11)  脚本语句  20(通过  20, 失败 0)  被skip用例占  27 条
+[pgregress]   create_function_sql.sql  用例 40(执行 15, skip 25)  脚本语句  50(通过  50, 失败 0)  被skip用例占  90 条
+[pgregress]   create_procedure.sql     用例 22(执行  8, skip 14)  脚本语句  26(通过  26, 失败 0)  被skip用例占  61 条
+[pgregress]   plpgsql.sql              用例 23(执行 16, skip  7)  脚本语句  45(通过  45, 失败 0)  被skip用例占  17 条
 [pgregress]   rangefuncs.sql           用例  9(执行  6, skip  3)  脚本语句  21(通过  21, 失败 0)  被skip用例占   9 条
-[pgregress] 合计: 用例 89 (执行 34, skip 55), 脚本语句 110 (通过 110, 失败 0), 耗时 448ms
-[pgregress] skip 清单: 55 条用例, 点名跳过的 PG 语句 299 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 152 条在 skip 清单里
-[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  86 条在 skip 清单里
-[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 40 条)
+[pgregress] 合计: 用例 94 (执行 45, skip 49), 脚本语句 142 (通过 142, 失败 0), 耗时 506ms
+[pgregress] skip 清单: 49 条用例, 点名跳过的 PG 语句 278 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 150 条在 skip 清单里
+[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  84 条在 skip 清单里
+[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 23 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 21 条)
 ```
 
@@ -87,7 +88,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 55 条 / 299 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 49 条 / 278 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -97,7 +98,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 没有 pg_proc.provolatile 与 ALTER FUNCTION | 1 | 4 | function_sql.volatility_catalog |
 | Lealone 不支持 SECURITY DEFINER/INVOKER | 1 | 8 | function_sql.security_definer |
 | Lealone 不支持 LEAKPROOF 属性 | 1 | 16 | function_sql.leakproof |
-| Lealone 没有 pg_proc.proisstrict/ALTER FUNCTION, 也不认识 CALLED ON NULL INPUT 关键字 | 1 | 5 | function_sql.strict_catalog |
+| Lealone 没有 pg_proc.proisstrict 与 ALTER FUNCTION(CALLED ON NULL INPUT 已支持) | 1 | 5 | function_sql.strict_catalog |
 | Lealone 没有 pg_get_functiondef() | 2 | 17 | function_sql.pg_get_functiondef, function_sql.pg_get_functiondef_sqlbody |
 | Lealone 无 SQL 标准函数体(RETURN 表达式) | 2 | 12 | function_sql.sql_body_return, function_sql.sql_body_view |
 | Lealone 无 BEGIN ATOMIC 多语句函数体 | 2 | 11 | function_sql.sql_body_atomic, function_sql.sql_body_case |
@@ -106,7 +107,6 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 没有 information_schema.routines 等视图 | 1 | 19 | function_sql.information_schema |
 | Lealone 不支持按参数类型重载 | 2 | 15 | function_sql.overload, procedure.ambiguous_drop |
 | Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转 | 1 | 3 | function_sql.or_replace_window |
-| Lealone 无 generate_series(), 且 select 列表里不展开 setof 函数 | 1 | 2 | function_sql.setof |
 | Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN | 1 | 10 | function_sql.setof_inline |
 | Lealone 函数体只允许单条查询(不支持 INSERT ... RETURNING) | 1 | 6 | function_sql.void_insert |
 | Lealone 函数体只允许单条查询(不支持 DDL) | 1 | 8 | function_sql.ddl_in_body |
@@ -115,206 +115,133 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 anyelement/anyarray 多态类型 | 1 | 4 | function_sql.empty_body_call |
 | Lealone 的 CALL 不区分函数与过程 | 2 | 3 | procedure.call_random, procedure.call_function |
 | Lealone 客户端没有 psql 元命令, 也没有 pg_get_functiondef() | 1 | 1 | procedure.psql_meta |
-| Lealone 无 BEGIN ATOMIC 过程体 | 1 | 5 | procedure.atomic_body |
+| CREATE 能过但 CALL 时报 42000: 过程体不支持 BEGIN ATOMIC 块 | 1 | 5 | procedure.atomic_body |
 | Lealone 过程体不能执行 DDL | 1 | 2 | procedure.utility_body |
-| Lealone 没有 collation 概念(execute() 拿不到 CALL 结果集的问题已修) | 1 | 2 | procedure.collation |
-| CREATE PROCEDURE 不接受 OUT/INOUT 参数(目前只有 CREATE FUNCTION 支持) | 1 | 6 | procedure.inout_params |
+| CREATE PROCEDURE 只接受 IN 参数(42102), OUT/INOUT 在 CREATE FUNCTION 里已支持 | 1 | 6 | procedure.inout_params |
 | Lealone 不支持 DEFAULT 参数与命名实参 | 1 | 7 | procedure.named_default |
-| Lealone 过程体不能为空, 也无 BEGIN ATOMIC | 1 | 3 | procedure.empty_body |
-| CREATE PROCEDURE 不接受 OUT/INOUT/VARIADIC 参数(目前只有 CREATE FUNCTION 支持) | 1 | 12 | procedure.out_params |
+| CREATE 能过但 CALL 时报 42000: 过程体不支持 BEGIN ATOMIC 空块 | 1 | 3 | procedure.empty_body |
+| CREATE PROCEDURE 只接受 IN 参数(42102); OUT/INOUT/VARIADIC 在 CREATE FUNCTION 里已支持 | 1 | 12 | procedure.out_params |
 | Lealone 不支持 ALTER PROCEDURE/FUNCTION, 过程也不接受 WINDOW/STRICT/VARIADIC/DEFAULT | 1 | 8 | procedure.alter_and_bad_def |
 | Lealone 无过程级 EXECUTE 权限与 SET ROLE 语义 | 1 | 10 | procedure.privileges |
 | Lealone 不支持 ALTER ROUTINE/DROP ROUTINE | 1 | 5 | procedure.routine_syntax |
 | Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger) | 2 | 4 | plpgsql.trigger_room, plpgsql.trigger_raise |
-| Lealone 的 PL/pgSQL 没有 FOUND 魔法变量(42122 Column FOUND not found) | 1 | 4 | plpgsql.found |
-| PL/pgSQL × SETOF/TABLE 在 DDL 阶段报 50100 | 1 | 6 | plpgsql.for_loop_setof |
 | Lealone 无 anyelement/anyarray 多态参数类型 | 1 | 1 | plpgsql.polymorphic |
-| 缺陷: 有 OUT/INOUT 参数时裸 RETURN; 报 50000 RETURN; cannot be used in a function returning a value | 1 | 3 | plpgsql.out_assign |
-| 多个 OUT 参数的 PL/pgSQL 函数在 DDL 阶段报 50100 | 1 | 3 | plpgsql.multi_out |
-| 这段依赖 FOUND 魔法变量(PERFORM 之后检查 FOUND) | 1 | 5 | plpgsql.perform |
 | PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100 | 1 | 6 | plpgsql.cursor |
-| 缺陷: DECLARE x record / %ROWTYPE 能建函数, 调用时报 42001(内部 CAST(NULL AS RECORD) 语法错) | 1 | 2 | plpgsql.record |
-| leaker_2 用 OUT 参数 + RETURNS RECORD(RECORD 不支持), leaker_1 还有复合字段访问 | 1 | 6 | plpgsql.out_params_exception |
+| DML 的 INSERT/UPDATE ... RETURNING ... INTO record 不支持(Lealone 引擎没有 DML RETURNING), record 变量本身可用 | 1 | 2 | plpgsql.record |
+| RETURNS RECORD 复合返回类型不支持, 且 leaker_1 用 (f(x)).field 取复合返回值的字段 | 1 | 6 | plpgsql.out_params_exception |
 | Lealone 无 SETOF <表行类型>, 也不支持 $1 位置参数 | 1 | 5 | rangefuncs.setof_composite |
-| Lealone 不支持 WITH ORDINALITY, 也没有 unnest()/generate_series() | 1 | 8 | rangefuncs.with_ordinality |
+| WITH ORDINALITY 报 42000 语法错, 且没有 unnest()/generate_series() | 1 | 8 | rangefuncs.with_ordinality |
 | Lealone 函数体只允许单条查询, 不支持 INSERT ... RETURNING | 1 | 8 | rangefuncs.insert_returning |
+| RETURNS SETOF <表行类型> 不支持(只支持标量 setof 与 RETURNS TABLE) | 1 | 4 | plpgsql.setof_composite_record |
 
 ## 六、这一轮刷新：解锁了什么
 
-合并 `feature/stored-routines` 之后，清单里"不支持"的能力落地了一批，对应清单行删掉、用例开始真正执行：
+基线从 `b388d91b3` 到 `5a25375b5`，SQL 函数修了 6 个缺陷、PL/pgSQL 补齐了 FOUND/OUT/SETOF 等语义。
+逐条核对后删掉 7 行 skip（`function_sql.setof`、`procedure.collation`、`plpgsql.found`、`plpgsql.perform`、
+`plpgsql.out_assign`、`plpgsql.multi_out`、`plpgsql.for_loop_setof`），新增 5 个用例（4 个执行 + 1 个 skip）：
+执行用例 34 → 45，脚本语句 112 → 142（+30），skip 清单 55 → 49 条。
 
 | 用例 | 之前 | 现在 | 靠什么能力 |
 | --- | --- | --- | --- |
-| `function_sql.void_return` | skip（缺陷：VOID 返回序列化字节） | 执行 2 条语句 | `RETURNS VOID` 修好了 |
-| `function_sql.strict`（原用例拆成 `strict` + `strict_catalog`） | skip | 执行 9 条语句 | `STRICT` / `RETURNS NULL ON NULL INPUT` |
-| `plpgsql.recursion` | skip（无 PL/pgSQL） | 执行 2 条语句 | `LANGUAGE plpgsql` + `IF` + 递归调用 |
-| `plpgsql.exception_reraise` | skip（无 PL/pgSQL） | 执行 2 条语句 | 嵌套 `EXCEPTION WHEN OTHERS` + `RAISE;` |
+| `plpgsql.found` | skip（无 FOUND） | 执行 4 条语句 | `FOUND` 魔法变量 |
+| `plpgsql.perform` | skip（依赖 FOUND） | 执行 4 条语句 | `PERFORM` + `FOUND` |
+| `plpgsql.out_assign` | skip（缺陷：裸 RETURN） | 执行 2 条语句 | 有 OUT 参数时裸 `RETURN;` / 自然结束 |
+| `plpgsql.inout_return` | 已执行（改成显式 RETURN 才通过） | 执行 2 条语句 | 改回 PG 原样的自然结束写法 |
+| `plpgsql.multi_out` | skip（多 OUT 50100） | 执行 2 条语句 | PL/pgSQL 多个 OUT 返回一行 |
+| `plpgsql.for_loop_setof` | skip（SETOF 50100） | 执行 2 条语句 | 标量 `RETURNS SETOF` + `RETURN NEXT` |
+| `plpgsql.select_into` | 已执行（用 `x is not null` 代替 FOUND） | 执行 4 条语句 | 改回 PG 原样的 `IF FOUND` |
+| `function_sql.setof` | skip（generate_series + select 列表展开） | 执行 2 条语句 | body 换成 `SYSTEM_RANGE` + `SELECT * FROM f()` |
+| `function_sql.strict` | 已执行（缺 F_2） | 执行 13 条语句 | 补上 `CALLED ON NULL INPUT` |
+| `procedure.collation` | skip（CALL 结果集拿不到） | 执行 2 条语句 | `CALL` 结果集 + 过程体 `SELECT ? = ?` |
 
-本轮修完函数/过程缺陷后，又有 5 个用例从 skip 清单里删掉并开始通过：
-
-| 用例 | 原来 skip 的原因 | 现在 |
-| --- | --- | --- |
-| `function_sql.setof_void` | `SETOF VOID` 每行返回 Java 序列化字节 | 按 PG 对齐返回 0 行（函数体换成 `SYSTEM_RANGE` 以去掉 `generate_series` 依赖） |
-| `function_sql.bad_body_return_type` | 建函数时不校验函数体 | 建函数时准备一次函数体，常量类型错误在 CREATE 时报 22018 |
-| `function_sql.bad_body_columns` | 函数体返回多列静默取第一列 | 建函数时校验结果列数报 22018，调用时也不再静默取第一列 |
-| `procedure.body_select` | `CALL` 有结果集时 `execute()` 拿不到行 | 过程体里有查询语句时 `CALL` 按查询执行，`execute()` 返回 true |
-| `procedure.nested_call` | 过程体里嵌套 `CALL` 参数绑定冲突(90012) | 过程体每条语句独立绑定参数 |
-
-新加的用例（都是 PG 原文的段落，按新能力挑出来的）：
+新加的用例（都是 PG 原文段落）：
 
 | 新用例 | PG 出处 | 覆盖的能力 |
 | --- | --- | --- |
-| `plpgsql.out_return` | plpgsql.sql:1683-1686 | 单个 `OUT` 参数 + `RETURN 表达式` |
-| `plpgsql.inout_return` | plpgsql.sql:1697-1703 | `INOUT` 参数 |
-| `plpgsql.select_into` | plpgsql.sql:1819-1832 | `SELECT INTO` + `IF` + `STABLE` |
-| `plpgsql.select_into_insert` | plpgsql.sql:1834-1853 | 函数内 DML + 嵌套函数调用 |
-| `plpgsql.raise_notice` | plpgsql.sql:2085-2106 | `RAISE NOTICE`（含占位符个数不对的报错） |
-| `rangefuncs.setof_from` / `setof_from_call` | rangefuncs.sql:85-103 | `RETURNS SETOF int` + `FROM f(...)` 表函数 |
-| `rangefuncs.setof_text_view` | rangefuncs.sql:113-118 | `RETURNS SETOF text` + 视图里用表函数 |
-| `rangefuncs.table_function` | rangefuncs.sql:435-438 | `RETURNS TABLE(a int)` |
-| `rangefuncs.table_function_typmod` | rangefuncs.sql:449-454 | `RETURNS TABLE(a varchar(5))` 列类型 |
-| `rangefuncs.table_function_join` | rangefuncs.sql:66-80 | 表函数列别名列表 + JOIN |
+| `plpgsql.qualified_names` | plpgsql.sql:2841-2858 | 块标签 + `outerblock.param1` 限定名 |
+| `plpgsql.table_function` | plpgsql.sql:3540-3546 | `RETURNS TABLE` + `RETURN QUERY` |
+| `plpgsql.table_function_next` | plpgsql.sql:3548-3557 | `RETURNS TABLE` 的列当变量 + `RETURN NEXT` |
+| `plpgsql.return_query_row_count` | plpgsql.sql:3561-3570 | `RETURN QUERY VALUES` + `GET DIAGNOSTICS ROW_COUNT` + `FOUND` |
+| `plpgsql.setof_composite_record`（skip） | plpgsql.sql:1487-1512 | `RETURNS SETOF <表行类型>` 仍不支持 |
 
-按特性分组计数（新解锁的脚本语句）：
+按特性分组计数（新增执行用例 11 个）：
 
-| 特性 | 新增脚本语句 |
-| --- | --- |
-| `RETURNS SETOF` / `RETURNS TABLE` + 表函数 | 11 |
-| `OUT` / `INOUT` 参数 | 4 |
-| `STRICT` / `RETURNS NULL ON NULL INPUT` | 9 |
-| `RETURNS VOID` | 2 |
-| `LANGUAGE plpgsql`（递归/RAISE/嵌套 EXCEPTION/SELECT INTO/DECLARE/IF） | 13 |
-| 合计 | 39（加上本轮修复后: 脚本语句 47 → 110，用例 67 → 89，执行用例 14 → 34） |
+| 特性 | 新执行用例 | 说明 |
+| --- | --- | --- |
+| PL/pgSQL `FOUND` / `PERFORM` / `GET DIAGNOSTICS ROW_COUNT` | 3 | `plpgsql.found`、`plpgsql.perform`（解锁）、`plpgsql.return_query_row_count`（新增） |
+| PL/pgSQL 裸 `RETURN;` / `INOUT` 自然结束 / 多 `OUT` | 2 | `plpgsql.out_assign`、`plpgsql.multi_out`（解锁）；`plpgsql.inout_return` 改回 PG 原样写法 |
+| PL/pgSQL `SETOF` / `RETURN NEXT` / `RETURN QUERY` / `RETURNS TABLE` | 3 | `plpgsql.for_loop_setof`（解锁）、`plpgsql.table_function`、`plpgsql.table_function_next`（新增） |
+| PL/pgSQL 块标签限定名 | 1 | `plpgsql.qualified_names`（新增） |
+| SQL 函数 `RETURNS SETOF` | 1 | `function_sql.setof`（解锁，body 换成 SYSTEM_RANGE） |
+| `CALLED ON NULL INPUT` | 0（补进既有用例） | `function_sql.strict` 补上 PG 的 F_2 |
+| 过程的 `CALL` 结果集 | 1 | `procedure.collation`（解锁） |
+| 合计 | 11 | |
 
-## 七、缺陷清单（N1、N7~N11 已修复，其余待修）
+## 七、剩余缺口与缺陷（都已实测复现）
 
-**这一轮新发现的：**
-
-### N1. `RETURNS SETOF VOID` 每一行都返回 Java 序列化字节
+### N1. 标量函数不能出现在 `FROM` 子句里
 
 ```sql
-create function sv2() returns setof void as 'select 1';
-select * from sv2();
+create function f1(i int, out j int) returns int as $$ begin return i + 1; end $$ language plpgsql;
+select * from f1(42);   -- 90000 Function "F1" must return a result set
 ```
 
-实测每行是 `aced0005737200116a6176612e6c616e672e496e7465676572...`（序列化后的 Integer 1）。
-PG 里 `setof void` 每行是空值。标量 `RETURNS VOID` 已经修好，这条没有跟着修。
-用例 `function_sql.setof_void`。
+PG 对任何函数都允许 `FROM f(...)`（单行结果集），Lealone 只允许 setof/TABLE/多 OUT 的函数。
+`plpgsql.out_assign`、`plpgsql.inout_return` 因此只断言 `SELECT f(42)`（PG 原文里还有 `SELECT * FROM f1(42)`）。
 
-**已修复（按 PG 对齐）**：`RETURNS SETOF VOID` 和 PG 一样**不返回任何行**，函数体返回什么、返回多少列都不影响
-（见 `PgFunctionDefectTest.testSetofVoid`）。用例 `function_sql.setof_void` 已解锁：Lealone 没有
-`generate_series()`，函数体换成 `SYSTEM_RANGE`，期望输出就是 PG 的 `(0 rows)`。
-
-### N2. 有 `OUT`/`INOUT` 参数的 PL/pgSQL 函数不能裸 `RETURN;`，也不能自然结束
+### N2. 多 OUT 函数的标量调用拿不到 record
 
 ```sql
-create function functest_out2(i int, out j int) as
-$$ begin j := i + 1; return; end $$ language plpgsql;   -- 50000 RETURN; cannot be used in a function returning a value
-create function functest_inout(inout i int) as
-$$ begin i := i+1; end $$ language plpgsql;             -- 50000 control reached end of function without RETURN
+create function f1(i int, out j int, out k text) as ... language plpgsql;
+select f1(42);   -- 50000
 ```
 
-PG 里这两种写法都合法（有 OUT 参数时 `RETURN;` 和落到函数结尾都行，返回列就是 OUT 参数的值）。
-Lealone 必须显式 `RETURN <值>`。用例 `plpgsql.out_assign`、`plpgsql.inout_return`
-（后者已按 Lealone 的要求改成显式 RETURN 才跑通）。
+PG 返回 `(43,foo)`。Lealone 必须写 `SELECT * FROM f1(42)`。用例 `plpgsql.multi_out`。
 
-### N3. 没有 `FOUND` 魔法变量
+### N3. 没有 `least()` / `greatest()`
 
 ```sql
-create function tf() returns boolean as
-$$ begin insert into ftt values (1); if FOUND then return true; end if; return false; end $$ language plpgsql;
-select tf();   -- 42122 Column "FOUND" not found
+select least('a','b');   -- 42122 Column not found
 ```
 
-PG 里 `FOUND` 是 PL/pgSQL 的内建变量（`INSERT/UPDATE/DELETE`、`PERFORM`、`SELECT INTO` 之后都能查）。
-用例 `plpgsql.found`、`plpgsql.perform`。
+PG 的 `create_procedure.sql:164-170` 用 `least('a','b')` 调过程，这里只能直接传它的结果 `'a'`。
+用例 `procedure.collation`。
 
-### N4. `DECLARE x record` / 表的 `%ROWTYPE` 能建函数，调用时报内部 SQL 语法错
+### N4. `WITH ORDINALITY` 不支持
 
 ```sql
-create function rowtype1() returns varchar as
-$$ DECLARE r t%ROWTYPE; BEGIN SELECT * INTO r FROM t WHERE id = 1; RETURN r.name; END; $$ language plpgsql;
-select rowtype1();   -- 42001 Syntax error: SELECT CAST(NULL AS T%ROWTYPE) ...
+select * from rngfunct(1) with ordinality as z(a,b,ord);   -- 42000 Syntax error
 ```
 
-DDL 阶段不报错，运行时解释器拿声明类型去拼 `CAST(NULL AS ...)`，`T%ROWTYPE`/`RECORD` 不是合法类型名。
-用例 `plpgsql.record`、`plpgsql.out_params_exception`。
+用例 `rangefuncs.with_ordinality`（这一段同时还依赖 `unnest()`/`generate_series()`）。
 
-### N5. PL/pgSQL 的 `SETOF/TABLE` 与多个 `OUT` 参数在 DDL 阶段报 50100
+### N5. 过程体的 `BEGIN ATOMIC` 到 `CALL` 时才报错
 
 ```sql
-create function f(in i int, out j int, out k text) as ... language plpgsql;
--- 50100 Feature not supported: "SETOF/TABLE, multiple OUT or array parameters in PL/pgSQL function"
+create procedure pe() as 'BEGIN ATOMIC END';   -- CREATE 成功
+call pe();                                     -- 42000 Syntax error "BEGIN ATOMIC"
 ```
 
-SQL 语言的函数已经支持 SETOF/TABLE、多个 OUT，但 PL/pgSQL 还没有。
-用例 `plpgsql.for_loop_setof`、`plpgsql.multi_out`。
+和之前"函数体创建时不校验"是一类问题：DDL 阶段不校验过程体。用例 `procedure.atomic_body`、
+`procedure.empty_body`。
 
-### N6. 块标签的限定名取不到
+### 仍然不支持的（清单里都有用例）
 
-```sql
-create function pl_qual_names(param1 int) returns void as
-$$ <<outerblock>> DECLARE param1 int := 1; BEGIN RAISE NOTICE '%', outerblock.param1; END; $$ language plpgsql;
--- 42122 Column "OUTERBLOCK.PARAM1" not found
-```
-
-标签本身能解析（带标签的 `CONTINUE outer` 可以工作），但 `标签.变量` 这种限定引用不行。
-（这一条还没单独登记用例，见第十一节。）
-
-**上一轮就存在、这一轮复测仍存在的：**
-
-### N7. `CALL` 有结果集时 `Statement.execute()` 拿不到行
-
-`create procedure ptest2() as 'select 5'; call ptest2();` → `execute()` 返回 false、
-`updateCount=0`、`getResultSet()=null`（`executeQuery("CALL ptest2()")` 能拿到一行 5）。
-用例 `procedure.body_select`、`procedure.collation`。
-
-**已修复**：`CallProcedure.isQuery()` 改为按过程体里是否有查询语句判断，过程体是 SELECT 时 `execute()` 返回 true
-并且 `getResultSet()` 能拿到行；只有更新语句的过程仍然返回更新计数。`procedure.body_select` 已开始执行并通过，
-`procedure.collation` 仍因 Lealone 没有 collation 概念 skip。
-
-### N8. 过程体里嵌套 `CALL` 参数绑定冲突
-
-`create procedure ptest3(y text) as 'call ptest1(?); call ptest1(?)'; call ptest3('b');`
-→ `90012 Parameter "#1" is not set`。用例 `procedure.nested_call`。
-
-**已修复**：过程体的每条语句各自从第 0 个实参开始绑定，不再共用一个全局参数下标；
-`procedure.nested_call` 已开始执行并通过。
-
-### N9. 函数体返回多列时静默取第一列
-
-`create function f_multi(a int) returns int as 'select 1, 2, 3'; select f_multi(1);` → 1；
-PG 报 42804。用例 `function_sql.bad_body_columns`。
-
-**已修复**：建函数时校验函数体结果列数（报 22018）；标量函数调用时也不再静默取第一列。
-`function_sql.bad_body_columns` 已开始执行并通过（函数体末尾的分号按 Lealone 规则去掉）。
-
-### N10. 建函数时不校验函数体
-
-`create function f_bad(a int) returns int as 'select ''not an integer'''` 建函数成功，
-第一次调用才报 22018；PG 建函数即报 42804。用例 `function_sql.bad_body_return_type`。
-
-**已修复**：建函数时在一个嵌套 session 里 prepare 一次函数体（不执行），语法错误、列/表不存在、
-常量返回值类型不匹配都在 CREATE 时报出（数据库启动回放 `sys(meta)` 时跳过校验，和 PG 的
-`check_function_bodies=off` 一致）。`function_sql.bad_body_return_type` 已开始执行并通过。
-
-### N11. 函数体是 `WITH ... SELECT` 时参数绑定错乱
-
-`create function f_with(a int) returns int as 'WITH x AS (SELECT a * 2 AS v) SELECT v FROM x'; select f_with(5);`
-→ `90012 Parameter "#1" is not set`。PG 返回 10。（PG 这两个文件里没有 WITH 函数体的用例，
-所以还没登记成用例。）
-
-**已修复**：`parseWith()` 会把每个 CTE 体里新增的参数传给 `TableView`，执行视图查询时按编号绑定；
-多个 CTE 共用参数时，编译后没被引用的占位参数按 NULL 处理。见 `PgFunctionDefectTest.testWithParameter`。
-
-### N12. 内存库（`persistent=false`）下返回 VARCHAR 的函数一调用就 NPE
-
-`LobStorage.createClob ... DataHandler.getLobStorage() is null`（50000），持久化库正常。
-本套件因此改用持久化库（`target/test-data/pgregress`）。
-
-**其它已知差异**（不算缺陷，但影响对齐）：参数名与列名同名时参数优先（PG 列优先）；
-`CALL` 不区分函数与过程；`DROP FUNCTION`/`DROP PROCEDURE` 的错误码不统一（90077/90151 vs PG 42883）；
-`RAISE <条件名>`（如 `RAISE syntax_error`）不支持，只能写 `RAISE EXCEPTION`/`RAISE SQLSTATE`。
+* **DML 相关**：SQL 函数体只能是查询（`INSERT ... RETURNING`/DDL 都不行）；`INSERT ... RETURNING ... INTO record`
+  也不行（引擎没有 DML RETURNING）；过程体不能执行 DDL。用例 `function_sql.void_insert`、
+  `function_sql.ddl_in_body`、`plpgsql.record`、`rangefuncs.insert_returning`、`procedure.utility_body`。
+* **返回类型**：`RETURNS SETOF <表行类型>`、`RETURNS RECORD` 与 `(f(x)).field` 复合字段访问。
+  用例 `plpgsql.setof_composite_record`、`plpgsql.out_params_exception`、`rangefuncs.setof_composite`。
+* **CREATE PROCEDURE 只收 IN 参数**：写 `OUT/INOUT` 报 42102（同名能力在 CREATE FUNCTION 里有）。
+  用例 `procedure.inout_params`、`procedure.out_params`。
+* **游标 / refcursor**、**触发器**、**anyelement/anyarray 多态**、**RETURN QUERY EXECUTE/EXECUTE 动态 SQL**、
+  **GET DIAGNOSTICS 之外的诊断项**、**CASE 语句**、**ASSERT**：用例 `plpgsql.cursor`、`plpgsql.trigger_*`、
+  `plpgsql.polymorphic`、`function_sql.anyarray_setof` 等。
+* **DDL 属性/目录**：`pg_proc`、`pg_get_functiondef()`、`information_schema.routines`、`ALTER FUNCTION/PROCEDURE/ROUTINE`、
+  `SECURITY DEFINER`、`LEAKPROOF`、`WINDOW`、按参数类型重载、`DEFAULT`/命名实参。原因都在清单里。
+* **其它 SQL 能力**：`ARRAY[...]` 字面量、`$1/$2` 位置参数、`generate_series()`、`unnest()`、
+  `SELECT f()` 的 setof 展开（会明确报 50100，要求写 `SELECT * FROM f()`）、SQL 标准函数体
+  （`RETURN expr` / `BEGIN ATOMIC`）、`EXPLAIN`、`CREATE OPERATOR CLASS`。
 
 ## 八、PG 原文件里到底跳过了什么（如实交代）
 
@@ -324,11 +251,11 @@ PG 报 42804。用例 `function_sql.bad_body_columns`。
    `rangefuncs.sql`、`regproc.sql`、`plpgsql.sql`、`create_procedure.sql` 等。
    所以函数部分的主体用 `create_function_sql.sql`，setof 用 `rangefuncs.sql`，过程用
    `create_procedure.sql`。这不是"我们挑着做"，是素材没有。
-2. **`plpgsql.sql`（4756 行 / 935 条语句）只抽样转换**：这一轮从 6 个代表性用例扩到 18 个用例
-   （执行 7 个、skip 11 个），覆盖递归、`RAISE`、嵌套 `EXCEPTION`、`SELECT INTO`、`OUT`/`INOUT`、
-   函数内 DML；触发器、FOUND、游标、多态参数、`RECORD`、`RETURN QUERY`、`EXECUTE`、`GET DIAGNOSTICS`、
-   `CASE` 语句、`ASSERT` 的段落仍然 skip 或没抽样。**剩下几百条语句没有逐条登记**，
-   这是本套件目前最大的透明性缺口。
+2. **`plpgsql.sql`（4756 行 / 935 条语句）只抽样转换**：这一轮扩到 23 个用例（执行 16 个、skip 7 个），
+   覆盖递归、`FOUND`、`PERFORM`、`RAISE`、嵌套 `EXCEPTION`、`SELECT INTO`、`OUT`/`INOUT`/多 `OUT`、
+   `RETURN NEXT`/`RETURN QUERY`/`RETURNS TABLE`、`GET DIAGNOSTICS ROW_COUNT`、块标签限定名、函数内 DML；
+   触发器、游标、多态参数、`RECORD` + DML `RETURNING`、`RETURNS RECORD`、`EXECUTE`、`CASE` 语句、
+   `ASSERT` 的段落仍然 skip 或没抽样。**剩下几百条语句没有逐条登记**，这是本套件目前最大的透明性缺口。
 3. **`rangefuncs.sql`（827 行 / 428 条语句）也只抽样**：转过来 9 个用例（执行 6 个），
    依赖 `WITH ORDINALITY`、`unnest()`、`generate_series()`、`SETOF <表行类型>` 的段落 skip 或没抽。
 4. **`portals.sql`**：按要求没纳入（游标/portal 语义，不是函数/过程定义）。
@@ -346,9 +273,9 @@ PG 报 42804。用例 `function_sql.bad_body_columns`。
    写成 `AS $$ DECLARE ...; BEGIN ...; END; $$;` 一行即可（见 `pg/README.md`）。
 3. **布尔/空值显示**：PG `t/f`，Lealone `TRUE/FALSE`；PG 的一行空值在这里是 `null`。
 4. **过程体参数**：PG 过程体按名字/位置引用，Lealone 过程体用 `?` 按位置引用。
-5. **没有 FOUND**：依赖 FOUND 的用例 skip；能改编的（如 `SELECT INTO` 后判断变量）在脚本里注明改编。
+5. **FOUND**：现在已经支持，`plpgsql.found`/`perform`/`select_into` 都用 PG 原样的 `IF FOUND`。
 6. **RAISE 条件名**：`RAISE syntax_error` 改成 `RAISE EXCEPTION '...'`，其余语义不变。
-7. **generate_series 缺失**：`RETURNS TABLE` 的用例里用 `SYSTEM_RANGE` 替代，并注明。
+7. **generate_series 缺失**：`RETURNS TABLE`/setof 的用例里用 `SYSTEM_RANGE` 替代（列名 `X`），并注明。
 8. **错误码不同但都是拒绝**的用例，断言 Lealone 的错误码，并在注释里写明 PG 的错误码
    （42601/42804/42809/42883/42P13 ↔ 50100/42000/50000/90022/90077/90151）。
 
@@ -366,15 +293,15 @@ PG 报 42804。用例 `function_sql.bad_body_columns`。
 1. **打开用例**：从 `skip-list.txt` 删掉 id → 按 `pg/README.md` 把 `-- PG 期望` 改成 `>` 断言 →
    跑 `-Dtest=PgRegressTest`，红了就说明还没对齐。
 2. **建议新增的用例**（这轮发现、还没登记的缺陷）：
-   * N6 块标签限定名 → `plpgsql.qualified_names`（PG `plpgsql.sql:2841-2858`）；
-   * N11 `WITH` 函数体 → 单独一个用例文件（PG 这两个文件里没有对应段落）；
-   * N10 建函数时校验函数体 → 需要 PG `check_function_bodies` 的对照段落。
-3. **正在被实现的几格**（谁做完谁就能清空对应清单行）：
+   * N1 标量函数出现在 `FROM` 里 → 等支持后把 `SELECT * FROM f1(42)` 加回 `plpgsql.out_assign`/`inout_return`；
+   * N2 多 OUT 标量调用 → 等支持后把 `SELECT f1(42)` 加回 `plpgsql.multi_out`；
+   * N3 `least()/greatest()` → 等支持后把 `procedure.collation` 改回 PG 原样的 `least('a','b')`。
+3. **还能解锁的几格**（谁做完谁就能清空对应清单行）：
    * 触发器 → `plpgsql.trigger_*` 2 条；
-   * FOUND → `plpgsql.found`、`plpgsql.perform` 2 条；
-   * PL/pgSQL 的 SETOF/TABLE 与多 OUT → `plpgsql.for_loop_setof`、`plpgsql.multi_out` 2 条；
-   * RECORD/%ROWTYPE → `plpgsql.record`、`plpgsql.out_params_exception` 2 条；
+   * DML `RETURNING` → `plpgsql.record` 1 条（record 本身已可用）；
+   * `RETURNS RECORD`/复合字段 → `plpgsql.out_params_exception` 1 条；
+   * `RETURNS SETOF <表行类型>` → `plpgsql.setof_composite_record`、`rangefuncs.setof_composite` 2 条；
    * 过程级 OUT/INOUT → `procedure.inout_params`、`procedure.out_params` 2 条；
-   * 游标 → `plpgsql.cursor` 1 条。
-4. **补齐 PG 覆盖面**：`plpgsql.sql` 按段登记（尤其是游标、FOUND、RAISE 变体）；
+   * 游标 → `plpgsql.cursor` 1 条；`WITH ORDINALITY` → `rangefuncs.with_ordinality` 1 条。
+4. **补齐 PG 覆盖面**：`plpgsql.sql` 按段登记（尤其是游标、`RETURN QUERY EXECUTE`、`CASE` 语句）；
    `rangefuncs.sql` 里 `WITH ORDINALITY` 落地后再补；`portals.sql` 如果以后支持游标再纳入。
