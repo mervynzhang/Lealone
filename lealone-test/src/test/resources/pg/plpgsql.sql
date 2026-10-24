@@ -72,50 +72,79 @@ select recursion_test(4,3) r;
 
 -- @case plpgsql.found
 -- @pg plpgsql.sql:1445-1484
--- 缺失: Lealone 的 PL/pgSQL 没有 FOUND 魔法变量, IF FOUND 会报 42122 Column "FOUND" not found
+-- 适配: 函数体写成一行(脚本引擎按行末 ';' 切语句); 语义和 PG 完全一样:
+--       INSERT/UPDATE/DELETE/FOR 之后 FOUND 分别表示"影响了行/查到了行/循环有迭代"
 create table found_test_tbl (a int);
-create function test_found() returns boolean as '
-  declare
-  begin
-  insert into found_test_tbl values (1);
-  if FOUND then
-     insert into found_test_tbl values (2);
-  end if;
-  update found_test_tbl set a = 100 where a = 1;
-  if FOUND then
-    insert into found_test_tbl values (3);
-  end if;
-  delete from found_test_tbl where a = 9999;
-  if not FOUND then
-    insert into found_test_tbl values (4);
-  end if;
-  return true;
-  end;' language plpgsql;
-select test_found();
--- PG 期望: t, found_test_tbl 里是 100/2/3/4
+> update count: 0
 
--- ---------------------------------------------------------------------------
--- PL/pgSQL 的 set-returning 函数 (整块 skip)
--- ---------------------------------------------------------------------------
+create function test_found() returns boolean as $$ declare begin insert into found_test_tbl values (1); if FOUND then insert into found_test_tbl values (2); end if; update found_test_tbl set a = 100 where a = 1; if FOUND then insert into found_test_tbl values (3); end if; delete from found_test_tbl where a = 9999; if not FOUND then insert into found_test_tbl values (4); end if; for i in 1 .. 10 loop end loop; if FOUND then insert into found_test_tbl values (5); end if; for i in 2 .. 1 loop end loop; if not FOUND then insert into found_test_tbl values (6); end if; return true; end; $$ language plpgsql;
+> update count: 0
+
+select test_found() r;
+> R
+> ----
+> TRUE
+> rows: 1
+
+-- 和 PG 一样的 6 行: 2 来自 INSERT 后的 FOUND, 100 是 UPDATE 改出来的, 3/5 是 UPDATE/FOR 后 FOUND,
+-- 4/6 是 DELETE 没删到行、FOR 没有迭代时 NOT FOUND
+select * from found_test_tbl;
+> A
+> ---
+> 2
+> 100
+> 3
+> 4
+> 5
+> 6
+> rows: 6
 
 -- @case plpgsql.for_loop_setof
--- @pg plpgsql.sql:1490-1524
--- 缺失: PL/pgSQL × SETOF/TABLE 在 DDL 阶段报 50100 (SETOF/TABLE, multiple OUT or array parameters in PL/pgSQL function)
-create function test_ret_set_scalar(a int, b int) returns setof int as '
+-- @pg plpgsql.sql:1514-1524
+-- 适配: PG 有 (int,int) 参数 + $1/$2, 这里改成命名参数 a/b
+create function test_ret_set_scalar(a int, b int) returns setof int as $$ DECLARE i int; BEGIN FOR i IN a .. b LOOP RETURN NEXT i + 1; END LOOP; RETURN; END; $$ language plpgsql;
+> update count: 0
+
+select * from test_ret_set_scalar(1,10);
+> TEST_RET_SET_SCALAR
+> -------------------
+> 2
+> 3
+> 4
+> 5
+> 6
+> 7
+> 8
+> 9
+> 10
+> 11
+> rows: 10
+
+-- @case plpgsql.setof_composite_record
+-- @pg plpgsql.sql:1487-1512
+-- 缺失: RETURNS SETOF <表行类型> 不支持(和 SQL 函数一样, 只支持标量 setof/RETURNS TABLE),
+--       DECLARE rec RECORD / row 表%ROWTYPE 本身已经可用, 卡在返回类型上
+create function test_table_func_rec() returns setof found_test_tbl as '
 DECLARE
-	i int;
+	rec RECORD;
 BEGIN
-	FOR i IN a .. b LOOP
-		RETURN NEXT i + 1;
+	FOR rec IN select * from found_test_tbl LOOP
+		RETURN NEXT rec;
 	END LOOP;
 	RETURN;
 END;' language plpgsql;
-select * from test_ret_set_scalar(1,10);
--- PG 期望: 2..11 共 10 行
-
--- ---------------------------------------------------------------------------
--- 多态参数 (整块 skip)
--- ---------------------------------------------------------------------------
+select * from test_table_func_rec();
+create function test_table_func_row() returns setof found_test_tbl as '
+DECLARE
+	row found_test_tbl%ROWTYPE;
+BEGIN
+	FOR row IN select * from found_test_tbl LOOP
+		RETURN NEXT row;
+	END LOOP;
+	RETURN;
+END;' language plpgsql;
+select * from test_table_func_row();
+-- PG 期望: 两张表里的行原样返回
 
 -- @case plpgsql.polymorphic
 -- @pg plpgsql.sql:1565-1568
@@ -146,20 +175,22 @@ select functest_out(42) r;
 
 -- @case plpgsql.out_assign
 -- @pg plpgsql.sql:1688-1695
--- 缺陷: 给 OUT 参数赋值后用裸 RETURN; 收尾是 PG 的常规写法, 但 Lealone 报
---       50000 "RETURN; cannot be used in a function returning a value"(有 OUT/INOUT 参数时也算有返回值)
-create function functest_out2(i int, out j int) as $$
-begin
-  j := i + 1;
-  return;
-end $$ language plpgsql;
-select functest_out2(42);
--- PG 期望: 43
+-- 适配: 函数体写成一行; 有 OUT 参数时裸 RETURN; 和自然结束都按 PG 语义返回 OUT 参数的值。
+--       PG 里 select * from f1(42) 也能拿到一行, Lealone 的标量函数不能当表函数(SELECT * FROM f(1) 报 90000),
+--       这里只断言 SELECT f(42)
+create function functest_out2(i int, out j int) as $$ begin j := i + 1; return; end $$ language plpgsql;
+> update count: 0
+
+select functest_out2(42) r;
+> R
+> --
+> 43
+> rows: 1
 
 -- @case plpgsql.inout_return
 -- @pg plpgsql.sql:1697-1703
--- 适配: PG 里 INOUT 函数靠给参数赋值后自然结束, Lealone 要求显式 RETURN 值(见 plpgsql.out_assign)
-create or replace function functest_inout(inout i int) as $$ begin i := i + 1; return i; end $$ language plpgsql;
+-- 适配: 函数体写成一行; PG 里 INOUT 函数给参数赋值后自然结束即可, 这里保持 PG 原样
+create or replace function functest_inout(inout i int) as $$ begin i := i + 1; end $$ language plpgsql;
 > update count: 0
 
 select functest_inout(42) r;
@@ -170,60 +201,51 @@ select functest_inout(42) r;
 
 -- @case plpgsql.multi_out
 -- @pg plpgsql.sql:1720-1728
--- 缺失: 多个 OUT 参数的 PL/pgSQL 函数在 DDL 阶段报 50100
-create function functest_multi(i int, out j int, out k text) as $$
-begin
-  j := i;
-  j := j + 1;
-  k := 'foo';
-end$$ language plpgsql;
-select * from functest_multi(42);
--- PG 期望: (43, foo)
+-- 适配: 函数体写成一行; PG 里 select f1(42) 会返回 record (43,foo), Lealone 标量调用多列函数报 50000,
+--       必须写成 SELECT * FROM f1(42), 这里断言表函数形式
+create function functest_multi(i int, out j int, out k text) as $$ begin j := i; j := j + 1; k := 'foo'; end$$ language plpgsql;
+> update count: 0
 
--- ---------------------------------------------------------------------------
--- PERFORM
--- ---------------------------------------------------------------------------
+select * from functest_multi(42);
+> J  K
+> -- ---
+> 43 foo
+> rows: 1
 
 -- @case plpgsql.perform
--- @pg plpgsql.sql:1774-1811
--- 缺失: 这段依赖 FOUND 魔法变量(PERFORM 之后检查 FOUND)
+-- @pg plpgsql.sql:1771-1811
+-- 适配: 函数体写成一行; PERFORM 之后 FOUND 表示被调用的函数是否返回了行
 create table perform_test (a int, b int);
-create function perform_simple_func(p int) returns boolean as '
-BEGIN
-	IF p < 20 THEN
-		INSERT INTO perform_test VALUES (p, p + 10);
-		RETURN TRUE;
-	ELSE
-		RETURN FALSE;
-	END IF;
-END;' language plpgsql;
-create function perform_test_func() returns void as '
-BEGIN
-	IF FOUND then
-		INSERT INTO perform_test VALUES (100, 100);
-	END IF;
-	PERFORM perform_simple_func(5);
-	IF FOUND then
-		INSERT INTO perform_test VALUES (100, 100);
-	END IF;
-	RETURN;
-END;' language plpgsql;
-select perform_test_func();
-select * from perform_test;
--- PG 期望: perform_test 里是 (5,15) 和 (100,100)
+> update count: 0
 
--- ---------------------------------------------------------------------------
--- SELECT INTO
--- ---------------------------------------------------------------------------
+create function perform_simple_func(p int) returns boolean as $$ BEGIN IF p < 20 THEN INSERT INTO perform_test VALUES (p, p + 10); RETURN TRUE; ELSE RETURN FALSE; END IF; END; $$ language plpgsql;
+> update count: 0
+
+create function perform_test_func() returns void as $$ BEGIN IF FOUND THEN INSERT INTO perform_test VALUES (100, 100); END IF; PERFORM perform_simple_func(5); IF FOUND THEN INSERT INTO perform_test VALUES (100, 100); END IF; PERFORM perform_simple_func(50); IF FOUND THEN INSERT INTO perform_test VALUES (100, 100); END IF; RETURN; END; $$ language plpgsql;
+> update count: 0
+
+select perform_test_func() r;
+> R
+> ----
+> null
+> rows: 1
+
+-- 只有第一次 PERFORM 返回了行(TRUE), 第二次返回 FALSE, 所以 100,100 只插入两次
+select * from perform_test;
+> A   B
+> --- ---
+> 5   15
+> 100 100
+> 100 100
+> rows: 3
 
 -- @case plpgsql.select_into
 -- @pg plpgsql.sql:1819-1832
--- 适配: PG 用 FOUND 判断查到没查到, Lealone 没有 FOUND, 改成判断取到的变量是否为 NULL;
---       表的 id 用显式值代替 serial, 让期望值固定
+-- 适配: 函数体写成一行; 表的 id 用显式值代替 serial(期望值固定), 其余和 PG 一样用 FOUND 判断
 create temp table users(login varchar, id int);
 > update count: 0
 
-create function sp_id_user(a_login varchar) returns int as $$ declare x int; begin select into x id from users where login = a_login; if x is not null then return x; end if; return 0; end $$ language plpgsql stable;
+create function sp_id_user(a_login varchar) returns int as $$ declare x int; begin select into x id from users where login = a_login; if FOUND then return x; end if; return 0; end$$ language plpgsql stable;
 > update count: 0
 
 insert into users values('user1', 1);
@@ -304,7 +326,8 @@ select reraise_test() r;
 
 -- @case plpgsql.record
 -- @pg plpgsql.sql:2313-2321
--- 缺陷: DECLARE x record / 表的%ROWTYPE 能建函数, 但调用时报 42001(内部生成 CAST(NULL AS RECORD) 的 SQL 语法错)
+-- 缺失: 这段用的是 INSERT ... RETURNING * INTO x record, Lealone 引擎没有 DML RETURNING,
+--       record 变量本身的 SELECT INTO / x.f1 读写已经可以用
 create or replace function stricttest() returns void as $$
 declare x record;
 begin
@@ -313,14 +336,10 @@ begin
 end$$ language plpgsql;
 -- PG 期望: 打印 x.f1 = 5, x.f2 = 6
 
--- ---------------------------------------------------------------------------
--- 带 OUT 参数 + 异常处理 (整块 skip)
--- ---------------------------------------------------------------------------
-
 -- @case plpgsql.out_params_exception
 -- @pg plpgsql.sql:3609-3638
--- 缺失: leaker_2 用了 OUT 参数 + RETURNS RECORD, RECORD 不支持(见 plpgsql.record);
---       leaker_1 里还有 (leaker_2(fail)).error_code 这种复合字段访问
+-- 缺失: leaker_2 的返回类型是 RETURNS RECORD(复合返回类型不支持), leaker_1 里还有
+--       (leaker_2(fail)).error_code 这种复合返回值取字段的写法
 CREATE FUNCTION leaker_1(fail BOOL) RETURNS INTEGER AS $$
 DECLARE
   v_var INTEGER;
@@ -348,3 +367,79 @@ $$ LANGUAGE plpgsql;
 SELECT * FROM leaker_1(false);
 SELECT * FROM leaker_1(true);
 -- PG 期望: 1 和 0
+
+-- ---------------------------------------------------------------------------
+-- 块标签与限定名(第二轮 PL/pgSQL 补齐后可用)
+-- ---------------------------------------------------------------------------
+
+-- @case plpgsql.qualified_names
+-- @pg plpgsql.sql:2841-2858
+-- 适配: 函数体写成一行; 同名变量在不同块里, 用 块标签.变量 取外层/内层的值(PG 的输出是
+--       param1 = 2 / outerblock.param1 = 1 / innerblock.param1 = 2, 用 NOTICE 打印, 这里只断言返回值)
+create function pl_qual_names(param1 int) returns void as $$ <<outerblock>> DECLARE param1 int := 1; BEGIN <<innerblock>> DECLARE param1 int := 2; BEGIN RAISE NOTICE 'param1 = %', param1; RAISE NOTICE 'outerblock.param1 = %', outerblock.param1; RAISE NOTICE 'innerblock.param1 = %', innerblock.param1; END; END; $$ language plpgsql;
+> update count: 0
+
+select pl_qual_names(42) r;
+> R
+> ----
+> null
+> rows: 1
+
+drop function pl_qual_names(int);
+> update count: 0
+
+-- ---------------------------------------------------------------------------
+-- 表函数: RETURN QUERY / RETURN NEXT + RETURNS TABLE
+-- ---------------------------------------------------------------------------
+
+-- @case plpgsql.table_function
+-- @pg plpgsql.sql:3540-3546
+-- 适配: PG 用 generate_series(1,5) g(i), Lealone 没有 generate_series, 换成等价的
+--       SYSTEM_RANGE(1,5)(列名 X); $1 改成命名参数 lim
+create function tftest(lim int) returns table(a int, b int) as $$ begin return query select lim, lim + x from system_range(1,5); end; $$ language plpgsql immutable strict;
+> update count: 0
+
+select * from tftest(10);
+> A  B
+> -- --
+> 10 11
+> 10 12
+> 10 13
+> 10 14
+> 10 15
+> rows: 5
+
+-- @case plpgsql.table_function_next
+-- @pg plpgsql.sql:3548-3557
+-- RETURNS TABLE 的列在函数体里就是变量, 赋值后 RETURN NEXT 一行一行吐出来
+create or replace function tftest(a1 int) returns table(a int, b int) as $$ begin a := a1; b := a1 + 1; return next; a := a1 * 10; b := a1 * 10 + 1; return next; end; $$ language plpgsql immutable strict;
+> update count: 0
+
+select * from tftest(10);
+> A   B
+> --- ---
+> 10  11
+> 100 101
+> rows: 2
+
+drop function tftest(int);
+> update count: 0
+
+-- ---------------------------------------------------------------------------
+-- RETURN QUERY + GET DIAGNOSTICS ROW_COUNT
+-- ---------------------------------------------------------------------------
+
+-- @case plpgsql.return_query_row_count
+-- @pg plpgsql.sql:3561-3570
+-- 适配: 只保留 PG 这段里不依赖 EXECUTE 动态 SQL 的前半段(VALUES 形式 + 空结果);
+--       NOTICE 里的 FOUND/ROW_COUNT 就是 PG 期望的 "TRUE 2" 和 "FALSE 0"
+create function rttest() returns setof int as $$ DECLARE rc int; BEGIN RETURN QUERY VALUES(10),(20); GET DIAGNOSTICS rc = ROW_COUNT; RAISE NOTICE '% %', FOUND, rc; RETURN QUERY SELECT * FROM (VALUES(10),(20)) f(a) WHERE false; GET DIAGNOSTICS rc = ROW_COUNT; RAISE NOTICE '% %', FOUND, rc; END; $$ language plpgsql;
+> update count: 0
+
+select * from rttest();
+> RTTEST
+> ------
+> 10
+> 20
+> rows: 2
+

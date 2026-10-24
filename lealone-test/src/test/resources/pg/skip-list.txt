@@ -64,15 +64,11 @@ procedure.privileges	create_procedure.sql:258-267	10	Lealone 无过程级 EXECUT
 procedure.routine_syntax	create_procedure.sql:272-278	5	Lealone 不支持 ALTER ROUTINE/DROP ROUTINE
 plpgsql.trigger_room	plpgsql.sql:130-140	2	Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger)
 plpgsql.trigger_raise	plpgsql.sql:162-172	2	Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger)
-plpgsql.found	plpgsql.sql:1445-1484	4	Lealone 的 PL/pgSQL 没有 FOUND 魔法变量(42122 Column FOUND not found)
-plpgsql.for_loop_setof	plpgsql.sql:1490-1524	6	PL/pgSQL × SETOF/TABLE 在 DDL 阶段报 50100
 plpgsql.polymorphic	plpgsql.sql:1565-1568	1	Lealone 无 anyelement/anyarray 多态参数类型
-plpgsql.out_assign	plpgsql.sql:1688-1695	3	缺陷: 有 OUT/INOUT 参数时裸 RETURN; 报 50000 RETURN; cannot be used in a function returning a value
-plpgsql.multi_out	plpgsql.sql:1720-1728	3	多个 OUT 参数的 PL/pgSQL 函数在 DDL 阶段报 50100
-plpgsql.perform	plpgsql.sql:1774-1811	5	这段依赖 FOUND 魔法变量(PERFORM 之后检查 FOUND)
 plpgsql.cursor	plpgsql.sql:1859-1900	6	PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100
-plpgsql.record	plpgsql.sql:2313-2321	2	缺陷: DECLARE x record / %ROWTYPE 能建函数, 调用时报 42001(内部 CAST(NULL AS RECORD) 语法错)
-plpgsql.out_params_exception	plpgsql.sql:3609-3638	6	leaker_2 用 OUT 参数 + RETURNS RECORD(RECORD 不支持), leaker_1 还有复合字段访问
+plpgsql.record	plpgsql.sql:2313-2321	2	DML 的 INSERT/UPDATE ... RETURNING ... INTO record 不支持(Lealone 引擎没有 DML RETURNING), record 变量本身可用
+plpgsql.out_params_exception	plpgsql.sql:3609-3638	6	RETURNS RECORD 复合返回类型不支持, 且 leaker_1 用 (f(x)).field 取复合返回值的字段
 rangefuncs.setof_composite	rangefuncs.sql:1-8	5	Lealone 无 SETOF <表行类型>, 也不支持 $1 位置参数
 rangefuncs.with_ordinality	rangefuncs.sql:9-17	8	Lealone 不支持 WITH ORDINALITY, 也没有 unnest()/generate_series()
 rangefuncs.insert_returning	rangefuncs.sql:456-476	8	Lealone 函数体只允许单条查询, 不支持 INSERT ... RETURNING
+plpgsql.setof_composite_record	plpgsql.sql:1487-1512	4	RETURNS SETOF <表行类型> 不支持(只支持标量 setof 与 RETURNS TABLE)
