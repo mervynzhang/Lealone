@@ -5,7 +5,7 @@
 --
 -- Lealone 现在支持 PL/pgSQL 的一个子集(DECLARE/BEGIN..END/IF/ELSIF/LOOP/WHILE/FOR/RETURN/
 -- RAISE/EXCEPTION/PERFORM/SELECT INTO/变量与赋值/内嵌DML), 所以这里逐段转了一批用例过来;
--- 触发器、FOUND 魔法变量、游标、RETURNS SETOF/TABLE、多个 OUT 参数、RECORD/%ROWTYPE、
+-- FOUND 魔法变量、游标、RETURNS SETOF/TABLE、多个 OUT 参数、RECORD/%ROWTYPE、
 -- CASE 语句、EXECUTE 动态 SQL、GET DIAGNOSTICS、ASSERT 仍然不支持, 对应用例留在脚本里被 skip,
 -- 原因写在 pg/skip-list.txt, 每条都带 PG 行号。
 --
@@ -16,42 +16,51 @@
 --   3. 被 skip 的用例保持 PG 原样的语句, 期望值以 "-- PG 期望:" 注释给出。
 
 -- ---------------------------------------------------------------------------
--- 触发器函数(整块 skip: 没有 CREATE TRIGGER)
+-- 触发器函数(行触发器已支持: RETURNS trigger + EXECUTE PROCEDURE)
 -- ---------------------------------------------------------------------------
 
 -- @case plpgsql.trigger_room
 -- @pg plpgsql.sql:130-140
--- 缺失: Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger)
-create function tg_room_au() returns trigger as '
-begin
-    if new.roomno != old.roomno then
-        update WSlot set roomno = new.roomno where roomno = old.roomno;
-    end if;
-    return new;
-end;
-' language plpgsql;
+-- 适配: 补上Room/WSlot建表和DML断言; 触发器函数体用一行PL/pgSQL写法。
+create table Room(roomno int);
+> update count: 0
+create table WSlot(roomno int);
+> update count: 0
+create function tg_room_au() returns trigger as $$ begin if new.roomno != old.roomno then update WSlot set roomno = new.roomno where roomno = old.roomno; end if; return new; end; $$ language plpgsql;
+> update count: 0
+create trigger tg_room_au after update on Room for each row execute procedure tg_room_au();
+> update count: 0
 
-create trigger tg_room_au after update
-    on Room for each row execute procedure tg_room_au();
+insert into Room values(1);
+> update count: 1
+insert into WSlot values(1);
+> update count: 1
+update Room set roomno = 2 where roomno = 1;
+> update count: 1
+select roomno from WSlot;
+> ROOMNO
+> ------
+> 2
+> rows: 1
 
 -- @case plpgsql.trigger_raise
 -- @pg plpgsql.sql:162-172
--- 缺失: Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger)
-create function tg_wslot_biu() returns trigger as $$
-begin
-    if count(*) = 0 from Room where roomno = new.roomno then
-        raise exception 'Room % does not exist', new.roomno;
-    end if;
-    return new;
-end;
-$$ language plpgsql;
+-- 适配: Room不存在时由BEFORE触发器抛50000; 这里保留异常路径并补DML断言。
+create function tg_wslot_biu() returns trigger as $$ begin if not exists (select 1 from Room where roomno = new.roomno) then raise exception 'Room % does not exist', new.roomno; end if; return new; end; $$ language plpgsql;
+> update count: 0
+create trigger tg_wslot_biu before insert or update on WSlot for each row execute procedure tg_wslot_biu();
+> update count: 0
 
-create trigger tg_wslot_biu before insert or update
-    on WSlot for each row execute procedure tg_wslot_biu();
-
--- ---------------------------------------------------------------------------
--- 递归
--- ---------------------------------------------------------------------------
+insert into WSlot values(2);
+> update count: 1
+insert into WSlot values(3);
+> exception 50000
+insert into Room values(3);
+> update count: 1
+insert into WSlot values(3);
+> update count: 1
+update WSlot set roomno = 4 where roomno = 3;
+> exception 50000
 
 -- @case plpgsql.recursion
 -- @pg plpgsql.sql:1429-1440

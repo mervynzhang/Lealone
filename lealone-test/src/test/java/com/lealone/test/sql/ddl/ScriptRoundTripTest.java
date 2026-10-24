@@ -50,6 +50,14 @@ public class ScriptRoundTripTest extends TestBase {
                 s.executeUpdate("insert into t_user values(1, 'alice'), (2, 'bob')");
                 s.executeUpdate("create table t_order(id int primary key, amount int)");
                 s.executeUpdate("insert into t_order values(7, 700)");
+                s.executeUpdate("create table t_trigger_src(id int)");
+                s.executeUpdate("create table t_trigger_audit(id int)");
+                s.executeUpdate("create function t_trigger_fn() returns trigger as $$ " //
+                        + "begin insert into t_trigger_audit values(new.id); return new; end; " //
+                        + "$$ language plpgsql");
+                s.executeUpdate("create trigger t_trigger_tr before insert on t_trigger_src "
+                        + "for each row execute procedure t_trigger_fn()");
+                conn.commit();
             }
             try (Statement s = conn.createStatement()) {
                 s.execute("SCRIPT TO '" + plain.getAbsolutePath() + "'");
@@ -65,6 +73,8 @@ public class ScriptRoundTripTest extends TestBase {
         assertFalse("dump must not export system schema DDL: " + script,
                 script.toUpperCase().contains("INFORMATION_SCHEMA"));
         assertTrue("dump must contain the user table", script.contains("T_USER"));
+        assertTrue("dump must contain trigger function", script.contains("RETURNS TRIGGER"));
+        assertTrue("dump must contain trigger", script.contains("EXECUTE PROCEDURE"));
 
         // 2) 明文dump能完整回放
         String url2 = "jdbc:lealone:embed:" + dir + "/db2;user=root;password=";
@@ -81,6 +91,13 @@ public class ScriptRoundTripTest extends TestBase {
                     ResultSet rs = s.executeQuery("select count(*) from t_order")) {
                 rs.next();
                 assertEquals(1, rs.getInt(1));
+            }
+            try (Statement s = conn.createStatement()) {
+                s.executeUpdate("insert into t_trigger_src values(7)");
+                try (ResultSet rs = s.executeQuery("select count(*) from t_trigger_audit")) {
+                    rs.next();
+                    assertEquals(1, rs.getInt(1));
+                }
             }
         }
 

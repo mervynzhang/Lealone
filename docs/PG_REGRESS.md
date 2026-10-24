@@ -5,13 +5,13 @@
 `lealone-test/src/test/resources/pg/skip-list.txt` 一起，既是测试套件的说明书，也是
 "Lealone 离 PG 还有多远"的度量尺。
 
-- 当前基线：`feature/stored-routines`（`dbf8768af`，复合类型 `CREATE TYPE`/`RETURNS comp`/`SETOF <表行类型>`、
-  `%ROWTYPE` 数组、存储过程 OUT/INOUT 参数与按参数类型重载、`LANGUAGE plpgsql` 过程体、`RETURNS VOID` + 普通 DML、
-  `BEGIN ATOMIC`/`CASE ... END` 多语句体、DML `RETURNING`、`WITH ORDINALITY`、标量函数进 FROM、多 OUT record；
-  `wip/r5d` 工作线又补了无名参数/`$1` 位置参数、DEFAULT 参数值、命名实参）
+- 当前基线：`wip/r6a`（`714892b82`，在 `feature/stored-routines` 的复合类型/过程/PL/pgSQL 能力上，
+  新增 PostgreSQL 行触发器：`RETURNS TRIGGER`、`CREATE TRIGGER ... EXECUTE PROCEDURE`、
+  `NEW`/`OLD` 记录变量、`RETURN NEW/OLD/NULL`、触发器函数持久化与 SCRIPT 回放）
 - 上一轮基线：`5a25375b5`（96 用例 / 56 执行 / 40 skip / 207 语句，r3b 之后又解锁了一批，见第六节）
 - 对照的 PG 源码：本地 `postgres` 20devel 的 `src/test/regress/sql/`
-- 只加测试代码和资源，**没有改任何产品代码**；发现的缺陷都记在第七节，不在本工作线修
+- 之前几轮只加测试代码和资源；本轮触发器用例需要产品代码支持，因此同时修改了 `lealone-db`/`lealone-sql`，
+  其余缺陷仍记在第七节，不混进触发器改动
 
 ## 一、为什么做这件事
 
@@ -20,7 +20,7 @@ Lealone 的 PG 风格存储函数/过程是新增能力。PG 的回归测试是�
 
 1. **回归**：已经能跑的语义（函数返回、setof 表函数、CALL 的写入可见、DROP 语义、PL/pgSQL 控制流…）
    一旦被改坏，这里会红。
-2. **差距**：跑不了的用例按"缺什么能力"归类计数，谁在实现触发器、FOUND、游标、RECORD，
+2. **差距**：跑不了的用例按"缺什么能力"归类计数，谁在实现游标、FOUND、RECORD，
    直接看清单就知道自己那一格什么时候能清零。
 
 ## 二、目录与文件
@@ -32,7 +32,7 @@ lealone-test/src/test/java/com/lealone/test/pg/
     PgSkipList.java         skip 清单解析、清单与脚本对账、PG 语句计数
 lealone-test/src/test/resources/pg/
     README.md               脚本格式、清单格式、怎么打开被 skip 的用例
-    skip-list.txt           skip/known-fail 清单（16 条，本套件最重要的交付物之一）
+    skip-list.txt           skip/known-fail 清单（14 条，本套件最重要的交付物之一）
     create_function_sql.sql 由 PG create_function_sql.sql 转换（40 个用例）
     create_procedure.sql    由 PG create_procedure.sql 转换（24 个用例）
     plpgsql.sql             由 PG plpgsql.sql 抽样转换（23 个用例）
@@ -71,13 +71,13 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ```
 [pgregress]   create_function_sql.sql  用例 40(执行 33, skip  7)  脚本语句 135(通过 135, 失败 0)  被skip用例占  24 条
 [pgregress]   create_procedure.sql     用例 25(执行 19, skip  6)  脚本语句  90(通过  90, 失败 0)  被skip用例占  17 条
-[pgregress]   plpgsql.sql              用例 23(执行 20, skip  3)  脚本语句  62(通过  62, 失败 0)  被skip用例占   6 条
+[pgregress]   plpgsql.sql              用例 23(执行 22, skip  1)  脚本语句  77(通过  77, 失败 0)  被skip用例占   2 条
 [pgregress]   rangefuncs.sql           用例 10(执行 10, skip  0)  脚本语句  40(通过  40, 失败 0)  被skip用例占   0 条
-[pgregress] 合计: 用例 98 (执行 82, skip 16), 脚本语句 327 (通过 327, 失败 0), 耗时 656ms
-[pgregress] skip 清单: 16 条用例, 点名跳过的 PG 语句 92 条
+[pgregress] 合计: 用例 98 (执行 84, skip 14), 脚本语句 342 (通过 342, 失败 0), 耗时 702ms
+[pgregress] skip 清单: 14 条用例, 点名跳过的 PG 语句 88 条
 [pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中  55 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  27 条在 skip 清单里
-[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 10 条)
+[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 6 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 0 条)
 ```
 
@@ -89,7 +89,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 16 条 / 92 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 14 条 / 88 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -105,8 +105,6 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 的 CALL 不区分函数与过程 | 1 | 2 | procedure.call_function |
 | GRANT/REVOKE EXECUTE ON PROCEDURE 的解析已支持, 但 Lealone 无 SET ROLE/PUBLIC 角色, 过程权限也不参与调用检查 | 1 | 10 | procedure.privileges |
 | Lealone 不支持 ALTER ROUTINE/DROP ROUTINE(ALTER PROCEDURE/DROP PROCEDURE 已支持) | 1 | 5 | procedure.routine_syntax |
-| 只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节 | 1 | 2 | plpgsql.trigger_room |
-| 只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节 | 1 | 2 | plpgsql.trigger_raise |
 | PL/pgSQL 游标(DECLARE CURSOR/OPEN/FETCH/CLOSE)与 refcursor 门户都不支持, 评估见docs第十二节 | 1 | 6 | plpgsql.cursor |
 | 不支持命名 OUT 参数占位(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150) | 1 | 8 | procedure.out_params_named |
 
@@ -127,6 +125,16 @@ r5 rebase 到 `dbf8768af` 后复用主干的无名参数/`$n`、`RETURN expr`、
 
 统计变化：skip 24 → 21，执行 74 → 77，脚本语句 311（通过 311，失败 0）。另外 `procedure.out_params_named` 的
 skip 原因缩小为"命名 OUT 参数占位 + 过程 VARIADIC"（命名**入参**已经支持）。
+
+### 本轮（`wip/r6a`）：PostgreSQL 行触发器
+
+| 用例 | 之前 | 现在 | 靠什么能力 |
+| --- | --- | --- | --- |
+| `plpgsql.trigger_room` | skip（无 `RETURNS TRIGGER`/`EXECUTE PROCEDURE`） | 执行（8 条语句） | `RETURNS TRIGGER`、`NEW`/`OLD`、AFTER UPDATE 触发器更新另一张表、`RETURN NEW` |
+| `plpgsql.trigger_raise` | skip（同上） | 执行（7 条语句） | BEFORE INSERT/UPDATE、`RAISE EXCEPTION`、`RETURN NEW`、行触发器异常中止 DML |
+
+统计变化：skip 16 → 14，执行 82 → 84，脚本语句 327 → 342（通过 342，失败 0）。
+实现细节和限制见第十二节。
 
 基线从 `5a25375b5` 到 `d1de03e3b`，复合类型、过程 OUT/INOUT、过程重载、`LANGUAGE plpgsql` 过程体、
 `RETURNS VOID` + DML、`BEGIN ATOMIC`、DML `RETURNING`、`WITH ORDINALITY`、标量函数进 FROM 都落地了。
@@ -245,7 +253,7 @@ DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`paramete
 * **SQL 标准函数体**：`RETURN 表达式`、`BEGIN ATOMIC` 和多语句体已支持；`sql_body_tempseq` 仍依赖 TEMP SEQUENCE/DISCARD。
 * **过程的 VARIADIC / 命名 OUT 参数占位**：`procedure.out_params_named`（过程 VARIADIC 报
   `50100 VARIADIC parameter in CREATE PROCEDURE`，`CALL p(a => null)` 里的 OUT 参数名还不认）。
-* **游标/触发器**：`plpgsql.cursor`、`plpgsql.trigger_*`。
+* **游标**：`plpgsql.cursor`。
 * **数组能力**：`ARRAY[...]`、`array_append`、`array_length`、数组 `||` 已支持；完整 PG 数组运算符/函数仍未覆盖。
 * **目录与 DDL 属性**：`pg_get_functiondef_sqlbody`（依赖 SQL 标准函数体）、`ALTER FUNCTION` 的属性组合 +
   `SET search_path`（`or_replace_window`）、`CREATE OPERATOR CLASS`（1）。
@@ -262,10 +270,10 @@ DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`paramete
    `rangefuncs.sql`、`regproc.sql`、`plpgsql.sql`、`create_procedure.sql` 等。
    所以函数部分的主体用 `create_function_sql.sql`，setof 用 `rangefuncs.sql`，过程用
    `create_procedure.sql`。这不是"我们挑着做"，是素材没有。
-2. **`plpgsql.sql`（4756 行 / 935 条语句）只抽样转换**：现在是 23 个用例（执行 18 个、skip 5 个），
+2. **`plpgsql.sql`（4756 行 / 935 条语句）只抽样转换**：现在是 23 个用例（执行 22 个、skip 1 个），
    覆盖递归、`FOUND`、`PERFORM`、`RAISE`、嵌套 `EXCEPTION`、`SELECT INTO`、`OUT`/`INOUT`/多 `OUT`、
    `RETURN NEXT`/`RETURN QUERY`/`RETURNS TABLE`、`GET DIAGNOSTICS ROW_COUNT`、块标签限定名、函数内 DML；
-   触发器、游标、多态参数、`RECORD` + DML `RETURNING`、`RETURNS RECORD`、`EXECUTE`、`CASE` 语句、
+   游标、多态参数、`RECORD` + DML `RETURNING`、`RETURNS RECORD`、`EXECUTE`、`CASE` 语句、
    `ASSERT` 的段落仍然 skip 或没抽样。**剩下几百条语句没有逐条登记**，这是本套件目前最大的透明性缺口。
 3. **`rangefuncs.sql`（827 行 / 428 条语句）也只抽样**：转过来 10 个用例（执行 9 个），
    依赖 `WITH ORDINALITY`、`unnest()`、`generate_series()`、`SETOF <表行类型>` 的段落 skip 或没抽。
@@ -314,7 +322,6 @@ DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`paramete
    * N2 多 OUT 标量调用 → 等支持后把 `SELECT f1(42)` 加回 `plpgsql.multi_out`；
    * N3 `least()/greatest()` → 等支持后把 `procedure.collation` 改回 PG 原样的 `least('a','b')`。
 3. **还能解锁的几格**（谁做完谁就能清空对应清单行）：
-   * 触发器 → `plpgsql.trigger_*` 2 条；
    * DML `RETURNING` → `plpgsql.record` 1 条（record 本身已可用）；
    * `RETURNS RECORD`/复合字段 → `plpgsql.out_params_exception` 1 条；
    * `RETURNS SETOF <表行类型>` → `plpgsql.setof_composite_record`、`rangefuncs.setof_composite` 2 条；
@@ -322,3 +329,34 @@ DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`paramete
    * 游标 → `plpgsql.cursor` 1 条；`WITH ORDINALITY` → `rangefuncs.with_ordinality` 1 条。
 4. **补齐 PG 覆盖面**：`plpgsql.sql` 按段登记（尤其是游标、`RETURN QUERY EXECUTE`、`CASE` 语句）；
    `rangefuncs.sql` 里 `WITH ORDINALITY` 落地后再补；`portals.sql` 如果以后支持游标再纳入。
+
+## 十二、触发器实现与游标评估
+
+### 已实现（`wip/r6a`）
+
+* `CREATE FUNCTION ... RETURNS TRIGGER`：PL/pgSQL 函数可声明触发器返回伪类型，
+  `PlpgSqlInterpreter` 把 `NEW`/`OLD` 作为 record 变量注入函数作用域，字段访问和
+  `NEW.col := ...` 赋值复用现有 record 逻辑。
+* `RETURN NEW` / `RETURN OLD` / `RETURN NULL`：解释器把整个 record 转成 `ValueArray` 返给桥接层；
+  `RETURN NULL` 在 BEFORE 行触发器里跳过当前行，AFTER 触发器的返回值忽略。
+* `CREATE TRIGGER ... FOR EACH ROW EXECUTE PROCEDURE fn()`：与 H2 的
+  `CALL 'class'` 并存；函数触发器在 `TriggerObject.fireRow` 里直接把 `Value[]` 行数据传给
+  `SqlFunction.executeTrigger`，不再构造 `Object[]` Java 回调。
+* 事务：触发器函数直接复用触发它的 DML session/事务，函数里的 DML 对后续触发器可见，
+  并随外层语句/事务一起提交或回滚；异常时把 `DbException` 抛回 DML 写路径。
+  BEFORE 触发器写回 `newRow` 时不引入阻塞。
+* 持久化：函数 `getCreateSQL()` 输出 `RETURNS TRIGGER`，触发器 `getCreateSQL()` 输出
+  `CREATE TRIGGER ... EXECUTE PROCEDURE ...()`；`SCRIPT` 回放和关库重开由
+  `ScriptRoundTripTest` 覆盖。
+
+当前限制：
+
+* 函数触发器只支持 `FOR EACH ROW`；语句级/`SELECT` 触发器仍只支持 H2 Java 类触发器。
+* `EXECUTE PROCEDURE fn(args...)` 只接受空参数列表（PG 的触发器参数尚未实现）。
+* 函数触发器没有 H2 的 `QUEUE`/`NOWAIT` 异步语义；这两项仍只在 Java 类触发器路径生效。
+* 触发器函数按当前表列定义注入 `NEW`/`OLD`；隐藏列/生成列的特殊映射尚未单独测试。
+
+### 游标
+
+`plpgsql.cursor` 仍未实现：PL/pgSQL `DECLARE CURSOR`、`OPEN`/`FETCH`/`CLOSE` 和 `refcursor`
+门户都没有对应执行路径，因此继续保留在 skip 清单。
