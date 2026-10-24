@@ -643,7 +643,7 @@ public class PlpgsqlTest extends SqlTestBase {
 
         executeUpdate("CREATE OR REPLACE FUNCTION plp_table_query(p INT) RETURNS TABLE(id INT, name VARCHAR) LANGUAGE plpgsql AS $$"
                 + " BEGIN" //
-                + "   RETURN QUERY SELECT t.id, t.name FROM plp_setof_t t WHERE t.id >= p ORDER BY t.id;" //
+                + "   RETURN QUERY SELECT id, name FROM plp_setof_t WHERE id >= p ORDER BY id;" //
                 + " END; $$");
         assertEquals("[2:b, 3:c]", queryRowList(
                 "SELECT id, name FROM plp_table_query(2) ORDER BY id").toString());

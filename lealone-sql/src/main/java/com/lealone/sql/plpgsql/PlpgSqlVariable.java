@@ -30,6 +30,8 @@ public class PlpgSqlVariable {
     private Value[] recordFieldValues;
     // SELECT INTO没有行时record变成未赋值状态，访问字段会报错
     private boolean recordAssigned;
+    // RETURNS TABLE的结果列变量，RETURN QUERY里同名标识符优先按查询的列解析
+    private boolean tableColumn;
 
     public PlpgSqlVariable(String name, boolean nameQuoted, boolean constant, boolean notNull) {
         this.name = name;
@@ -71,6 +73,14 @@ public class PlpgSqlVariable {
 
     public boolean isRecord() {
         return record;
+    }
+
+    public boolean isTableColumn() {
+        return tableColumn;
+    }
+
+    public void setTableColumn(boolean tableColumn) {
+        this.tableColumn = tableColumn;
     }
 
     public void setRecord(boolean record) {

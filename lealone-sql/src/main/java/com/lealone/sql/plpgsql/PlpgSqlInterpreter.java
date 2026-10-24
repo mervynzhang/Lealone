@@ -233,6 +233,7 @@ public class PlpgSqlInterpreter {
         for (int i = 0; i < resultInfo.columnNames.length; i++) {
             PlpgSqlVariable variable = new PlpgSqlVariable(resultInfo.columnNames[i], false, false,
                     false);
+            variable.setTableColumn(true);
             int type = resultInfo.columnTypes != null && i < resultInfo.columnTypes.length
                     ? resultInfo.columnTypes[i]
                     : Value.UNKNOWN;
@@ -523,6 +524,28 @@ public class PlpgSqlInterpreter {
         return row;
     }
 
+    // RETURN QUERY里隐藏RETURNS TABLE的隐式列变量，让同名列按查询表列解析
+    private PlpgSqlVariableResolver hideTableColumns() {
+        return new PlpgSqlVariableResolver() {
+            @Override
+            public PlpgSqlVariable findVariable(String name, boolean quoted) {
+                PlpgSqlVariable variable = scope.findVariable(name, quoted);
+                return variable != null && variable.isTableColumn() ? null : variable;
+            }
+
+            @Override
+            public boolean hasLabel(String label) {
+                return scope.hasLabel(label);
+            }
+
+            @Override
+            public PlpgSqlVariable findVariableByLabel(String label, String name, boolean quoted) {
+                PlpgSqlVariable variable = scope.findVariableByLabel(label, name, quoted);
+                return variable != null && variable.isTableColumn() ? null : variable;
+            }
+        };
+    }
+
     private Value convertColumnValue(int index, Value value) {
         if (value == null)
             value = ValueNull.INSTANCE;
@@ -539,8 +562,9 @@ public class PlpgSqlInterpreter {
                     "RETURN QUERY can only be used in a set-returning function");
         if (node.expression == null || node.expression.trim().isEmpty())
             throw PlpgSqlException.raise("42601", "RETURN QUERY requires a query");
+        // RETURN QUERY里的SELECT先按查询自身的列解析，避免和TABLE结果列变量同名时被替换成变量
         PlpgSqlSqlExecutor.QueryRows queryRows = sqlExecutor.queryWithColumns(node.expression,
-                scope, 0);
+                hideTableColumns(), 0);
         int count = resultInfo.columnTypes == null ? 0 : resultInfo.columnTypes.length;
         if (queryRows.columnTypes.length != count)
             throw PlpgSqlException.raise("42804",
