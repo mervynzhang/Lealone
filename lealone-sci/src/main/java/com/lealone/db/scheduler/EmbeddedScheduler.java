@@ -6,8 +6,8 @@
 package com.lealone.db.scheduler;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -147,7 +147,9 @@ public class EmbeddedScheduler extends InternalSchedulerBase {
         }
     }
 
-    private final CopyOnWriteArrayList<EmbeddedSessionInfo> sessions = new CopyOnWriteArrayList<>();
+    // 按session索引: 一次语句里可能创建大量嵌套session(比如函数调用), CopyOnWriteArrayList的
+    // add/remove都是O(n), 累加后整体会退化成O(n^2), 这里用并发Map把add/remove降到O(1)
+    private final ConcurrentHashMap<InternalSession, EmbeddedSessionInfo> sessions = new ConcurrentHashMap<>();
 
     private static class EmbeddedSessionInfo implements SessionInfo {
 
@@ -222,14 +224,14 @@ public class EmbeddedScheduler extends InternalSchedulerBase {
     private void runSessionTasks() {
         if (sessions.isEmpty())
             return;
-        for (EmbeddedSessionInfo si : sessions) {
+        for (EmbeddedSessionInfo si : sessions.values()) {
             si.runSessionTasks();
         }
     }
 
     @Override
     public void addSession(InternalSession session) {
-        sessions.add(new EmbeddedSessionInfo(session, this));
+        sessions.put(session, new EmbeddedSessionInfo(session, this));
         session.init();
     }
 
@@ -237,12 +239,7 @@ public class EmbeddedScheduler extends InternalSchedulerBase {
     public void removeSession(InternalSession session) {
         if (sessions.isEmpty())
             return;
-        for (EmbeddedSessionInfo si : sessions) {
-            if (si.session == session) {
-                sessions.remove(si);
-                break;
-            }
-        }
+        sessions.remove(session);
     }
 
     @Override
@@ -338,7 +335,7 @@ public class EmbeddedScheduler extends InternalSchedulerBase {
         if (sessions.isEmpty())
             return null;
         YieldableCommand best = null;
-        for (EmbeddedSessionInfo si : sessions) {
+        for (EmbeddedSessionInfo si : sessions.values()) {
             // 执行yieldIfNeeded时，不需要检查当前session
             if (currentSession == si) {
                 continue;
