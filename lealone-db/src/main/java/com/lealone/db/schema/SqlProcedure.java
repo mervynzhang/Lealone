@@ -234,7 +234,10 @@ public class SqlProcedure extends SchemaObjectBase {
         return buff.append(')').toString();
     }
 
-    private String getParameterTypeSQL(int index) {
+    /**
+     * 参数声明的类型文本(含OUT参数)，INFORMATION_SCHEMA.PARAMETERS用。
+     */
+    public String getParameterTypeSQL(int index) {
         String typeSql = parameters[index].getOriginalSQL();
         if (typeSql != null) {
             return typeSql;

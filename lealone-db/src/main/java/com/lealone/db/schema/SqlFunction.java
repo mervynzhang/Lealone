@@ -568,11 +568,24 @@ public class SqlFunction extends FunctionAlias {
     }
 
     /**
-     * 入参声明的类型文本(和CREATE FUNCTION里写的一致)，PG_PROC.proargtypes用。
-     * 没保存原始文本时回退到Value类型名。
+     * 参数总数(含OUT参数)，INFORMATION_SCHEMA.PARAMETERS/ROUTINES用。
      */
-    public String getInputParameterTypeSQL(int inputIndex) {
-        int index = inputIndexes[inputIndex];
+    public int getParameterCount() {
+        return parameterNames.length;
+    }
+
+    public String getParameterName(int index) {
+        return parameterNames[index];
+    }
+
+    public int getParameterMode(int index) {
+        return parameterModes[index];
+    }
+
+    /**
+     * 参数声明的类型文本(含OUT参数)，和CREATE FUNCTION里写的一致。
+     */
+    public String getParameterTypeSQL(int index) {
         if (parameterTypes != null && index < parameterTypes.length && parameterTypes[index] != null) {
             return parameterTypes[index];
         }
@@ -581,6 +594,14 @@ public class SqlFunction extends FunctionAlias {
             return DataType.getDataType(parameterComponentTypes[index]).name + "[]";
         }
         return DataType.getDataType(type).name;
+    }
+
+    /**
+     * 入参声明的类型文本(和CREATE FUNCTION里写的一致)，PG_PROC.proargtypes用。
+     * 没保存原始文本时回退到Value类型名。
+     */
+    public String getInputParameterTypeSQL(int inputIndex) {
+        return getParameterTypeSQL(inputIndexes[inputIndex]);
     }
 
     /**

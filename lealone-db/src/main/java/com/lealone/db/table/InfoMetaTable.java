@@ -53,6 +53,7 @@ import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SchemaObject;
 import com.lealone.db.schema.Sequence;
 import com.lealone.db.schema.SqlFunction;
+import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.schema.TriggerObject;
 import com.lealone.db.schema.UserAggregate;
 import com.lealone.db.schema.UserDataType;
@@ -112,6 +113,10 @@ public class InfoMetaTable extends MetaTable {
     private static final int PLUGINS = 30;
     // PostgreSQL兼容的只读函数目录，列是PG回归用例真正用到的那些
     private static final int PG_PROC = 31;
+    // SQL标准的过程/函数参数、例程和使用关系视图
+    private static final int PARAMETERS = 32;
+    private static final int ROUTINES = 33;
+    private static final int ROUTINE_ROUTINE_USAGE = 34;
 
     /**
      * Get the number of meta table types. Supported meta table
@@ -120,7 +125,7 @@ public class InfoMetaTable extends MetaTable {
      * @return the number of meta table types
      */
     public static int getMetaTableTypeCount() {
-        return PG_PROC + 1;
+        return ROUTINE_ROUTINE_USAGE + 1;
     }
 
     public InfoMetaTable(Schema schema, int id, int type) {
@@ -313,6 +318,28 @@ public class InfoMetaTable extends MetaTable {
             setObjectName("PG_PROC");
             cols = createColumns("PRONAME", "PRORETTYPE", "PROARGTYPES", "PROVOLATILE",
                     "PROISSTRICT BOOLEAN", "PROSECDEF BOOLEAN", "PROLEAKPROOF BOOLEAN", "PROSRC");
+            break;
+        case PARAMETERS:
+            setObjectName("PARAMETERS");
+            cols = createColumns("SPECIFIC_CATALOG", "SPECIFIC_SCHEMA", "SPECIFIC_NAME",
+                    "ORDINAL_POSITION INT", "PARAMETER_MODE", "IS_RESULT", "AS_LOCATOR",
+                    "PARAMETER_NAME", "DATA_TYPE", "CHARACTER_MAXIMUM_LENGTH INT",
+                    "CHARACTER_OCTET_LENGTH INT", "NUMERIC_PRECISION INT", "NUMERIC_SCALE INT",
+                    "DATETIME_PRECISION INT", "INTERVAL_TYPE", "UDT_CATALOG", "UDT_SCHEMA",
+                    "UDT_NAME", "SCOPE_CATALOG", "SCOPE_SCHEMA", "SCOPE_NAME",
+                    "MAXIMUM_CARDINALITY INT", "DTD_IDENTIFIER", "PARAMETER_DEFAULT");
+            break;
+        case ROUTINES:
+            setObjectName("ROUTINES");
+            cols = createColumns("ROUTINE_CATALOG", "ROUTINE_SCHEMA", "ROUTINE_NAME",
+                    "SPECIFIC_SCHEMA", "SPECIFIC_NAME", "ROUTINE_TYPE", "DATA_TYPE",
+                    "ROUTINE_BODY", "ROUTINE_DEFINITION", "IS_DETERMINISTIC", "SQL_DATA_ACCESS",
+                    "SECURITY_TYPE", "EXTERNAL_LANGUAGE");
+            break;
+        case ROUTINE_ROUTINE_USAGE:
+            setObjectName("ROUTINE_ROUTINE_USAGE");
+            cols = createColumns("SPECIFIC_CATALOG", "SPECIFIC_SCHEMA", "SPECIFIC_NAME",
+                    "ROUTINE_CATALOG", "ROUTINE_SCHEMA", "ROUTINE_NAME");
             break;
         default:
             throw DbException.getInternalError("type=" + type);
@@ -1427,6 +1454,32 @@ public class InfoMetaTable extends MetaTable {
             }
             break;
         }
+        case PARAMETERS: {
+            for (SchemaObject obj : database.getAllSchemaObjects(DbObjectType.FUNCTION_ALIAS)) {
+                if (obj instanceof SqlFunction) {
+                    addFunctionParameters(rows, catalog, (SqlFunction) obj);
+                }
+            }
+            for (SchemaObject obj : database.getAllSchemaObjects(DbObjectType.PROCEDURE)) {
+                addProcedureParameters(rows, catalog, (SqlProcedure) obj);
+            }
+            break;
+        }
+        case ROUTINES: {
+            for (SchemaObject obj : database.getAllSchemaObjects(DbObjectType.FUNCTION_ALIAS)) {
+                if (obj instanceof SqlFunction) {
+                    addFunctionRoutine(rows, catalog, (SqlFunction) obj);
+                }
+            }
+            for (SchemaObject obj : database.getAllSchemaObjects(DbObjectType.PROCEDURE)) {
+                addProcedureRoutine(rows, catalog, (SqlProcedure) obj);
+            }
+            break;
+        }
+        case ROUTINE_ROUTINE_USAGE:
+            // 依赖关系还没有填充(需要分析函数体/默认值表达式)，先返回空表，
+            // 查询能正常执行，等依赖分析做好后再补行
+            break;
         case SERVICES: {
             for (SchemaObject obj : database.getAllSchemaObjects(DbObjectType.SERVICE)) {
                 Service service = (Service) obj;
@@ -1480,6 +1533,102 @@ public class InfoMetaTable extends MetaTable {
         default:
             throw DbException.getInternalError("action=" + action);
         }
+    }
+
+    private String getRoutineSpecificName(SchemaObject obj) {
+        return identifier(obj.getName()) + "_" + obj.getId();
+    }
+
+    private static String getParameterModeString(int mode) {
+        if (mode == SqlFunction.PARAM_OUT) {
+            return "OUT";
+        } else if (mode == SqlFunction.PARAM_INOUT) {
+            return "INOUT";
+        }
+        return "IN";
+    }
+
+    private void addFunctionParameters(ArrayList<Row> rows, String catalog, SqlFunction function) {
+        String schema = identifier(function.getSchema().getName());
+        String specificName = getRoutineSpecificName(function);
+        for (int i = 0; i < function.getParameterCount(); i++) {
+            String typeSql = function.getParameterTypeSQL(i);
+            add(rows, createParameterRow(catalog, schema, specificName, i + 1,
+                    getParameterModeString(function.getParameterMode(i)),
+                    function.getParameterName(i), typeSql));
+        }
+    }
+
+    private void addProcedureParameters(ArrayList<Row> rows, String catalog, SqlProcedure procedure) {
+        String schema = identifier(procedure.getSchema().getName());
+        String specificName = getRoutineSpecificName(procedure);
+        for (int i = 0; i < procedure.getParameterCount(); i++) {
+            String typeSql = procedure.getParameterTypeSQL(i);
+            add(rows, createParameterRow(catalog, schema, specificName, i + 1,
+                    getParameterModeString(procedure.getParameterMode(i)),
+                    procedure.getParameter(i).getName(), typeSql));
+        }
+    }
+
+    private static String[] createParameterRow(String catalog, String schema, String specificName,
+            int ordinal, String mode, String parameterName, String typeSql) {
+        String[] values = new String[24];
+        values[0] = catalog;
+        values[1] = schema;
+        values[2] = specificName;
+        values[3] = "" + ordinal;
+        values[4] = mode;
+        values[5] = "NO";
+        values[6] = "NO";
+        values[7] = parameterName;
+        values[8] = typeSql;
+        values[17] = typeSql;
+        values[22] = typeSql;
+        return values;
+    }
+
+    private void addFunctionRoutine(ArrayList<Row> rows, String catalog, SqlFunction function) {
+        addRoutine(rows, catalog, function, "FUNCTION", function.getReturnTypeSQL(),
+                function.getBody(), function.isDeterministic(),
+                function.isSecurityDefiner() ? "DEFINER" : "INVOKER", function.getLanguage());
+    }
+
+    private void addProcedureRoutine(ArrayList<Row> rows, String catalog, SqlProcedure procedure) {
+        addRoutine(rows, catalog, procedure, "PROCEDURE", null, procedure.getBody(), false,
+                "INVOKER", procedure.getLanguage());
+    }
+
+    private void addRoutine(ArrayList<Row> rows, String catalog, SchemaObject obj,
+            String routineType, String dataType, String definition, boolean deterministic,
+            String securityType, String language) {
+        String routineLanguage = language == null ? "SQL" : language;
+        add(rows,
+                // ROUTINE_CATALOG
+                catalog,
+                // ROUTINE_SCHEMA
+                identifier(obj.getSchema().getName()),
+                // ROUTINE_NAME
+                identifier(obj.getName()),
+                // SPECIFIC_SCHEMA
+                identifier(obj.getSchema().getName()),
+                // SPECIFIC_NAME
+                getRoutineSpecificName(obj),
+                // ROUTINE_TYPE
+                routineType,
+                // DATA_TYPE
+                dataType,
+                // ROUTINE_BODY
+                "SQL".equalsIgnoreCase(routineLanguage) ? "SQL" : "EXTERNAL",
+                // ROUTINE_DEFINITION
+                definition,
+                // IS_DETERMINISTIC
+                deterministic ? "YES" : "NO",
+                // SQL_DATA_ACCESS
+                "READS",
+                // SECURITY_TYPE
+                securityType,
+                // EXTERNAL_LANGUAGE
+                routineLanguage.toLowerCase());
     }
 
     private static String getPgProcArgTypes(SqlFunction function) {
