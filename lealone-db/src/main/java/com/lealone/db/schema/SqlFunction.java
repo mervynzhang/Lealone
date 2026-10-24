@@ -982,10 +982,23 @@ public class SqlFunction extends FunctionAlias {
             return ValueResultSet.get(simple);
         }
         int columnCount = rs.getMetaData().getColumnCount();
-        if (columnCount != columnTypes.length) {
+        boolean compositeRow = compositeReturnType != null && compositeSetof && columnCount == 1
+                && columnTypes.length == compositeReturnType.getColumns().length;
+        if (!compositeRow && columnCount != columnTypes.length) {
             throw DbException.get(ErrorCode.COLUMN_COUNT_DOES_NOT_MATCH);
         }
         while (rs.next()) {
+            if (compositeRow) {
+                Value composite = convertCompositeValue(session, rs.getObject(1));
+                if (composite == null || composite == ValueNull.INSTANCE)
+                    continue;
+                Value[] list = ((ValueArray) composite).getList();
+                Object[] row = new Object[list.length];
+                for (int i = 0; i < list.length; i++)
+                    row[i] = list[i].convertTo(columnTypes[i]).getObject();
+                simple.addRow(row);
+                continue;
+            }
             Object[] row = new Object[columnCount];
             for (int i = 0; i < columnCount; i++) {
                 Value v = DataType.convertToValue(session, rs.getObject(i + 1), columnTypes[i]);
@@ -1081,25 +1094,9 @@ public class SqlFunction extends FunctionAlias {
         }
         // 函数体直接返回一个复合值(如SELECT ROW(...)::comp)时按单列处理
         if (compositeReturnType != null && rs.getMetaData().getColumnCount() == 1) {
-            Object object = rs.getObject(1);
-            if (object instanceof Object[]) {
-                Object[] values = (Object[]) object;
-                Column[] columns = compositeReturnType.getColumns();
-                if (values.length == columns.length) {
-                    Value[] list = new Value[values.length];
-                    for (int i = 0; i < values.length; i++)
-                        list[i] = DataType.convertToValue(session, values[i], columns[i].getType());
-                    return compositeReturnType.convert(ValueArray.get(list));
-                }
-            }
-            if (object instanceof Value) {
-                Value v = (Value) object;
-                if (v.getType() == Value.ARRAY)
-                    return compositeReturnType.convert(v);
-                return compositeReturnType.convert(v.getString());
-            }
-            if (object instanceof String)
-                return compositeReturnType.convert((String) object);
+            Value composite = convertCompositeValue(session, rs.getObject(1));
+            if (composite != null)
+                return composite;
         }
         int count = compositeReturnType == null ? outputIndexes.length
                 : compositeReturnType.getColumns().length;
@@ -1111,6 +1108,34 @@ public class SqlFunction extends FunctionAlias {
             row[i] = v.convertTo(type);
         }
         return ValueArray.get(row);
+    }
+
+    private Value convertCompositeValue(ServerSession session, Object object) {
+        if (object == null)
+            return ValueNull.INSTANCE;
+        Column[] columns = compositeReturnType.getColumns();
+        if (object instanceof Object[]) {
+            Object[] values = (Object[]) object;
+            if (values.length != columns.length)
+                return null;
+            Value[] list = new Value[values.length];
+            for (int i = 0; i < values.length; i++) {
+                if (values[i] instanceof Value)
+                    list[i] = ((Value) values[i]).convertTo(columns[i].getType());
+                else
+                    list[i] = DataType.convertToValue(session, values[i], columns[i].getType());
+            }
+            return compositeReturnType.convert(ValueArray.get(list));
+        }
+        if (object instanceof Value) {
+            Value v = (Value) object;
+            if (v.getType() == Value.ARRAY)
+                return compositeReturnType.convert(v);
+            return compositeReturnType.convert(v.getString());
+        }
+        if (object instanceof String)
+            return compositeReturnType.convert((String) object);
+        return null;
     }
 
     /**
