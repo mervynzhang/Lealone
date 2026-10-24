@@ -21,10 +21,10 @@ call nonexistent();
 
 -- @case procedure.call_random
 -- @pg create_procedure.sql:2-2
--- 缺失: Lealone 的 CALL 不区分函数和过程, CALL random() 会直接执行 random() 并返回一个随机数;
---       PG 报 42809("random" is not a procedure)
+-- 适配: PG 报 42809("random" is not a procedure); Lealone 的 CALL 现在也只调过程,
+--       新增的 NOT_A_PROCEDURE_1 错误码是 90153, SQLState 同样是 42809
 call random();
--- PG 期望: 报 42809
+> exception 90153
 
 -- @case procedure.create_function_and_procedure
 -- @pg create_procedure.sql:4-12
@@ -318,13 +318,34 @@ select * from cp_test_out;
 
 -- @case procedure.out_params_named
 -- @pg create_procedure.sql:199-212
--- 缺失: Lealone 不支持命名实参(a => null)和过程的 VARIADIC 参数, 也不支持同名过程按
---       OUT/IN 参数区分重载(报 90150 "Procedure already exists")
-create procedure ptest10(out a int, in b int, in c int) as $$ SELECT ? - ? $$;
-call ptest10(null, 7, 4);
-create procedure ptest11(a out int, variadic b int[]) as $$ SELECT ? + ? $$;
+-- 适配: 过程体用 ? 按位置引用入参; OUT 参数可以写命名占位(a => null), 只占位不求值;
+--       过程支持 VARIADIC 参数, 调用时把余下的实参打包成数组(这里用 array_length 断言长度,
+--       PG 的写法是对数组求和得 36);
+--       过程名加 n 后缀, 因为 PG 的 ptest10 同名签名在下面的 ambiguous_drop 用例里才建
+create procedure ptest10n(out a int, in b int, in c int) as $$ SELECT ? - ? $$;
+> update count: 0
+
+call ptest10n(null, 7, 4);
+> A
+> -
+> 3
+> rows: 1
+
+-- 命名实参: a 是OUT参数, 只当占位符
+call ptest10n(a => null, b => 10, c => 4);
+> A
+> -
+> 6
+> rows: 1
+
+create procedure ptest11(a out int, variadic b int[]) as $$ SELECT array_length(?, 1) $$;
+> update count: 0
+
 call ptest11(null, 11, 12, 13);
--- PG 期望: ptest10 的位置调用返回 3, 命名调用返回 6; ptest11 返回 36
+> A
+> -
+> 3
+> rows: 1
 
 -- @case procedure.ambiguous_drop
 -- @pg create_procedure.sql:216-232
@@ -374,29 +395,33 @@ rollback;
 
 -- @case procedure.call_function
 -- @pg create_procedure.sql:236-237
--- 缺失: Lealone 的 CALL 不区分函数和过程, CALL random()/CALL sum(1) 会直接执行函数并返回结果;
---       PG 报 42809("random" is not a procedure)
+-- 适配: PG 报 42809("version"/"sum" is not a procedure), Lealone 报 90153(SQLState 42809)
 call version();
+> exception 90153
+
 call sum(1);
--- PG 期望: 两条都报 42809
+> exception 90153
 
 -- @case procedure.alter_and_bad_def
 -- @pg create_procedure.sql:239-249
--- 适配: PG 的过程只接受 SECURITY/SET 这一小撮属性, WINDOW/STRICT 会报错; Lealone 的过程和
---       函数共用同一套属性子句(ALTER PROCEDURE 本轮才支持), 所以前两条建过程和 ALTER PROCEDURE
---       按 Lealone 的实际行为断言成功;
+-- 适配: PG 的过程只接受 SECURITY/SET 这一小撮属性, WINDOW 是语法错误(42601); Lealone 的
+--       过程不接受 WINDOW 属性, 报 42000; STRICT 这类别的属性 Lealone 接受(比 PG 宽松);
 --       最后的 DROP PROCEDURE ptest1 去掉了, 因为后面的清理用例还要用 ptest1
 create procedure ptestx_attr() language sql window as $$ insert into cp_test values (1, 'a') $$;
+> exception 42000
+
+-- STRICT 过程可以建
+create procedure ptestx_attr() language sql strict as $$ insert into cp_test values (1, 'a') $$;
 > update count: 0
 
 -- 同名同签名的过程只能有一个, 再建一次报 90150
 create procedure ptestx_attr() language sql strict as $$ insert into cp_test values (1, 'a') $$;
 > exception 90150
 
--- Lealone 的过程不支持 VARIADIC 参数: VARIADIC写在参数名位置上会被当成类型名, 报42102
+-- PG 期望: VARIADIC parameter must be the last input parameter; Lealone 也校验这一点
 create procedure ptestx_attr(a variadic int[], b out int) language sql
   as $$ select a[1] $$;
-> exception 42102
+> exception 42000
 
 alter procedure ptest1(text) strict;
 > update count: 0
@@ -489,11 +514,16 @@ drop user regress_cp_user1;
 
 -- @case procedure.routine_syntax
 -- @pg create_procedure.sql:272-278
--- 缺失: Lealone 不支持 ALTER ROUTINE ... RENAME 和 DROP ROUTINE
+-- 适配: ROUTINE 是过程和函数的统称, Lealone 先按过程找再按函数找, 两边都匹配时
+--       报 42725(和 PG 的 42725 name is not unique 一致); cp_testfunc1 是函数
 alter routine cp_testfunc1(int) rename to cp_testfunc1a;
-alter routine cp_testfunc1a rename to cp_testfunc1;
+> update count: 0
+
+alter routine cp_testfunc1a(int) rename to cp_testfunc1;
+> update count: 0
+
 drop routine cp_testfunc1(int);
--- PG 期望: 重命名往返成功, DROP ROUTINE 成功
+> update count: 0
 
 -- ---------------------------------------------------------------------------
 -- 清理

@@ -11,7 +11,7 @@ import com.lealone.test.sql.SqlTestBase;
 
 public class CallTest extends SqlTestBase {
     @Test
-    public void run() {
+    public void run() throws Exception {
         executeUpdate("drop table IF EXISTS CallTest");
         executeUpdate("create table IF NOT EXISTS CallTest(id int, name varchar(500), b boolean)");
 
@@ -23,10 +23,14 @@ public class CallTest extends SqlTestBase {
         sql = "CALL TABLE(ID INT=(1, 2), NAME VARCHAR=('Hello', 'World'))";
         printResultSet();
 
-        sql = "CALL CURTIME()";
-        printResultSet();
+        // CALL只调过程, 函数要放在SELECT里调用(和PostgreSQL一致, Lealone报90153)
+        executeQueryThanAssertErrorCode("CALL CURTIME()",
+                com.lealone.db.api.ErrorCode.NOT_A_PROCEDURE_1);
+        executeQueryThanAssertErrorCode("CALL ABS(-100)",
+                com.lealone.db.api.ErrorCode.NOT_A_PROCEDURE_1);
 
-        sql = "CALL ABS(-100)";
-        System.out.println(executeUpdate());
+        sql = "SELECT ABS(-100)";
+        executeQuery(sql);
+        assertEquals(100, getIntValue(1, true));
     }
 }

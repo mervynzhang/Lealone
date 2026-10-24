@@ -209,13 +209,18 @@ public class ProcedureOverloadTest extends SqlTestBase {
         executeUpdate("DROP PROCEDURE po_l");
     }
 
-    // CALL仍然保留原来的函数调用语法: 没有同名过程时按函数表达式处理
+    // 和PostgreSQL一样, CALL只调过程: 名字是函数时报42809, 不再退回函数调用表达式
     @Test
-    public void testCallFunctionFallback() throws Exception {
-        executeQuery("CALL ABS(-3)");
-        assertEquals(3, getIntValue(1, true));
+    public void testCallFunctionIsRejected() throws Exception {
+        executeQueryThanAssertErrorCode("CALL ABS(-3)", ErrorCode.NOT_A_PROCEDURE_1);
+        // 函数用SELECT调用
         executeQuery("SELECT ABS(-4)");
         assertEquals(4, getIntValue(1, true));
+        // H2遗留的CALL TABLE(...)不受影响
+        executeQuery("CALL TABLE(ID INT=(1, 2), NAME VARCHAR=('Hello', 'World'))");
+        assertTrue(rs.next());
+        // 不存在的过程名仍然报函数不存在
+        executeQueryThanAssertErrorCode("CALL no_such_proc(1)", ErrorCode.FUNCTION_NOT_FOUND_1);
     }
 
     // SCRIPT导出的脚本要包含每个过程重载，回放到新库后全部可调用

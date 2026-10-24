@@ -208,6 +208,11 @@ import com.lealone.sql.query.SelectUnion;
  */
 public class SQLParserBase implements SQLParser {
 
+    // ROUTINE(过程和函数的统称)的解析结果
+    private static final int ROUTINE_NONE = 0;
+    private static final int ROUTINE_PROCEDURE = 1;
+    private static final int ROUTINE_FUNCTION = 2;
+
     // used during the tokenizer phase
     protected static final int CHAR_END = 1, CHAR_VALUE = 2, CHAR_QUOTED = 3;
     protected static final int CHAR_NAME = 4, CHAR_SPECIAL_1 = 5, CHAR_SPECIAL_2 = 6;
@@ -1442,6 +1447,8 @@ public class SQLParserBase implements SQLParser {
             return parseDropPlugin();
         } else if (readIf("PROCEDURE")) {
             return parseDropProcedure();
+        } else if (readIf("ROUTINE")) {
+            return parseDropRoutine();
         }
         throw getSyntaxError();
     }
@@ -4529,7 +4536,7 @@ public class SQLParserBase implements SQLParser {
         } else if (readIf("ALIAS")) {
             return parseCreateFunctionAlias(force);
         } else if (readIf("PROCEDURE")) {
-            return parseCreateProcedure();
+            return parseCreateProcedure(orReplace);
         } else if (readIf("FUNCTION")) {
             return parseCreateSqlFunction(orReplace);
         } else if (readIf("SEQUENCE")) {
@@ -5457,12 +5464,13 @@ public class SQLParserBase implements SQLParser {
         return command;
     }
 
-    protected StatementBase parseCreateProcedure() {
+    protected StatementBase parseCreateProcedure(boolean orReplace) {
         boolean ifNotExists = readIfNotExists();
         String procedureName = readIdentifierWithSchema();
         CreateProcedure command = new CreateProcedure(session, getSchema());
         command.setProcedureName(procedureName);
         command.setIfNotExists(ifNotExists);
+        command.setOrReplace(orReplace);
         if (readIf("(")) {
             if (!readIf(")")) {
                 int parameterIndex = 0;
@@ -5502,12 +5510,33 @@ public class SQLParserBase implements SQLParser {
         }
         command.setLanguage(language);
         command.setAttributes(attributes);
+        checkProcedureAttributes(attributes);
         return command;
     }
 
+    // 过程不接受WINDOW属性: PostgreSQL里WINDOW只用于函数
+    private void checkProcedureAttributes(FunctionAttributes attributes) {
+        if (attributes != null && attributes.getWindow() != null
+                && attributes.getWindow().booleanValue()) {
+            throw DbException.get(ErrorCode.SYNTAX_ERROR_1, "WINDOW is not allowed in a procedure");
+        }
+    }
+
     // 过程参数支持PostgreSQL风格的IN/OUT/INOUT，默认是IN
+    // 把参数列改成数组类型, 原始SQL保留 type[] 的写法
+    private static Column toArrayColumn(Column column, int componentType) {
+        String typeSql = column.getOriginalSQL();
+        if (typeSql == null) {
+            typeSql = DataType.getDataType(componentType).name;
+        }
+        Column arrayColumn = new Column(column.getName(), Value.ARRAY);
+        arrayColumn.setOriginalSQL(typeSql + "[]");
+        return arrayColumn;
+    }
+
     private void parseProcedureParameter(CreateProcedure command, int parameterIndex) {
         int mode = SqlProcedure.PARAM_IN;
+        boolean variadic = false;
         if (readIf("IN")) {
             if (readIf("OUT"))
                 mode = SqlProcedure.PARAM_INOUT;
@@ -5515,9 +5544,8 @@ public class SQLParserBase implements SQLParser {
             mode = SqlProcedure.PARAM_OUT;
         } else if (readIf("INOUT")) {
             mode = SqlProcedure.PARAM_INOUT;
-        } else if (isToken("VARIADIC")) {
-            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                    "VARIADIC parameter in CREATE PROCEDURE");
+        } else if (readIf("VARIADIC")) {
+            variadic = true;
         }
         Column column;
         // PostgreSQL允许参数只写类型不写名字, 这时给一个占位名
@@ -5525,13 +5553,41 @@ public class SQLParserBase implements SQLParser {
             column = parseColumnWithType("$" + parameterIndex);
         } else {
             String parameterName = readAliasIdentifier();
-            column = parseColumnWithType(parameterName);
-            // PostgreSQL也允许把OUT/INOUT写在参数名后面
+            // PostgreSQL也允许把OUT/INOUT/VARIADIC写在参数名后面
             if (readIf("OUT")) {
                 mode = SqlProcedure.PARAM_OUT;
             } else if (readIf("INOUT")) {
                 mode = SqlProcedure.PARAM_INOUT;
+            } else if (readIf("VARIADIC")) {
+                variadic = true;
             }
+            column = parseColumnWithType(parameterName);
+        }
+        // 数组类型: PostgreSQL的 type[] 或 type ARRAY 写法
+        int type = column.getType();
+        int componentType = -1;
+        if (readIf("[")) {
+            read("]");
+            componentType = type;
+            column = toArrayColumn(column, type);
+        } else if (readIf("ARRAY")) {
+            componentType = type;
+            column = toArrayColumn(column, type);
+        }
+        if (variadic) {
+            // 和PostgreSQL一样: VARIADIC必须是最后一个入参, 而且必须是数组类型
+            if (mode != SqlProcedure.PARAM_IN) {
+                throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                        "VARIADIC parameter must be an IN parameter");
+            }
+            if (column.getType() != Value.ARRAY) {
+                throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                        "VARIADIC parameter must be an array");
+            }
+            command.setVariadicParameter(componentType);
+        } else if (command.hasVariadicParameter()) {
+            throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                    "VARIADIC parameter must be the last parameter");
         }
         // DEFAULT <常量表达式>, 省略实参时用它补齐
         String defaultSql = null;
@@ -5686,6 +5742,10 @@ public class SQLParserBase implements SQLParser {
                     mode = SqlProcedure.PARAM_INOUT;
                 } else if (readIf("VARIADIC")) {
                     mode = SqlProcedure.PARAM_IN;
+                }
+                // PostgreSQL允许DROP/ALTER PROCEDURE p(b int)这样带参数名
+                if (hasParameterName()) {
+                    read();
                 }
                 Column column = parseColumnWithType(null);
                 int type = column.getType();
@@ -6233,6 +6293,25 @@ public class SQLParserBase implements SQLParser {
      * 读取DROP FUNCTION/ALTER FUNCTION里可选的参数类型列表，没写时返回null。
      * 不支持重载，这里只取类型用于校验签名，参数模式(IN/OUT/INOUT/VARIADIC)忽略。
      */
+    // 当前token是不是参数名: 名字后面还要跟一个类型，类型名后面跟的是) , [ ( 这些
+    private boolean hasParameterName() {
+        if (currentTokenType != IDENTIFIER) {
+            return false;
+        }
+        int backup = parseIndex;
+        String token = currentToken;
+        boolean quoted = currentTokenQuoted;
+        int tokenType = currentTokenType;
+        read();
+        boolean name = !(isToken(")") || isToken(",") || isToken("[") || isToken("(")
+                || isToken("ARRAY"));
+        parseIndex = backup;
+        currentToken = token;
+        currentTokenQuoted = quoted;
+        currentTokenType = tokenType;
+        return name;
+    }
+
     protected int[] parseFunctionArgumentTypeList() {
         if (!readIf("(")) {
             return null;
@@ -6244,6 +6323,10 @@ public class SQLParserBase implements SQLParser {
                 readIf("OUT");
                 readIf("INOUT");
                 readIf("VARIADIC");
+                // PostgreSQL允许DROP FUNCTION f(a int)这样带参数名，参数名后面必然还跟着类型
+                if (hasParameterName()) {
+                    read();
+                }
                 Column column = parseColumnWithType(null);
                 int type = column.getType();
                 if (readIf("[")) {
@@ -6299,6 +6382,192 @@ public class SQLParserBase implements SQLParser {
         return command;
     }
 
+    // ROUTINE是过程和函数的统称: 先按过程找再按函数找, 两边都匹配上时报歧义(42725)
+    protected StatementBase parseAlterRoutine() {
+        boolean ifExists = readIfExists(false);
+        String routineName = readIdentifierWithSchema();
+        int[][] arguments = parseProcedureArguments();
+        int[] typeIds = arguments == null ? null : arguments[0];
+        int[] modes = arguments == null ? null : arguments[1];
+
+        String newName = null;
+        String ownerName = null;
+        String setConfigName = null;
+        String setConfigValue = null;
+        String resetConfigName = null;
+        boolean resetAll = false;
+        FunctionAttributes attributes = null;
+        if (readIf("RENAME")) {
+            read("TO");
+            newName = readUniqueIdentifier();
+        } else if (readIf("OWNER")) {
+            read("TO");
+            ownerName = readUniqueIdentifier();
+        } else if (readIf("SET")) {
+            if (isToken("SCHEMA")) {
+                // 换schema要移动对象，这里不支持
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "ALTER ROUTINE ... SET SCHEMA");
+            }
+            setConfigName = readColumnIdentifier();
+            if (!readIf("=")) {
+                readIf("TO");
+            }
+            setConfigValue = readFunctionConfigValue();
+        } else if (readIf("RESET")) {
+            if (readIf("ALL")) {
+                resetAll = true;
+            } else {
+                resetConfigName = readColumnIdentifier();
+            }
+        } else {
+            attributes = new FunctionAttributes();
+            if (!readFunctionAttribute(attributes)) {
+                throw getSyntaxError();
+            }
+        }
+
+        int kind = findRoutineKind(routineName, typeIds, modes, ifExists);
+        if (kind != ROUTINE_FUNCTION) {
+            checkProcedureAttributes(attributes);
+        }
+        if (kind == ROUTINE_FUNCTION) {
+            AlterSqlFunction command = new AlterSqlFunction(session, getSchema());
+            command.setFunctionName(routineName);
+            command.setIfExists(ifExists);
+            command.setArgumentTypeIds(typeIds);
+            command.setNewName(newName);
+            command.setOwnerName(ownerName);
+            if (setConfigName != null) {
+                command.setConfigItem(setConfigName, setConfigValue);
+            }
+            command.setResetConfigName(resetConfigName);
+            command.setResetAll(resetAll);
+            command.setAttributes(attributes);
+            return command;
+        }
+        AlterProcedure command = new AlterProcedure(session, getSchema());
+        command.setProcedureName(routineName);
+        // 找不到时IF EXISTS已经校验过, 用只做校验的ALTER PROCEDURE空转
+        command.setIfExists(kind == ROUTINE_NONE || ifExists);
+        command.setArgumentTypeIds(typeIds);
+        command.setArgumentModes(modes);
+        command.setNewName(newName);
+        command.setOwnerName(ownerName);
+        if (setConfigName != null) {
+            command.setConfigItem(setConfigName, setConfigValue);
+        }
+        command.setResetConfigName(resetConfigName);
+        command.setResetAll(resetAll);
+        command.setAttributes(attributes);
+        return command;
+    }
+
+    protected StatementBase parseDropRoutine() {
+        boolean ifExists = readIfExists(false);
+        String routineName = readIdentifierWithSchema();
+        int[][] arguments = parseProcedureArguments();
+        int[] typeIds = arguments == null ? null : arguments[0];
+        int[] modes = arguments == null ? null : arguments[1];
+        int kind = findRoutineKind(routineName, typeIds, modes, ifExists);
+        if (kind == ROUTINE_FUNCTION) {
+            DropFunctionAlias command = new DropFunctionAlias(session, getSchema());
+            command.setAliasName(routineName);
+            command.setIfExists(ifExists);
+            command.setArgumentTypeIds(typeIds);
+            return command;
+        }
+        DropProcedure command = new DropProcedure(session, getSchema());
+        command.setProcedureName(routineName);
+        command.setIfExists(kind == ROUTINE_NONE || ifExists);
+        command.setArgumentTypeIds(typeIds);
+        command.setArgumentModes(modes);
+        return command;
+    }
+
+    // 按名字和签名判断ROUTINE指的是过程还是函数
+    private int findRoutineKind(String routineName, int[] typeIds, int[] modes, boolean ifExists) {
+        ArrayList<SqlProcedure> procedures = getSchema().findProcedures(session, routineName);
+        ArrayList<FunctionAlias> functions = getSchema().findFunctions(session, routineName);
+        SqlProcedure procedure = findRoutineProcedure(procedures, routineName, typeIds, modes);
+        SqlFunction function = findRoutineFunction(functions, routineName, typeIds);
+        if (procedure != null && function != null) {
+            throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, routineName);
+        }
+        if (function != null) {
+            return ROUTINE_FUNCTION;
+        }
+        if (procedure != null) {
+            return ROUTINE_PROCEDURE;
+        }
+        if (!ifExists) {
+            throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1,
+                    getRoutineSignatureText(routineName, typeIds));
+        }
+        return ROUTINE_NONE;
+    }
+
+    // 在一组同名过程里按参数类型列表找唯一匹配的过程
+    private SqlProcedure findRoutineProcedure(ArrayList<SqlProcedure> list, String name,
+            int[] typeIds, int[] modes) {
+        if (list.isEmpty()) {
+            return null;
+        }
+        if (typeIds == null) {
+            if (list.size() > 1) {
+                throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, name);
+            }
+            return list.get(0);
+        }
+        boolean hasModes = hasArgumentModes(modes);
+        SqlProcedure found = null;
+        for (SqlProcedure p : list) {
+            boolean match = p.matchesDropSignature(typeIds, modes);
+            if (!match && !hasModes) {
+                match = p.matchesSignature(typeIds);
+            }
+            if (match) {
+                if (found != null) {
+                    throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, name);
+                }
+                found = p;
+            }
+        }
+        return found;
+    }
+
+    // 在一组同名函数里按参数类型列表找唯一匹配的函数, Java别名没有签名不参与
+    private static SqlFunction findRoutineFunction(ArrayList<FunctionAlias> list, String name,
+            int[] typeIds) {
+        SqlFunction found = null;
+        for (FunctionAlias f : list) {
+            if (!(f instanceof SqlFunction)) {
+                continue;
+            }
+            if (typeIds == null || ((SqlFunction) f).matchesSignature(typeIds)) {
+                if (found != null) {
+                    throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, name);
+                }
+                found = (SqlFunction) f;
+            }
+        }
+        return found;
+    }
+
+    // 报错信息里用的ROUTINE签名, 例如 P(INT, VARCHAR)
+    private String getRoutineSignatureText(String routineName, int[] typeIds) {
+        if (typeIds == null) {
+            return routineName;
+        }
+        StatementBuilder buff = new StatementBuilder(routineName).append('(');
+        for (int i = 0; i < typeIds.length; i++) {
+            buff.appendExceptFirst(", ");
+            buff.append(typeIds[i] == Value.UNKNOWN ? "UNKNOWN"
+                    : DataType.getDataType(typeIds[i]).name);
+        }
+        return buff.append(')').toString();
+    }
+
     protected StatementBase parseAlterProcedure() {
         boolean ifExists = readIfExists(false);
         String procedureName = readIdentifierWithSchema();
@@ -6338,6 +6607,7 @@ public class SQLParserBase implements SQLParser {
             if (!readFunctionAttribute(attributes)) {
                 throw getSyntaxError();
             }
+            checkProcedureAttributes(attributes);
             command.setAttributes(attributes);
         }
         return command;
@@ -6474,6 +6744,8 @@ public class SQLParserBase implements SQLParser {
             return parseAlterSqlFunction();
         } else if (readIf("PROCEDURE")) {
             return parseAlterProcedure();
+        } else if (readIf("ROUTINE")) {
+            return parseAlterRoutine();
         } else if (readIf("DATABASE")) {
             return parseAlterDatabase();
         } else if (readIf("CATALOG")) {

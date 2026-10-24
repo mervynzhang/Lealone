@@ -45,6 +45,9 @@ public class SqlProcedure extends SchemaObjectBase {
     private final int minInputParameterCount;
     private final int[] inputIndexes; // 入参(IN/INOUT)在参数列表中的下标
     private final int[] outputIndexes; // OUT/INOUT参数在参数列表中的下标
+    // 最后一个入参是VARIADIC数组参数，调用时可以展开成任意多个实参
+    private final boolean variadic;
+    private final int variadicComponentType; // VARIADIC数组元素类型，没有VARIADIC时是-1
 
     // ---- PostgreSQL的过程属性，可以通过ALTER PROCEDURE修改，和函数的属性是同一套 ----
     private String volatility = SqlFunction.VOLATILE;
@@ -63,7 +66,8 @@ public class SqlProcedure extends SchemaObjectBase {
 
     public SqlProcedure(Schema schema, int id, String name, String body, String language,
             boolean atomicBody, Column[] parameters, int[] parameterModes,
-            String[] parameterDefaults, Value[] parameterDefaultValues) {
+            String[] parameterDefaults, Value[] parameterDefaultValues, boolean variadic,
+            int variadicComponentType) {
         super(schema, id, name);
         this.body = body;
         this.language = language;
@@ -72,6 +76,8 @@ public class SqlProcedure extends SchemaObjectBase {
         this.parameterModes = parameterModes;
         this.parameterDefaults = parameterDefaults;
         this.parameterDefaultValues = parameterDefaultValues;
+        this.variadic = variadic;
+        this.variadicComponentType = variadicComponentType;
         int inputCount = 0;
         int outputCount = 0;
         for (int mode : parameterModes) {
@@ -134,12 +140,27 @@ public class SqlProcedure extends SchemaObjectBase {
     }
 
     /**
+     * 按参数名找OUT参数下标，找不到返回-1。命名实参里写OUT参数名时只当占位符，不求值。
+     */
+    public int findOutputParameterIndex(String name) {
+        for (int i = 0; i < outputIndexes.length; i++) {
+            int index = outputIndexes[i];
+            if (parameterModes[index] == PARAM_OUT
+                    && parameters[index].getName().equalsIgnoreCase(name)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    /**
      * 把命名实参映射成入参下标。位置实参必须写在命名实参前面，名字必须存在而且不能重复，
      * 省略的入参必须有默认值。返回null表示这个调用匹配不上。
      */
     public int[] mapArgumentPositions(String[] argNames) {
         int count = argNames.length;
-        if (count > inputIndexes.length) {
+        // VARIADIC过程只支持位置实参
+        if (variadic || count > inputIndexes.length + outputIndexes.length) {
             return null;
         }
         int[] positions = new int[count];
@@ -158,11 +179,18 @@ public class SqlProcedure extends SchemaObjectBase {
             } else {
                 named = true;
                 int index = findInputParameterIndex(name);
-                if (index < 0 || used[index]) {
+                if (index >= 0) {
+                    if (used[index]) {
+                        return null;
+                    }
+                    positions[i] = index;
+                    used[index] = true;
+                } else if (findOutputParameterIndex(name) >= 0) {
+                    // OUT参数的命名占位: 不参与类型匹配, 也不求值
+                    positions[i] = -1;
+                } else {
                     return null;
                 }
-                positions[i] = index;
-                used[index] = true;
             }
         }
         // 省略的入参必须有默认值
@@ -183,8 +211,39 @@ public class SqlProcedure extends SchemaObjectBase {
         }
         int score = 0;
         for (int i = 0; i < argumentTypeIds.length; i++) {
+            if (positions[i] < 0) {
+                // OUT参数的命名占位
+                continue;
+            }
             int parameterType = parameters[inputIndexes[positions[i]]].getType();
             int match = SqlFunction.getTypeMatch(argumentTypeIds[i], parameterType);
+            if (match == SqlFunction.MATCH_NONE) {
+                return SqlFunction.MATCH_NONE;
+            }
+            score += match;
+        }
+        return score;
+    }
+
+    // VARIADIC过程的匹配: 前固定参数按参数列表对应(OUT参数只占位), 余下的实参按数组元素类型匹配
+    private int getVariadicMatchScore(int[] argumentTypeIds) {
+        int count = argumentTypeIds.length;
+        int fixedCount = getFixedParameterCount();
+        if (count < fixedCount) {
+            return SqlFunction.MATCH_NONE;
+        }
+        int score = 0;
+        for (int i = 0; i < count; i++) {
+            int parameterType = i < fixedCount ? parameters[i].getType() : variadicComponentType;
+            int polymorphicType = i < fixedCount ? parameters[i].getPolymorphicType()
+                    : Column.POLY_NONE;
+            int match = SqlFunction.getPolymorphicMatch(argumentTypeIds[i], polymorphicType);
+            if (match == SqlFunction.MATCH_NONE) {
+                return SqlFunction.MATCH_NONE;
+            }
+            if (match == SqlFunction.MATCH_POLYMORPHIC_UNDECIDED) {
+                match = SqlFunction.getTypeMatch(argumentTypeIds[i], parameterType);
+            }
             if (match == SqlFunction.MATCH_NONE) {
                 return SqlFunction.MATCH_NONE;
             }
@@ -242,6 +301,19 @@ public class SqlProcedure extends SchemaObjectBase {
 
     public int getInputParameterIndex(int i) {
         return inputIndexes[i];
+    }
+
+    public boolean isVariadic() {
+        return variadic;
+    }
+
+    public int getVariadicComponentType() {
+        return variadicComponentType;
+    }
+
+    // VARIADIC参数前面固定参数的个数
+    public int getFixedParameterCount() {
+        return parameters.length - 1;
     }
 
     public boolean hasOutputParameters() {
@@ -446,6 +518,9 @@ public class SqlProcedure extends SchemaObjectBase {
             return SqlFunction.MATCH_NONE;
         }
         int count = argumentTypeIds.length;
+        if (variadic) {
+            return getVariadicMatchScore(argumentTypeIds);
+        }
         int inputCount = inputIndexes.length;
         // 实参覆盖所有参数(含OUT占位)时按完整参数列表比较，否则只比较入参
         boolean overAllParameters = count == parameters.length && count != inputCount;
@@ -498,7 +573,9 @@ public class SqlProcedure extends SchemaObjectBase {
         for (int i = 0, size = parameters.length; i < size; i++) {
             buff.appendExceptFirst(", ");
             int mode = parameterModes[i];
-            if (mode == PARAM_OUT) {
+            if (variadic && i == getFixedParameterCount()) {
+                buff.append("VARIADIC ");
+            } else if (mode == PARAM_OUT) {
                 buff.append("OUT ");
             } else if (mode == PARAM_INOUT) {
                 buff.append("INOUT ");
@@ -578,7 +655,9 @@ public class SqlProcedure extends SchemaObjectBase {
         for (int i = 0; i < parameters.length; i++) {
             buff.appendExceptFirst(", ");
             int mode = parameterModes[i];
-            if (mode == PARAM_OUT) {
+            if (variadic && i == getFixedParameterCount()) {
+                buff.append("VARIADIC ");
+            } else if (mode == PARAM_OUT) {
                 buff.append("OUT ");
             } else if (mode == PARAM_INOUT) {
                 buff.append("INOUT ");

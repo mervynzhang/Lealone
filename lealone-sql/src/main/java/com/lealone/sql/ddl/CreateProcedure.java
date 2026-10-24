@@ -11,7 +11,9 @@ import com.lealone.common.exceptions.DbException;
 import com.lealone.db.DbObjectType;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.lock.DbObjectLock;
+import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
+import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
@@ -36,6 +38,11 @@ public class CreateProcedure extends SchemaStatement {
     // CREATE PROCEDURE里可选的属性，和函数的属性是同一套
     private FunctionAttributes attributes;
     private boolean ifNotExists;
+    // CREATE OR REPLACE PROCEDURE: 删掉旧的同名同签名过程再重新创建
+    private boolean orReplace;
+    // 最后一个入参是VARIADIC数组参数, variadicComponentType是数组元素类型
+    private boolean variadic;
+    private int variadicComponentType = -1;
     private final ArrayList<Column> parameters = new ArrayList<>();
     private final ArrayList<Integer> parameterModes = new ArrayList<>();
     // 参数默认值: SQL文本和CREATE时算好的值, 没有默认值的位置是null
@@ -76,8 +83,21 @@ public class CreateProcedure extends SchemaStatement {
         this.ifNotExists = ifNotExists;
     }
 
+    public void setOrReplace(boolean orReplace) {
+        this.orReplace = orReplace;
+    }
+
     public void setAttributes(FunctionAttributes attributes) {
         this.attributes = attributes;
+    }
+
+    public void setVariadicParameter(int componentType) {
+        this.variadic = true;
+        this.variadicComponentType = componentType;
+    }
+
+    public boolean hasVariadicParameter() {
+        return variadic;
     }
 
     public void addParameter(Column parameter, int mode, String defaultSql, Value defaultValue) {
@@ -188,14 +208,23 @@ public class CreateProcedure extends SchemaStatement {
     }
 
     // 找出入参类型都相同的已有过程，也就是和这次CREATE冲突的那个重载
-    private boolean findSameSignature(int[] inputTypeIds) {
+    private SqlProcedure findSameSignature(int[] inputTypeIds) {
         int[] polyTypes = getInputPolymorphicTypes();
         for (SqlProcedure p : schema.findProcedures(session, procedureName)) {
             if (p.matchesSignature(inputTypeIds, polyTypes)) {
-                return true;
+                return p;
             }
         }
-        return false;
+        return null;
+    }
+
+    // 同名的函数已经有相同的入参签名时不能再建过程, PostgreSQL报"不能改变例程类型"
+    private void checkRoutineKind(int[] inputTypeIds) {
+        for (FunctionAlias f : schema.findFunctions(session, procedureName)) {
+            if (f instanceof SqlFunction && ((SqlFunction) f).matchesSignature(inputTypeIds)) {
+                throw DbException.get(ErrorCode.CANNOT_CHANGE_ROUTINE_KIND_1, procedureName);
+            }
+        }
     }
 
     @Override
@@ -207,10 +236,19 @@ public class CreateProcedure extends SchemaStatement {
 
         // 参数类型不同的重载可以共存，只有入参签名完全相同的才算重复
         int[] inputTypeIds = getInputParameterTypeIds();
-        if (findSameSignature(inputTypeIds)) {
+        // 和PostgreSQL一样, 用OR REPLACE时不允许把同签名的函数改成过程
+        if (orReplace) {
+            checkRoutineKind(inputTypeIds);
+        }
+        SqlProcedure old = findSameSignature(inputTypeIds);
+        if (old != null) {
             if (ifNotExists)
                 return 0;
-            throw DbException.get(ErrorCode.PROCEDURE_ALREADY_EXISTS_1, procedureName);
+            if (!orReplace) {
+                throw DbException.get(ErrorCode.PROCEDURE_ALREADY_EXISTS_1, procedureName);
+            }
+            // 先删掉旧的过程再创建新的，同一个事务里完成
+            schema.remove(session, old, lock);
         }
         // PL/pgSQL只有BEGIN ... END块, 没有SQL标准的BEGIN ATOMIC体
         if (isPlpgSql() && atomicBody) {
@@ -226,7 +264,7 @@ public class CreateProcedure extends SchemaStatement {
         parameterDefaultValues.toArray(defaultValues);
         SqlProcedure procedure = new SqlProcedure(schema, getObjectId(), procedureName, body,
                 language, atomicBody, parameters.toArray(new Column[0]), toIntArray(parameterModes),
-                defaultSqls, defaultValues);
+                defaultSqls, defaultValues, variadic, variadicComponentType);
         if (attributes != null) {
             attributes.applyTo(procedure);
         }

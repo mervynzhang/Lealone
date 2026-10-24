@@ -1925,6 +1925,27 @@ public class ErrorCode {
     public static final int PROCEDURE_NOT_FOUND_1 = 90151;
 
     /**
+     * The error with code <code>90153</code> is thrown when trying to call an object with CALL
+     * that is a function instead of a procedure.
+     * Example:
+     * <pre>
+     * CALL RANDOM()
+     * </pre>
+     */
+    public static final int NOT_A_PROCEDURE_1 = 90153;
+
+    /**
+     * The error with code <code>90154</code> is thrown when trying to replace a function with a
+     * procedure or a procedure with a function, because the routine kind can not be changed.
+     * Example:
+     * <pre>
+     * CREATE FUNCTION F() RETURNS INT AS 'SELECT 1';
+     * CREATE OR REPLACE PROCEDURE F() AS 'SELECT 1';
+     * </pre>
+     */
+    public static final int CANNOT_CHANGE_ROUTINE_KIND_1 = 90154;
+
+    /**
      * The error with code <code>90152</code> is thrown when a function name has
      * multiple overloads and the statement does not specify the parameter types.
      */
@@ -2002,6 +2023,10 @@ public class ErrorCode {
             return "42S22";
         case AMBIGUOUS_FUNCTION_NAME_1:
             return "42725";
+        case NOT_A_PROCEDURE_1:
+            return "42809";
+        case CANNOT_CHANGE_ROUTINE_KIND_1:
+            return "42P13";
 
         // 0A: feature not supported
 

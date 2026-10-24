@@ -61,8 +61,9 @@ public class PgSetofTest extends SqlTestBase {
             }
         }
 
-        // CALL也能拿到整个结果集
-        assertEquals("[2, 3]", queryIntList("CALL setof_int(2)").toString());
+        // CALL只调过程: 集合函数要用SELECT调用(PG报42809, Lealone报90153)
+        executeQueryThanAssertErrorCode("CALL setof_int(2)",
+                com.lealone.db.api.ErrorCode.NOT_A_PROCEDURE_1);
 
         // 和WHERE组合
         assertEquals("[3]",

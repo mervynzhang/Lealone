@@ -7,11 +7,14 @@ package com.lealone.sql;
 
 import java.util.ArrayList;
 
+import com.lealone.common.exceptions.DbException;
+import com.lealone.db.api.ErrorCode;
 import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.session.ServerSession;
 import com.lealone.sql.dml.Call;
 import com.lealone.sql.dml.CallProcedure;
 import com.lealone.sql.expression.Expression;
+import com.lealone.sql.expression.function.Function;
 
 public class LealoneSQLParser extends SQLParserBase {
 
@@ -19,9 +22,9 @@ public class LealoneSQLParser extends SQLParserBase {
         super(session);
     }
 
-    // CALL procedureName(...) 先按存储过程解析，找不到再退回原来的函数调用表达式，
-    // 这样H2遗留的CALL语法和新的存储过程语法可以共存。
-    // 同名的过程可能有多个重载，先拿到所有候选，等prepare阶段按实参类型消解
+    // CALL procedureName(...) 先按存储过程解析。
+    // 同名的过程可能有多个重载，先拿到所有候选，等prepare阶段按实参类型消解。
+    // 和PostgreSQL一样, CALL只调过程: 名字是函数时报42809(不是过程), 不再退回函数调用
     @Override
     protected Call parseCall() {
         ArrayList<SqlProcedure> procedures = null;
@@ -29,8 +32,12 @@ public class LealoneSQLParser extends SQLParserBase {
             procedures = getSchema(session.getCurrentSchemaName()).findProcedures(session,
                     currentToken);
         }
-        if (procedures == null || procedures.isEmpty())
+        if (procedures == null || procedures.isEmpty()) {
+            if (currentTokenType == IDENTIFIER) {
+                checkNotAFunction(currentToken);
+            }
             return super.parseCall();
+        }
 
         ArrayList<String> argNames = new ArrayList<>();
         Expression[] args = parseProcedureArgs(argNames);
@@ -39,6 +46,28 @@ public class LealoneSQLParser extends SQLParserBase {
         CallProcedure command = new CallProcedure(session, procedures, args, names);
         currentStatement = command;
         return command;
+    }
+
+    // 名字是函数时CALL要报错(PostgreSQL的42809), 只给H2遗留的CALL TABLE(...)
+    // 和内部SYSTEM_*函数(SCRIPT导出BLOB时用)留口子
+    private void checkNotAFunction(String name) {
+        if (isLegacyCallTarget(name)) {
+            return;
+        }
+        boolean function = Function.getFunction(database, name) != null
+                || getAggregateType(name) >= 0;
+        if (!function) {
+            function = !getSchema(session.getCurrentSchemaName()).findFunctions(session, name)
+                    .isEmpty();
+        }
+        if (function) {
+            throw DbException.get(ErrorCode.NOT_A_PROCEDURE_1, name + "()");
+        }
+    }
+
+    private static boolean isLegacyCallTarget(String name) {
+        return "TABLE".equalsIgnoreCase(name) || "TABLE_DISTINCT".equalsIgnoreCase(name)
+                || (name.length() > 7 && name.regionMatches(true, 0, "SYSTEM_", 0, 7));
     }
 
     private Expression[] parseProcedureArgs(ArrayList<String> argNames) {
