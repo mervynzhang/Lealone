@@ -17,6 +17,7 @@ import com.lealone.db.auth.Role;
 import com.lealone.db.lock.DbObjectLock;
 import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
+import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.service.Service;
 import com.lealone.db.session.ServerSession;
@@ -218,17 +219,32 @@ public class GrantRevoke extends AuthStatement {
     private void revokeRight(DbObject object, DbObjectLock lock) {
         Right right = grantee.getRightForObject(object);
         if (right == null) {
+            // 函数/过程上显式REVOKE PUBLIC的EXECUTE时，即使没有授权记录也要留一条0权限标记，
+            // 否则"没有授权记录=人人可调用"的兼容规则会让REVOKE PUBLIC失效
+            Database db = session.getDatabase();
+            if (isRoutine(object) && grantee == db.getPublicRole()
+                    && (rightMask & Right.EXECUTE) != 0) {
+                Right marker = new Right(db, getObjectId(), grantee, 0, object);
+                grantee.grantRight(object, marker);
+                db.addDatabaseObject(session, marker, lock);
+            }
             return;
         }
         int mask = right.getRightMask();
         int newRight = mask & ~rightMask;
         Database db = session.getDatabase();
-        if (newRight == 0) {
+        if (newRight == 0 && !isRoutine(object)) {
             db.removeDatabaseObject(session, right, lock);
         } else {
+            // 函数/过程保留一条0权限的记录: EXECUTE检查靠"有没有授权记录"来区分
+            // "从来没授权过(人人可调用)"和"显式REVOKE掉了(PUBLIC也不能调用)"
             right.setRightMask(newRight);
             db.updateMeta(session, right);
         }
+    }
+
+    private static boolean isRoutine(DbObject object) {
+        return object instanceof SqlFunction || object instanceof SqlProcedure;
     }
 
     private void revokeRole(Role grantedRole, DbObjectLock lock) {

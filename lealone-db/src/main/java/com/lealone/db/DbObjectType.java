@@ -25,12 +25,12 @@ public enum DbObjectType {
     /**
      * This object is a role.
      */
-    ROLE(2, 12, false),
+    ROLE(2, 13, false),
 
     /**
      * This object is a right.
      */
-    RIGHT(3, 13, false),
+    RIGHT(3, 14, false),
 
     /**
      * This object is a user data type (domain).
@@ -40,12 +40,12 @@ public enum DbObjectType {
     /**
      * This object is a user-defined aggregate function.
      */
-    AGGREGATE(5, 14),
+    AGGREGATE(5, 15),
 
     /**
      * This object is a comment.
      */
-    COMMENT(6, 15, false),
+    COMMENT(6, 16, false),
 
     /**
      * This object is a schema.
@@ -101,7 +101,8 @@ public enum DbObjectType {
     /**
      * This object is a stored procedure.
      */
-    PROCEDURE(17, 16),
+    // 过程要排在RIGHT之前: GRANT EXECUTE ON PROCEDURE回放时过程必须已经存在
+    PROCEDURE(17, 12),
 
     /**
      * This object is a user-defined composite type.

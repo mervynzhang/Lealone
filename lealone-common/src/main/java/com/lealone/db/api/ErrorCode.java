@@ -292,6 +292,14 @@ public class ErrorCode {
     public static final int SYNTAX_ERROR_2 = 42001;
 
     /**
+     * The error with code <code>42501</code> is thrown when
+     * the current user (or the current role after SET ROLE) has no privilege
+     * for the operation, for example calling a function/procedure without
+     * the EXECUTE privilege, or SET ROLE to a role the login user is not a member of.
+     */
+    public static final int INSUFFICIENT_PRIVILEGE_1 = 42501;
+
+    /**
      * The error with code <code>42101</code> is thrown when
      * trying to create a table or view if an object with this name already
      * exists. Example:
