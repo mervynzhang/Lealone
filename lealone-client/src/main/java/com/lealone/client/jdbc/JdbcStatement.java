@@ -321,7 +321,11 @@ public class JdbcStatement extends JdbcWrapper implements Statement {
     }
 
     private boolean executeInternal(String sql) throws SQLException {
-        return executeInternal(sql, false).get().booleanValue();
+        try {
+            return executeInternal(sql, false).get().booleanValue();
+        } catch (Exception e) {
+            throw DbException.toSQLException(e); // 同步路径必须抛SQLException
+        }
     }
 
     public Future<Boolean> executeAsync(String sql) {
