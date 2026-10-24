@@ -559,6 +559,35 @@ public class PlpgsqlTest extends SqlTestBase {
                 ErrorCode.FEATURE_NOT_SUPPORTED_1);
     }
 
+    // 块标签限定变量名：outerblock.param1
+    @Test
+    public void testBlockLabelQualifiedVariable() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_label() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " <<outerblock>>" //
+                + " DECLARE param1 INT := 1;" //
+                + " BEGIN" //
+                + "   DECLARE param1 INT := 10;" //
+                + "   BEGIN" //
+                + "     RAISE NOTICE 'outer=%', outerblock.param1;" //
+                + "     RETURN outerblock.param1 + param1;" //
+                + "   END;" //
+                + " END; $$");
+        executeQuery("SELECT plp_label()");
+        assertEquals(11, getIntValue(1));
+
+        // 带标签的循环变量也能被限定引用
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_label_loop() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE s INT := 0;" //
+                + " BEGIN" //
+                + "   <<lp>> FOR i IN 1..3 LOOP" //
+                + "     s := s + lp.i;" //
+                + "   END LOOP lp;" //
+                + "   RETURN s;" //
+                + " END; $$");
+        executeQuery("SELECT plp_label_loop()");
+        assertEquals(6, getIntValue(1));
+    }
+
     // GET DIAGNOSTICS ... = ROW_COUNT
     @Test
     public void testGetDiagnosticsRowCount() throws Exception {
