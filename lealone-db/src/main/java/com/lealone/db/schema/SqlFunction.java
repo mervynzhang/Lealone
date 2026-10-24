@@ -108,7 +108,7 @@ public class SqlFunction extends FunctionAlias {
     private static Method getDummyMethod() {
         try {
             return SqlFunction.class.getDeclaredMethod("dummyMethod");
-        } catch (Exception e) {
+        } catch (NoSuchMethodException | SecurityException e) {
             throw DbException.convert(e);
         }
     }

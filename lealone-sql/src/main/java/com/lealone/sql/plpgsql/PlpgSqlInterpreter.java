@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.common.logging.Logger;
+import com.lealone.common.logging.LoggerFactory;
 import com.lealone.common.util.MathUtils;
 import com.lealone.db.result.SimpleResultSet;
 import com.lealone.db.session.ServerSession;
@@ -45,6 +47,8 @@ import com.lealone.sql.plpgsql.PlpgSqlAst.While;
  * 变量保存在PlpgSqlScope作用域链里。
  */
 public class PlpgSqlInterpreter {
+
+    private static final Logger logger = LoggerFactory.getLogger(PlpgSqlInterpreter.class);
 
     // 这三个异常用来实现RETURN/EXIT/CONTINUE的控制流跳转
     private static class ReturnSignal extends RuntimeException {
@@ -838,7 +842,7 @@ public class PlpgSqlInterpreter {
             throw new PlpgSqlException(sqlState, message);
         }
         // NOTICE/WARNING/INFO/LOG/DEBUG只输出，不中断执行
-        System.out.println(level + ":  " + message);
+        logger.info("{}:  {}", level, message);
     }
 
     private String formatMessage(Raise node) {

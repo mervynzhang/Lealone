@@ -14,6 +14,7 @@ import com.lealone.db.command.CommandParameter;
 import com.lealone.db.result.LocalResult;
 import com.lealone.db.result.Result;
 import com.lealone.db.schema.SqlProcedure;
+import com.lealone.db.async.AsyncTask;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.session.SessionStatus;
 import com.lealone.db.value.Value;
@@ -129,7 +130,12 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
     }
 
     private void onStatementComplete() {
-        nestedSession.getSessionInfo().submitTask(this::createNextYieldable);
+        nestedSession.getSessionInfo().submitTask(new AsyncTask() {
+            @Override
+            public void run() {
+                createNextYieldable();
+            }
+        });
     }
 
     private void onComplete(Throwable t) {
