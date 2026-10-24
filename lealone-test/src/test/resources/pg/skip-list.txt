@@ -16,6 +16,7 @@
 # @pg-total create_function_sql.sql 179 converted
 # @pg-total create_procedure.sql 109 converted
 # @pg-total plpgsql.sql 935 sampled
+# @pg-total rangefuncs.sql 428 sampled
 #
 # 重新统计 PG 语句数: mvn -o -pl lealone-test test -Dtest=PgRegressTest \
 #   -Dpg.srcdir=/path/to/postgres/src/test/regress/sql
@@ -77,3 +78,6 @@ plpgsql.perform	plpgsql.sql:1774-1811	5	这段依赖 FOUND 魔法变量(PERFORM 
 plpgsql.cursor	plpgsql.sql:1859-1900	6	PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100
 plpgsql.record	plpgsql.sql:2313-2321	2	缺陷: DECLARE x record / %ROWTYPE 能建函数, 调用时报 42001(内部 CAST(NULL AS RECORD) 语法错)
 plpgsql.out_params_exception	plpgsql.sql:3609-3638	6	leaker_2 用 OUT 参数 + RETURNS RECORD(RECORD 不支持), leaker_1 还有复合字段访问
+rangefuncs.setof_composite	rangefuncs.sql:1-8	5	Lealone 无 SETOF <表行类型>, 也不支持 $1 位置参数
+rangefuncs.with_ordinality	rangefuncs.sql:9-17	8	Lealone 不支持 WITH ORDINALITY, 也没有 unnest()/generate_series()
+rangefuncs.insert_returning	rangefuncs.sql:456-476	8	Lealone 函数体只允许单条查询, 不支持 INSERT ... RETURNING
