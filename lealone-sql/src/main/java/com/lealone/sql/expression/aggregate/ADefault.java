@@ -21,6 +21,9 @@ import com.lealone.sql.query.Select;
 
 public class ADefault extends BuiltInAggregate {
 
+    // 求平均值时额外增加的小数位数，与H2一致
+    private static final int ADDITIONAL_AVG_SCALE = 10;
+
     public ADefault(int type, Expression on, Select select, boolean distinct) {
         super(type, on, select, distinct);
     }
@@ -47,6 +50,17 @@ public class ADefault extends BuiltInAggregate {
                 dataType = Value.DECIMAL;
             } else if (!DataType.supportsAdd(dataType)) {
                 throw DbException.get(ErrorCode.SUM_OR_AVG_ON_WRONG_DATATYPE_1, getSQL());
+            } else if (dataType == Value.BYTE || dataType == Value.SHORT || dataType == Value.INT) {
+                // 整数求平均值会被截断成整数，结果类型按H2的规则改成DOUBLE
+                dataType = Value.DOUBLE;
+                precision = ValueDouble.PRECISION;
+                displaySize = ValueDouble.DISPLAY_SIZE;
+                scale = 0;
+            } else if (dataType == Value.LONG || dataType == Value.DECIMAL) {
+                // 大整数和定点数求平均值需要小数位，加上ADDITIONAL_AVG_SCALE位（与H2一致）
+                dataType = Value.DECIMAL;
+                precision += ADDITIONAL_AVG_SCALE;
+                scale += ADDITIONAL_AVG_SCALE;
             }
             break;
         case MIN:

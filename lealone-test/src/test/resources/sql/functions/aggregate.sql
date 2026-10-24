@@ -26,11 +26,11 @@ select min(id) c1, max(id) c2 from t;
 > 1  3
 > rows: 1
 
--- LEALONE: 与H2不同，avg(int)返回整数并截断小数部分，这里得到15，H2得到15.0
+-- 整数AVG的结果不截断
 select avg(v) c from t;
 > C
-> --
-> 15
+> ----
+> 15.0
 > rows: 1
 
 create table u(v int);
@@ -39,27 +39,25 @@ create table u(v int);
 insert into u values(1), (2);
 > update count: 2
 
--- LEALONE: 与H2不同，avg(int)对(1,2)得到1(截断)，H2得到1.5
 select avg(v) c from u;
 > C
-> -
-> 1
+> ---
+> 1.5
 > rows: 1
 
 insert into u values(4);
 > update count: 1
 
--- LEALONE: 与H2不同，avg(int)对(1,2,4)得到2(截断)，H2得到2.3333333333333335
 select avg(v) c from u;
 > C
-> -
-> 2
+> ------------------
+> 2.3333333333333335
 > rows: 1
 
 select avg(distinct v) c from u;
 > C
-> -
-> 2
+> ------------------
+> 2.3333333333333335
 > rows: 1
 
 select sum(v) c1, count(*) c2 from u;
