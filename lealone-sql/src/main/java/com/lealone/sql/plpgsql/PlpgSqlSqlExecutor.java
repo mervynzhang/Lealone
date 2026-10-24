@@ -54,6 +54,13 @@ public class PlpgSqlSqlExecutor {
      * 执行查询，最多取maxRows行；maxRows小于等于0表示不限。
      */
     public List<Value[]> query(String sql, PlpgSqlVariableResolver resolver, int maxRows) {
+        return queryWithColumns(sql, resolver, maxRows).rows;
+    }
+
+    /**
+     * 执行查询并返回列名/列类型，SELECT * INTO record变量需要这些元数据。
+     */
+    public QueryRows queryWithColumns(String sql, PlpgSqlVariableResolver resolver, int maxRows) {
         PreparedSQLStatement statement = prepare(sql, resolver);
         if (!statement.isQuery()) {
             statement.close();
@@ -62,17 +69,23 @@ public class PlpgSqlSqlExecutor {
         Result result = statement.query(0);
         try {
             ArrayList<Value[]> rows = new ArrayList<>();
-            if (result != null) {
-                int columnCount = result.getVisibleColumnCount();
-                while ((maxRows <= 0 || rows.size() < maxRows) && result.next()) {
-                    // currentRow返回的数组可能会被复用，并且可能包含排序用的内部列，只复制可见列
-                    Value[] current = result.currentRow();
-                    Value[] row = new Value[columnCount];
-                    System.arraycopy(current, 0, row, 0, Math.min(columnCount, current.length));
-                    rows.add(row);
-                }
+            if (result == null)
+                return new QueryRows(rows, new String[0], new int[0]);
+            int columnCount = result.getVisibleColumnCount();
+            String[] columnNames = new String[columnCount];
+            int[] columnTypes = new int[columnCount];
+            for (int i = 0; i < columnCount; i++) {
+                columnNames[i] = result.getColumnName(i);
+                columnTypes[i] = result.getColumnType(i);
             }
-            return rows;
+            while ((maxRows <= 0 || rows.size() < maxRows) && result.next()) {
+                // currentRow返回的数组可能会被复用，并且可能包含排序用的内部列，只复制可见列
+                Value[] current = result.currentRow();
+                Value[] row = new Value[columnCount];
+                System.arraycopy(current, 0, row, 0, Math.min(columnCount, current.length));
+                rows.add(row);
+            }
+            return new QueryRows(rows, columnNames, columnTypes);
         } finally {
             if (result != null)
                 result.close();
@@ -141,6 +154,11 @@ public class PlpgSqlSqlExecutor {
         String type = typeName.trim();
         if (type.isEmpty())
             return Value.UNKNOWN;
+        // record/%ROWTYPE不是标量类型，不能拼成CAST(NULL AS ...)
+        String compactType = type.replaceAll("\\s+", "").toLowerCase();
+        if (compactType.equals("record") || compactType.endsWith("%rowtype"))
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "PL/pgSQL record/%ROWTYPE type is not a scalar type: " + typeName);
         Integer cached = typeCache.get(type);
         if (cached != null)
             return cached.intValue();
@@ -163,6 +181,27 @@ public class PlpgSqlSqlExecutor {
         }
         typeCache.put(type, Integer.valueOf(valueType));
         return valueType;
+    }
+
+    /**
+     * 解析tab%ROWTYPE，返回表的列名和类型。
+     */
+    public QueryRows resolveRowType(String typeName) {
+        String type = typeName == null ? "" : typeName.trim();
+        String compact = type.replaceAll("\\s+", "");
+        if (!compact.toLowerCase().endsWith("%rowtype"))
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "PL/pgSQL unsupported row type: " + typeName);
+        String table = compact.substring(0, compact.length() - 8);
+        if (table.isEmpty())
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "PL/pgSQL invalid row type: " + typeName);
+        try {
+            return queryWithColumns("SELECT * FROM " + table + " WHERE 1=0", null, 0);
+        } catch (DbException e) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "PL/pgSQL unsupported row type " + typeName + ": " + e.getMessage());
+        }
     }
 
     private int queryColumnType(String sql) {
@@ -324,6 +363,19 @@ public class PlpgSqlSqlExecutor {
         return -1;
     }
 
+    public static class QueryRows {
+
+        public final List<Value[]> rows;
+        public final String[] columnNames;
+        public final int[] columnTypes;
+
+        QueryRows(List<Value[]> rows, String[] columnNames, int[] columnTypes) {
+            this.rows = rows;
+            this.columnNames = columnNames;
+            this.columnTypes = columnTypes;
+        }
+    }
+
     public static class SelectInto {
 
         public final String query;
@@ -341,6 +393,9 @@ public class PlpgSqlSqlExecutor {
     private static class PlpgSqlSqlParser extends LealoneSQLParser {
 
         private final PlpgSqlVariableResolver resolver;
+        // 记录最近读到的标识符，readTermObjectDot里用来判断r.col是不是record字段
+        private String lastIdentifier;
+        private boolean lastIdentifierQuoted;
 
         PlpgSqlSqlParser(ServerSession session, PlpgSqlVariableResolver resolver) {
             super(session);
@@ -351,12 +406,56 @@ public class PlpgSqlSqlExecutor {
         protected Expression readTerm() {
             if (currentTokenType == IDENTIFIER && resolver != null) {
                 PlpgSqlVariable variable = resolver.findVariable(currentToken, currentTokenQuoted);
+                if (variable != null && variable.isRecord() && nextChar() != '.')
+                    throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                            "PL/pgSQL record variable " + variable.getName()
+                                    + " can only be used as record.field");
                 if (variable != null && canSubstitute()) {
                     read();
                     return ValueExpression.get(variable.getValue());
                 }
+                lastIdentifier = currentToken;
+                lastIdentifierQuoted = currentTokenQuoted;
+            } else {
+                lastIdentifier = null;
             }
             return super.readTerm();
+        }
+
+        @Override
+        protected Expression readTermObjectDot(String objectName) {
+            if (resolver != null && lastIdentifier != null
+                    && objectName.equals(lastIdentifier)) {
+                PlpgSqlVariable variable = resolver.findVariable(lastIdentifier,
+                        lastIdentifierQuoted);
+                if (variable != null && variable.isRecord()) {
+                    String fieldName = readColumnIdentifier();
+                    return ValueExpression.get(variable.getRecordField(fieldName));
+                }
+                if (resolver.hasLabel(lastIdentifier)) {
+                    String name = readColumnIdentifier();
+                    PlpgSqlVariable qualified = resolver.findVariableByLabel(lastIdentifier, name,
+                            false);
+                    if (qualified == null)
+                        throw DbException.get(ErrorCode.COLUMN_NOT_FOUND_1,
+                                lastIdentifier + "." + name);
+                    if (qualified.isRecord())
+                        throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                                "PL/pgSQL qualified record field: " + lastIdentifier + "."
+                                        + name);
+                    return ValueExpression.get(qualified.getValue());
+                }
+            }
+            return super.readTermObjectDot(objectName);
+        }
+
+        // 当前token后面的第一个非空白字符
+        private char nextChar() {
+            int i = parseIndex;
+            char[] chars = sqlCommandChars;
+            while (i < chars.length && Character.isWhitespace(chars[i]))
+                i++;
+            return i < chars.length ? chars[i] : 0;
         }
 
         // 看当前token后面的第一个非空白字符，判断它是不是限定名、函数调用或字面量前缀

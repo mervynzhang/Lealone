@@ -12,4 +12,13 @@ package com.lealone.sql.plpgsql;
 public interface PlpgSqlVariableResolver {
 
     PlpgSqlVariable findVariable(String name, boolean quoted);
+
+    // 块标签限定名，例如 <<outerblock>> ... outerblock.param1
+    default boolean hasLabel(String label) {
+        return false;
+    }
+
+    default PlpgSqlVariable findVariableByLabel(String label, String name, boolean quoted) {
+        return null;
+    }
 }

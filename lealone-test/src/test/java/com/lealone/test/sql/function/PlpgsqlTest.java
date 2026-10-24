@@ -509,6 +509,56 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals(63, getIntValue(1));
     }
 
+    // record和%ROWTYPE变量：SELECT * INTO整行、r.col取字段
+    @Test
+    public void testRecordAndRowType() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_rec_t");
+        executeUpdate("CREATE TABLE plp_rec_t(id INT PRIMARY KEY, name VARCHAR(20))");
+        executeUpdate("INSERT INTO plp_rec_t VALUES(1, 'alice')");
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_rowtype(p INT) RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_rec_t%ROWTYPE;" //
+                + " BEGIN" //
+                + "   SELECT * INTO r FROM plp_rec_t WHERE id = p;" //
+                + "   RETURN r.name;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_rowtype(1)");
+        assertEquals("alice", getStringValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_record(p INT) RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r record;" //
+                + " BEGIN" //
+                + "   SELECT * INTO r FROM plp_rec_t WHERE id = p;" //
+                + "   RAISE NOTICE 'record name = %', r.name;" //
+                + "   RETURN r.name;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_record(1)");
+        assertEquals("alice", getStringValue(1));
+
+        // 没有行时record未赋值，取字段报55000
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_norow(p INT) RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_rec_t%ROWTYPE;" //
+                + " BEGIN" //
+                + "   SELECT * INTO r FROM plp_rec_t WHERE id = p;" //
+                + "   RETURN r.name;" //
+                + " END; $$");
+        assertSqlState("55000", "SELECT plp_rec_norow(99)");
+
+        // record当标量用要给出明确的不支持错误，不能漏内部CAST语法错
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_scalar(p INT) RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_rec_t%ROWTYPE;" //
+                + " BEGIN RETURN r; END; $$");
+        executeQueryThanAssertErrorCode("SELECT plp_rec_scalar(1)",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+
+        // 不存在的表%ROWTYPE给出可读的不支持错误
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_badtype() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_no_such_table%ROWTYPE;" //
+                + " BEGIN RETURN 1; END; $$");
+        executeQueryThanAssertErrorCode("SELECT plp_rec_badtype()",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+    }
+
     // GET DIAGNOSTICS ... = ROW_COUNT
     @Test
     public void testGetDiagnosticsRowCount() throws Exception {

@@ -161,6 +161,7 @@ public class PlpgSqlInterpreter {
 
     private void executeBlock(Block block) {
         PlpgSqlScope blockScope = new PlpgSqlScope(scope);
+        blockScope.setLabel(block.label);
         scope = blockScope;
         try {
             declareVariables(block);
@@ -191,16 +192,41 @@ public class PlpgSqlInterpreter {
         for (Declaration declaration : block.declarations) {
             PlpgSqlVariable variable = new PlpgSqlVariable(declaration.name,
                     declaration.nameQuoted, declaration.constant, declaration.notNull);
-            variable.setType(resolveType(declaration.typeName));
+            String typeName = declaration.typeName == null ? "" : declaration.typeName.trim();
+            boolean recordType = isRecordType(typeName);
+            if (recordType) {
+                variable.setRecord(true);
+                if (!"record".equalsIgnoreCase(typeName)) {
+                    // tab%ROWTYPE在声明时解析出列名和类型，解析失败时给出可读的错误
+                    PlpgSqlSqlExecutor.QueryRows rowType = sqlExecutor.resolveRowType(typeName);
+                    variable.declareRecordFields(rowType.columnNames, rowType.columnTypes);
+                }
+            } else {
+                variable.setType(resolveType(typeName));
+            }
             if (declaration.constant && declaration.defaultExpression == null)
                 throw PlpgSqlException.raise("42601",
                         "constant " + declaration.name + " must have a default value");
+            if (recordType && declaration.defaultExpression != null)
+                throw DbException.getUnsupportedException(
+                        "PL/pgSQL default value for record variable: " + declaration.name);
             // 默认值表达式在变量加入作用域之前求值，这样同名变量可以引用外层的
-            Value value = declaration.defaultExpression == null ? ValueNull.INSTANCE
-                    : sqlExecutor.evalExpression(declaration.defaultExpression, scope);
+            Value value = !recordType && declaration.defaultExpression != null
+                    ? sqlExecutor.evalExpression(declaration.defaultExpression, scope)
+                    : ValueNull.INSTANCE;
             scope.declare(variable);
-            variable.setInitialValue(value);
+            if (recordType) {
+                if (declaration.notNull)
+                    throw PlpgSqlException.notNullViolation(declaration.name);
+            } else {
+                variable.setInitialValue(value);
+            }
         }
+    }
+
+    private static boolean isRecordType(String typeName) {
+        String compact = typeName.replaceAll("\\s+", "");
+        return "record".equalsIgnoreCase(compact) || compact.toLowerCase().endsWith("%rowtype");
     }
 
     private int resolveType(String typeName) {
@@ -331,8 +357,30 @@ public class PlpgSqlInterpreter {
     }
 
     private void executeSelectInto(PlpgSqlSqlExecutor.SelectInto selectInto) {
-        List<Value[]> rows = sqlExecutor.query(selectInto.query, scope, 2);
+        PlpgSqlSqlExecutor.QueryRows queryRows = sqlExecutor.queryWithColumns(selectInto.query,
+                scope, 2);
+        List<Value[]> rows = queryRows.rows;
         lastRowCount = rows.size();
+        // 单个record变量接收整行 SELECT * INTO r
+        if (selectInto.targets.length == 1) {
+            PlpgSqlVariable recordVariable = findVariable(selectInto.targets[0], false);
+            if (recordVariable.isRecord()) {
+                if (rows.isEmpty()) {
+                    if (selectInto.strict)
+                        throw PlpgSqlException.noDataFound();
+                    recordVariable.invalidateRecord(queryRows.columnNames, queryRows.columnTypes);
+                    setFound(false);
+                    return;
+                }
+                if (selectInto.strict && rows.size() > 1)
+                    throw PlpgSqlException.tooManyRows();
+                recordVariable.checkCanAssign();
+                recordVariable.assignRecord(queryRows.columnNames, queryRows.columnTypes,
+                        rows.get(0));
+                setFound(true);
+                return;
+            }
+        }
         if (rows.isEmpty()) {
             if (selectInto.strict)
                 throw PlpgSqlException.noDataFound();
@@ -353,6 +401,9 @@ public class PlpgSqlInterpreter {
                             + " variables");
         for (int i = 0; i < row.length; i++) {
             PlpgSqlVariable variable = findVariable(selectInto.targets[i], false);
+            if (variable.isRecord())
+                throw DbException.getUnsupportedException(
+                        "PL/pgSQL multiple SELECT INTO targets contain record " + variable.getName());
             variable.checkCanAssign();
             variable.setValue(row[i]);
         }
@@ -435,6 +486,7 @@ public class PlpgSqlInterpreter {
         }
 
         PlpgSqlScope loopScope = new PlpgSqlScope(scope);
+        loopScope.setLabel(node.label);
         PlpgSqlScope oldScope = scope;
         scope = loopScope;
         try {
