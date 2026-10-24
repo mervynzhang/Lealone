@@ -882,7 +882,7 @@ public class Database extends DbObjectBase implements DataHandler {
                     dbObjects.commit();
                 } else {
                     clearObjectId(obj.getId());
-                    dbObjects.rollback();
+                    rollbackDbObjects(dbObjects);
                 }
             });
         }
@@ -922,7 +922,7 @@ public class Database extends DbObjectBase implements DataHandler {
                     dbObjects.commit();
                     removeInternal(obj);
                 } else {
-                    dbObjects.rollback();
+                    rollbackDbObjects(dbObjects);
                 }
             });
         }
@@ -931,6 +931,12 @@ public class Database extends DbObjectBase implements DataHandler {
     private void removeInternal(DbObject obj) {
         clearObjectId(obj.getId());
         obj.invalidate();
+    }
+
+    // DDL回滚之后元数据又变回去了，要让缓存中的prepared statement重新编译
+    private void rollbackDbObjects(TransactionalDbObjects dbObjects) {
+        dbObjects.rollback();
+        getNextModificationMetaId();
     }
 
     /**
@@ -965,7 +971,7 @@ public class Database extends DbObjectBase implements DataHandler {
                 dbObjects.commit();
             } else {
                 obj.rename(oldName);
-                dbObjects.rollback();
+                rollbackDbObjects(dbObjects);
             }
         });
 
