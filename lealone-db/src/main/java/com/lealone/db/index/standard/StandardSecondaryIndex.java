@@ -355,7 +355,9 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         @Override
         public boolean next() {
             searchRow = nextSearchRow();
-            row = null; // 延迟构建
+            // 不能在这里把 row 清空: nextSearchRow 校验索引项时(见 isRowStillMatching)已经把这一行的
+            // 主表记录读出来了, 清空会让随后 get() 再读一次同一个主表行, 覆盖索引查询的读放大直接翻倍。
+            // 每条索引项开始校验时 getIndexKey 都会自己清 row, 所以这里不清也不会读到上一条的行。
             return searchRow != null;
         }
 
