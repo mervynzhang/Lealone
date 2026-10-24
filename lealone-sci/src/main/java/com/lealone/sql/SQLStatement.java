@@ -487,5 +487,15 @@ public interface SQLStatement extends SQLCommand {
      */
     int REPAIR_TABLE = 150;
 
+    /**
+     * The type of a CREATE PROCEDURE statement.
+     */
+    int CREATE_PROCEDURE = 151;
+
+    /**
+     * The type of a DROP PROCEDURE statement.
+     */
+    int DROP_PROCEDURE = 152;
+
     String INTERNAL_SAVEPOINT = "_INTERNAL_SAVEPOINT_";
 }

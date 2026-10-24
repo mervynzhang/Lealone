@@ -481,6 +481,22 @@ public class Schema extends DbObjectBase {
     }
 
     /**
+     * Try to find a stored procedure with this name. This method returns
+     * null if no object with this name exists.
+     *
+     * @param procedureName the object name
+     * @return the object or null
+     */
+    public SqlProcedure findProcedure(ServerSession session, String procedureName) {
+        return find(DbObjectType.PROCEDURE, session, procedureName);
+    }
+
+    public ArrayList<SqlProcedure> getAllProcedures() {
+        HashMap<String, SqlProcedure> procedures = getDbObjects(DbObjectType.PROCEDURE);
+        return new ArrayList<>(procedures.values());
+    }
+
+    /**
      * Get the user defined aggregate function if it exists, or null if not.
      *
      * @param name the name of the user defined aggregate function

@@ -94,6 +94,7 @@ import com.lealone.sql.ddl.CreateAggregate;
 import com.lealone.sql.ddl.CreateConstant;
 import com.lealone.sql.ddl.CreateDatabase;
 import com.lealone.sql.ddl.CreateFunctionAlias;
+import com.lealone.sql.ddl.CreateProcedure;
 import com.lealone.sql.ddl.CreateIndex;
 import com.lealone.sql.ddl.CreateRole;
 import com.lealone.sql.ddl.CreateSchema;
@@ -110,6 +111,7 @@ import com.lealone.sql.ddl.DropAggregate;
 import com.lealone.sql.ddl.DropConstant;
 import com.lealone.sql.ddl.DropDatabase;
 import com.lealone.sql.ddl.DropFunctionAlias;
+import com.lealone.sql.ddl.DropProcedure;
 import com.lealone.sql.ddl.DropIndex;
 import com.lealone.sql.ddl.DropRole;
 import com.lealone.sql.ddl.DropSchema;
@@ -1381,6 +1383,8 @@ public class SQLParserBase implements SQLParser {
             return parseDropDatabase();
         } else if (readIf("PLUGIN")) {
             return parseDropPlugin();
+        } else if (readIf("PROCEDURE")) {
+            return parseDropProcedure();
         }
         throw getSyntaxError();
     }
@@ -4301,6 +4305,8 @@ public class SQLParserBase implements SQLParser {
             return parseCreateView(force, orReplace);
         } else if (readIf("ALIAS")) {
             return parseCreateFunctionAlias(force);
+        } else if (readIf("PROCEDURE")) {
+            return parseCreateProcedure();
         } else if (readIf("SEQUENCE")) {
             return parseCreateSequence();
         } else if (readIf("USER")) {
@@ -5048,6 +5054,36 @@ public class SQLParserBase implements SQLParser {
         if (readIf("ADMIN")) {
             command.setAdmin(true);
         }
+        return command;
+    }
+
+    protected StatementBase parseCreateProcedure() {
+        boolean ifNotExists = readIfNotExists();
+        String procedureName = readIdentifierWithSchema();
+        CreateProcedure command = new CreateProcedure(session, getSchema());
+        command.setProcedureName(procedureName);
+        command.setIfNotExists(ifNotExists);
+        if (readIf("(")) {
+            if (!readIf(")")) {
+                do {
+                    String parameterName = readAliasIdentifier();
+                    command.addParameter(parseColumnWithType(parameterName));
+                } while (readIf(","));
+                read(")");
+            }
+        }
+        read("AS");
+        command.setBody(readString());
+        return command;
+    }
+
+    protected StatementBase parseDropProcedure() {
+        boolean ifExists = readIfExists(false);
+        String procedureName = readIdentifierWithSchema();
+        DropProcedure command = new DropProcedure(session, getSchema());
+        command.setProcedureName(procedureName);
+        ifExists = readIfExists(ifExists);
+        command.setIfExists(ifExists);
         return command;
     }
 

@@ -1912,7 +1912,11 @@ public class ErrorCode {
 
     public static final int PLUGIN_NOT_FOUND_1 = 90149;
 
-    // next are 90056, 90110, 90122, 90149
+    public static final int PROCEDURE_ALREADY_EXISTS_1 = 90150;
+
+    public static final int PROCEDURE_NOT_FOUND_1 = 90151;
+
+    // next are 90056, 90110, 90122, 90151
 
     private ErrorCode() {
         // utility class

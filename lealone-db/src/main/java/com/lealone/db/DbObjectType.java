@@ -96,9 +96,14 @@ public enum DbObjectType {
     /**
      * This object is a plugin.
      */
-    PLUGIN(16, 0, false); // create plugin语句的优先级最高，执行create database语句时可能需要依赖插件的名字
+    PLUGIN(16, 0, false), // create plugin语句的优先级最高，执行create database语句时可能需要依赖插件的名字
 
-    private static final int MAX = 17;
+    /**
+     * This object is a stored procedure.
+     */
+    PROCEDURE(17, 16);
+
+    private static final int MAX = 18;
 
     public final int value; // 值被存入SYS表中，不能随意改动
 
