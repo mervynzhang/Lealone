@@ -124,9 +124,7 @@ public class StringFunctionMatrixTest extends SqlAssertTestBase {
 
     // BUG: OCTET_LENGTH / BIT_LENGTH 按 UTF-16 code unit 计数（每个字符 2 字节 16 位），
     // 而不是按实际编码字节数。ASCII 串 'abc' 应该是 3 字节 / 24 位。
-    // 期望: OCTET_LENGTH('abc')=3, BIT_LENGTH('abc')=24（H2 返回值）；
-    // 实际: 6 / 48；'中' 期望 3/24（UTF-8），实际 2/16。
-    @Ignore("BUG: OCTET_LENGTH/BIT_LENGTH count UTF-16 code units (abc -> 6/48) instead of bytes (3/24)")
+    // OCTET_LENGTH/BIT_LENGTH按UTF-8字节计算
     @Test
     public void octetAndBitLength() {
         assertQueryEquals(3L, "SELECT OCTET_LENGTH('abc')");
@@ -136,9 +134,7 @@ public class StringFunctionMatrixTest extends SqlAssertTestBase {
     }
 
     // BUG: 没有 QUOTE_IDENT 函数（90022 FUNCTION_NOT_FOUND_1）。
-    // 期望: QUOTE_IDENT('a"b') 返回带双引号且内部引号翻倍的标识符 "a""b"（H2 返回值）；
-    // 实际: 报 90022 FUNCTION_NOT_FOUND_1，Function "QUOTE_IDENT" not found。
-    @Ignore("BUG: QUOTE_IDENT is not implemented (90022); expected \"a\"\"b\"")
+    // QUOTE_IDENT返回带双引号且内部引号翻倍的标识符
     @Test
     public void quoteIdent() {
         assertQueryEquals("\"a\"\"b\"", "SELECT QUOTE_IDENT('a\"b')");
