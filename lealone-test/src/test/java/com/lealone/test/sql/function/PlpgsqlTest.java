@@ -163,7 +163,7 @@ public class PlpgsqlTest extends SqlTestBase {
     @Test
     public void testSelectIntoStrict() throws Exception {
         executeUpdate("DROP TABLE IF EXISTS plp_strict");
-        executeUpdate("CREATE TABLE plp_strict(id INT PRIMARY KEY, v INT)");
+        executeUpdate("CREATE TABLE plp_strict(id INT, v INT)");
         executeUpdate("CREATE OR REPLACE FUNCTION plp_strict_f(p_id INT) RETURNS INT LANGUAGE plpgsql AS $$"
                 + " DECLARE v0 INT := 0;" //
                 + " BEGIN" //
@@ -172,6 +172,31 @@ public class PlpgsqlTest extends SqlTestBase {
                 + " END;" //
                 + " $$");
         assertSqlState("P0002", "SELECT plp_strict_f(1)");
+
+        // 多行时抛too_many_rows
+        executeUpdate("INSERT INTO plp_strict VALUES(2, 1), (2, 2)");
+        assertSqlState("P0003", "SELECT plp_strict_f(2)");
+    }
+
+    // LANGUAGE子句可以写在AS后面，RAISE EXCEPTION SQLSTATE的旧写法
+    @Test
+    public void testLanguageAfterBodyAndRaiseSqlState() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_lang(a INT) RETURNS INT AS $$" //
+                + " BEGIN RETURN a + 1; END;" //
+                + " $$ LANGUAGE plpgsql");
+        executeQuery("SELECT plp_lang(1)");
+        assertEquals(2, getIntValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_raise_state(a INT) RETURNS INT LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   RAISE EXCEPTION SQLSTATE '22012';" //
+                + "   RETURN a;" //
+                + " EXCEPTION WHEN SQLSTATE '22012' THEN" //
+                + "   RETURN 6;" //
+                + " END;" //
+                + " $$");
+        executeQuery("SELECT plp_raise_state(1)");
+        assertEquals(6, getIntValue(1));
     }
 
     // LOOP/WHILE/FOR/EXIT/CONTINUE
@@ -217,11 +242,11 @@ public class PlpgsqlTest extends SqlTestBase {
         executeQuery("SELECT plp_for(5)");
         assertEquals(15, getIntValue(1));
 
-        // 带标签的循环和REVERSE
+        // REVERSE从第一个表达式开始递减，所以范围写成n..1
         executeUpdate("CREATE OR REPLACE FUNCTION plp_for_rev(n INT) RETURNS INT LANGUAGE plpgsql AS $$"
                 + " DECLARE s INT := 0;" //
                 + " BEGIN" //
-                + "   FOR i IN REVERSE 1..n LOOP" //
+                + "   FOR i IN REVERSE n..1 LOOP" //
                 + "     s := s + i;" //
                 + "   END LOOP;" //
                 + "   RETURN s;" //
@@ -299,6 +324,62 @@ public class PlpgsqlTest extends SqlTestBase {
                 + " END;" //
                 + " $$");
         assertEquals("P0001", getSqlState("SELECT plp_exc_nomatch(1)"));
+    }
+
+    // 运行期的控制流/常量错误
+    @Test
+    public void testRuntimeErrors() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_exit_bad() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " BEGIN EXIT no_such_label; RETURN 1; END; $$");
+        assertSqlState("42601", "SELECT plp_exit_bad()");
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_const_into() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE c CONSTANT INT := 1; BEGIN SELECT 2 INTO c; RETURN c; END; $$");
+        assertSqlState("22005", "SELECT plp_const_into()");
+    }
+
+    // RETURNS VOID：可以省略RETURN，RETURN;合法，RETURN expr非法
+    @Test
+    public void testReturnsVoid() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_void(a INT) RETURNS VOID LANGUAGE plpgsql AS $$"
+                + " BEGIN RAISE NOTICE 'void %', a; END; $$");
+        executeQuery("SELECT plp_void(1)");
+        assertNull(rs.getObject(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_void_ret() RETURNS VOID LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN; END; $$");
+        executeQuery("SELECT plp_void_ret()");
+        assertNull(rs.getObject(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_void_bad() RETURNS VOID LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN 1; END; $$");
+        assertSqlState("2F005", "SELECT plp_void_bad()");
+    }
+
+    // Lealone引擎的SQLSTATE要能映射到PostgreSQL条件名
+    @Test
+    public void testExceptionConditionAliases() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_alias_table(a INT) RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE x INT := 0;" //
+                + " BEGIN" //
+                + "   SELECT v INTO x FROM plp_not_exist_table;" //
+                + "   RETURN x;" //
+                + " EXCEPTION WHEN undefined_table THEN" //
+                + "   RETURN 1;" //
+                + " END;" //
+                + " $$");
+        executeQuery("SELECT plp_alias_table(1)");
+        assertEquals(1, getIntValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_alias_cast(a INT) RETURNS INT LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   RETURN 'abc'::INT;" //
+                + " EXCEPTION WHEN invalid_text_representation THEN" //
+                + "   RETURN 2;" //
+                + " END;" //
+                + " $$");
+        executeQuery("SELECT plp_alias_cast(1)");
+        assertEquals(2, getIntValue(1));
     }
 
     // PERFORM丢弃查询结果
