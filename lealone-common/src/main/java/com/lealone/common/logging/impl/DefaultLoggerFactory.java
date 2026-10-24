@@ -46,7 +46,8 @@ public class DefaultLoggerFactory extends LoggerFactory {
         int level = TraceSystem.INFO;
         switch (MapUtils.getString(parameters, "level", "info").toLowerCase()) {
         case "info":
-        case "warm":
+        case "warn":
+        case "warning":
             level = TraceSystem.INFO;
             break;
         case "error":
@@ -56,8 +57,11 @@ public class DefaultLoggerFactory extends LoggerFactory {
         case "trace":
             level = TraceSystem.DEBUG;
             break;
-        default:
+        case "off":
             level = TraceSystem.OFF;
+            break;
+        default:
+            level = TraceSystem.INFO;
             break;
         }
         return level;
