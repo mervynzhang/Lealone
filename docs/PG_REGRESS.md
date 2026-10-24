@@ -68,13 +68,13 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 19, skip 21)  脚本语句  75(通过  75, 失败 0)  被skip用例占  70 条
+[pgregress]   create_function_sql.sql  用例 40(执行 24, skip 16)  脚本语句  96(通过  96, 失败 0)  被skip用例占  54 条
 [pgregress]   create_procedure.sql     用例 24(执行 14, skip 10)  脚本语句  61(通过  61, 失败 0)  被skip用例占  37 条
 [pgregress]   plpgsql.sql              用例 23(执行 18, skip  5)  脚本语句  56(通过  56, 失败 0)  被skip用例占  12 条
 [pgregress]   rangefuncs.sql           用例 10(执行  9, skip  1)  脚本语句  35(通过  35, 失败 0)  被skip用例占   5 条
-[pgregress] 合计: 用例 97 (执行 60, skip 37), 脚本语句 227 (通过 227, 失败 0), 耗时 521ms
-[pgregress] skip 清单: 37 条用例, 点名跳过的 PG 语句 204 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 129 条在 skip 清单里
+[pgregress] 合计: 用例 97 (执行 65, skip 32), 脚本语句 248 (通过 248, 失败 0), 耗时 545ms
+[pgregress] skip 清单: 32 条用例, 点名跳过的 PG 语句 179 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 104 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  55 条在 skip 清单里
 [pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 15 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 5 条)
@@ -88,20 +88,16 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 37 条 / 204 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 32 条 / 179 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
 | Lealone 无 SET search_path, CREATE USER 必须带 PASSWORD | 1 | 4 | function_sql.setup |
 | 缺少 $1 位置参数与 ARRAY[...] 字面量(数组参数本身已支持) | 1 | 1 | function_sql.a2_array_arg |
-| Lealone 没有 pg_proc/regproc 系统目录 | 1 | 4 | function_sql.pg_proc |
-| Lealone 没有 pg_proc.provolatile 与 ALTER FUNCTION | 1 | 4 | function_sql.volatility_catalog |
-| Lealone 不支持 SECURITY DEFINER/INVOKER | 1 | 8 | function_sql.security_definer |
-| Lealone 不支持 LEAKPROOF 属性 | 1 | 16 | function_sql.leakproof |
-| Lealone 没有 pg_proc.proisstrict 与 ALTER FUNCTION(CALLED ON NULL INPUT 已支持) | 1 | 5 | function_sql.strict_catalog |
-| Lealone 没有 pg_get_functiondef() | 2 | 17 | function_sql.pg_get_functiondef, function_sql.pg_get_functiondef_sqlbody |
+| LEAKPROOF 属性和pg_proc.proleakproof已支持, 但缺少函数级权限模型(SET SESSION AUTHORIZATION/OWNER权限)和建函数的LEAKPROOF权限校验 | 1 | 16 | function_sql.leakproof |
 | Lealone 无 SQL 标准函数体(RETURN 表达式) | 2 | 12 | function_sql.sql_body_return, function_sql.sql_body_view |
 | Lealone 无 anyarray/anyelement 多态类型 | 3 | 15 | function_sql.sql_body_polymorphic, function_sql.anyarray_setof, procedure.polymorphic |
+| Lealone 无 SQL 标准函数体(RETURN表达式), pg_get_functiondef 本身已支持 | 1 | 13 | function_sql.pg_get_functiondef_sqlbody |
 | Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD | 1 | 3 | function_sql.sql_body_tempseq |
 | Lealone 没有 information_schema.routines 等视图 | 1 | 19 | function_sql.information_schema |
 | Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转 | 1 | 3 | function_sql.or_replace_window |
@@ -123,6 +119,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | 没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持) | 1 | 5 | rangefuncs.with_ordinality_unnest |
 | 这段用 plpgsql 的 FOR ... IN 查询(50100 PL/pgSQL: FOR ... IN query)遍历表, 该语法还不支持; RETURNS SETOF <表行类型> 本身已可用 | 1 | 4 | plpgsql.setof_composite_record |
 | 不支持命名实参(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150) | 1 | 8 | procedure.out_params_named |
+
 
 ## 六、这一轮刷新：解锁了什么
 
@@ -189,13 +186,32 @@ reset session authorization;      -- 42001 Syntax error
 ```
 
 `GRANT ... ON PROCEDURE`/`REVOKE ... ON PROCEDURE` 也还是表级授权（`42102 Table "PROCEDURE" not found`）。
-挡住 `function_sql.security_definer`、`function_sql.leakproof`、`procedure.privileges`。
+`function_sql.security_definer` 已经用 `INFORMATION_SCHEMA.PG_PROC.prosecdef` + `ALTER FUNCTION ... SECURITY`
+解锁（用例里不需要 SET SESSION AUTHORIZATION）；还挡住 `function_sql.leakproof`、`procedure.privileges`。
 
 ### N6. 整段执行 `leakproof`/`privileges` 用例时 suite 会挂住
 
 把 `function_sql.leakproof`（PG 88-119）或 `procedure.privileges`（PG 258-267）放进执行集跑，
 整个测试 60 秒超时（逐条拆开单独执行都正常返回错误），疑似 `OWNER TO`/`GRANT`/`SET SESSION AUTHORIZATION`
 组合下的会话状态问题；这两段继续在 skip 清单里，等定位后再开。
+
+### 本轮解锁：目录查询的 5 个用例
+
+本分支新增只读目录 `INFORMATION_SCHEMA.PG_PROC`（proname/prorettype/proargtypes/provolatile/
+proisstrict/prosecdef/proleakproof/prosrc）和内置函数 `pg_get_functiondef(函数名)`，
+把 PG 的 `pg_proc` 查询改写成等价的 Lealone 目录查询（去掉 `regproc`/`oid` 过滤），解锁：
+
+| 用例 | 之前 | 现在 | 靠什么能力 |
+| --- | --- | --- | --- |
+| `function_sql.pg_proc` | skip（没有 pg_proc/regproc） | 1 条查询 | `INFORMATION_SCHEMA.PG_PROC` 的参数/返回类型列 |
+| `function_sql.volatility_catalog` | skip（没有 provolatile/ALTER） | 2 查询 + 2 ALTER | PG_PROC.provolatile + `ALTER FUNCTION` |
+| `function_sql.security_definer` | skip（误以为不支持 SECURITY） | 2 查询 + 3 ALTER | PG_PROC.prosecdef + `ALTER FUNCTION ... SECURITY` |
+| `function_sql.strict_catalog` | skip（没有 proisstrict/ALTER） | 2 查询 + 1 ALTER | PG_PROC.proisstrict + `ALTER FUNCTION ... STRICT` |
+| `function_sql.pg_get_functiondef` | skip（没有该函数） | 4 条查询 | 内置 `pg_get_functiondef(函数名)` 返回 `getCreateSQL()` |
+
+执行用例 60 → 65，skip 37 → 32，脚本语句 227 → 248（+21），被 skip 用例占的 PG 语句 204 → 179。
+`information_schema`（依赖 DEFAULT 参数/OUT/依赖视图）和 `pg_get_functiondef_sqlbody`（依赖 RETURN 函数体）
+仍然 skip，原因见清单。
 
 ### 仍然不支持的（清单里都有用例）
 
@@ -212,9 +228,9 @@ reset session authorization;      -- 42001 Syntax error
 * **游标/触发器**：`plpgsql.cursor`、`plpgsql.trigger_*`。
 * **`unnest()`/`generate_series()`/`ARRAY[...]` 字面量/`$1` 位置参数**：`rangefuncs.with_ordinality_unnest`、
   `function_sql.a2_array_arg`、`function_sql.bad_body_positional`。
-* **目录与 DDL 属性**：`pg_proc`（2）、`pg_get_functiondef()`（2）、`information_schema.routines`（1）、
-  `ALTER FUNCTION` 的属性组合 + `SET search_path`（`volatility_catalog`、`strict_catalog`、`or_replace_window`）、
-  `CREATE OPERATOR CLASS`（1）。
+* **目录与 DDL 属性**：`information_schema.routines` 等视图（1）、`pg_get_functiondef_sqlbody`（依赖 SQL 标准函数体）、
+  `ALTER FUNCTION` 的属性组合 + `SET search_path`（`or_replace_window`）、`CREATE OPERATOR CLASS`（1）。
+  `information_schema.pg_proc` 和 `pg_get_functiondef()` 本分支已经补上。
 * **CALL 语义与 psql 元命令**：`CALL` 不区分函数与过程（`call_random`、`call_function`）、
   `\df`/`psql` 元命令（`psql_meta`、`ambiguous_drop`）、`ALTER ROUTINE`/`DROP ROUTINE`（`routine_syntax`）。
 
@@ -234,9 +250,9 @@ reset session authorization;      -- 42001 Syntax error
 3. **`rangefuncs.sql`（827 行 / 428 条语句）也只抽样**：转过来 10 个用例（执行 9 个），
    依赖 `WITH ORDINALITY`、`unnest()`、`generate_series()`、`SETOF <表行类型>` 的段落 skip 或没抽。
 4. **`portals.sql`**：按要求没纳入（游标/portal 语义，不是函数/过程定义）。
-5. 没转换的 PG 断言：`EXPLAIN` 计划、`\df` 等 psql 元命令、`pg_proc` / `information_schema` 目录查询、
+5. 没转换的 PG 断言：`EXPLAIN` 计划、`\df` 等 psql 元命令、`information_schema.routines` 等目录视图、
    `GRANT/REVOKE/SET ROLE` 权限、`ALTER FUNCTION/PROCEDURE/ROUTINE`——都随用例一起 skip，
-   原因写在清单里，没有偷偷删。
+   原因写在清单里，没有偷偷删。`pg_proc` 查询已经改成等价的 `INFORMATION_SCHEMA.PG_PROC` 查询并执行。
 
 ## 九、转换/适配规则
 

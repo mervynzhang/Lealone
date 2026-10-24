@@ -23,15 +23,10 @@
 
 function_sql.setup	create_function_sql.sql:9-14	4	Lealone 无 SET search_path, CREATE USER 必须带 PASSWORD
 function_sql.a2_array_arg	create_function_sql.sql:25-26	1	缺少 $1 位置参数与 ARRAY[...] 字面量(数组参数本身已支持)
-function_sql.pg_proc	create_function_sql.sql:29-36	4	Lealone 没有 pg_proc/regproc 系统目录
-function_sql.volatility_catalog	create_function_sql.sql:49-61	4	Lealone 没有 pg_proc.provolatile 与 ALTER FUNCTION
-function_sql.security_definer	create_function_sql.sql:66-83	8	Lealone 不支持 SECURITY DEFINER/INVOKER
-function_sql.leakproof	create_function_sql.sql:88-119	16	Lealone 不支持 LEAKPROOF 属性
-function_sql.strict_catalog	create_function_sql.sql:132-145	5	Lealone 没有 pg_proc.proisstrict 与 ALTER FUNCTION(CALLED ON NULL INPUT 已支持)
-function_sql.pg_get_functiondef	create_function_sql.sql:150-153	4	Lealone 没有 pg_get_functiondef()
+function_sql.leakproof	create_function_sql.sql:88-119	16	LEAKPROOF 属性和pg_proc.proleakproof已支持, 但缺少函数级权限模型(SET SESSION AUTHORIZATION/OWNER权限)和建函数的LEAKPROOF权限校验
 function_sql.sql_body_return	create_function_sql.sql:159-170	6	Lealone 无 SQL 标准函数体(RETURN 表达式)
 function_sql.sql_body_polymorphic	create_function_sql.sql:197-205	2	Lealone 无 anyarray/anyelement 多态类型
-function_sql.pg_get_functiondef_sqlbody	create_function_sql.sql:214-228	13	Lealone 没有 pg_get_functiondef()
+function_sql.pg_get_functiondef_sqlbody	create_function_sql.sql:214-228	13	Lealone 无 SQL 标准函数体(RETURN表达式), pg_get_functiondef 本身已支持
 function_sql.sql_body_view	create_function_sql.sql:232-242	6	Lealone 无 SQL 标准函数体(RETURN 表达式)
 function_sql.sql_body_tempseq	create_function_sql.sql:244-253	3	Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD
 function_sql.information_schema	create_function_sql.sql:256-323	19	Lealone 没有 information_schema.routines 等视图
