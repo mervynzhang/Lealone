@@ -186,13 +186,15 @@ public final class PlpgSqlAst {
         }
     }
 
-    /** FOR i IN start..end [BY step] 循环，只支持整数范围 */
+    /** FOR循环：整数范围(FOR i IN start..end)或者查询结果集(FOR rec IN <query>) */
     public static class For extends Node {
 
         public String label;
         public String variable;
         public boolean variableQuoted;
         public boolean reverse;
+        // 查询循环的SQL，整数范围循环时为null
+        public String query;
         public String startExpression;
         public String endExpression;
         // BY子句的步长表达式，没有BY子句时为null

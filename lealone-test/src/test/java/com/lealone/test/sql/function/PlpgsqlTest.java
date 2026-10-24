@@ -258,6 +258,104 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals(15, getIntValue(1));
     }
 
+    // FOR rec IN <query> LOOP：查询结果逐行赋给record/row变量
+    @Test
+    public void testForInQuery() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_q_t");
+        executeUpdate("CREATE TABLE plp_q_t(id INT PRIMARY KEY, name VARCHAR(20))");
+        executeUpdate("INSERT INTO plp_q_t VALUES(1, 'a')");
+        executeUpdate("INSERT INTO plp_q_t VALUES(2, 'b')");
+        executeUpdate("INSERT INTO plp_q_t VALUES(3, 'c')");
+
+        // %ROWTYPE变量做循环目标
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_for_q_rowtype() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_q_t%ROWTYPE; s INT := 0;" //
+                + " BEGIN" //
+                + "   FOR r IN SELECT * FROM plp_q_t ORDER BY id LOOP" //
+                + "     s := s + r.id;" //
+                + "   END LOOP;" //
+                + "   RETURN s;" //
+                + " END; $$");
+        executeQuery("SELECT plp_for_q_rowtype()");
+        assertEquals(6, getIntValue(1));
+
+        // plain record做循环目标，只取部分列时按查询的列绑定行结构
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_for_q_record() RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r RECORD; s VARCHAR(100) := '';" //
+                + " BEGIN" //
+                + "   FOR r IN SELECT id, name FROM plp_q_t ORDER BY id LOOP" //
+                + "     s := s || r.name;" //
+                + "   END LOOP;" //
+                + "   RETURN s;" //
+                + " END; $$");
+        executeQuery("SELECT plp_for_q_record()");
+        assertEquals("abc", getStringValue(1));
+
+        // 没有声明的目标按PostgreSQL的规则隐式声明成record变量
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_for_q_implicit() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE s INT := 0;" //
+                + " BEGIN" //
+                + "   FOR r IN SELECT id FROM plp_q_t ORDER BY id LOOP" //
+                + "     s := s + r.id;" //
+                + "   END LOOP;" //
+                + "   RETURN s;" //
+                + " END; $$");
+        executeQuery("SELECT plp_for_q_implicit()");
+        assertEquals(6, getIntValue(1));
+
+        // EXIT和带标签的CONTINUE在查询循环里同样生效
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_for_q_exit() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r RECORD; s INT := 0;" //
+                + " BEGIN" //
+                + "   <<outer>>" //
+                + "   FOR r IN SELECT id FROM plp_q_t ORDER BY id LOOP" //
+                + "     CONTINUE outer WHEN r.id = 2;" //
+                + "     EXIT WHEN r.id > 2;" //
+                + "     s := s + r.id;" //
+                + "   END LOOP outer;" //
+                + "   RETURN s;" //
+                + " END; $$");
+        executeQuery("SELECT plp_for_q_exit()");
+        assertEquals(1, getIntValue(1));
+
+        // 循环结束时按是否迭代过设置FOUND
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_for_q_found(p INT) RETURNS BOOLEAN LANGUAGE plpgsql AS $$"
+                + " DECLARE r RECORD;" //
+                + " BEGIN" //
+                + "   FOR r IN SELECT id FROM plp_q_t WHERE id > p LOOP" //
+                + "     RETURN TRUE;" //
+                + "   END LOOP;" //
+                + "   RETURN FOUND;" //
+                + " END; $$");
+        executeQuery("SELECT plp_for_q_found(0)");
+        assertTrue(getBooleanValue(1));
+        executeQuery("SELECT plp_for_q_found(99)");
+        assertFalse(getBooleanValue(1));
+
+        // 查询循环 + RETURN NEXT 返回SETOF <表行类型>
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_for_q_setof() RETURNS SETOF plp_q_t LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_q_t%ROWTYPE;" //
+                + " BEGIN" //
+                + "   FOR r IN SELECT * FROM plp_q_t ORDER BY id LOOP" //
+                + "     RETURN NEXT r;" //
+                + "   END LOOP;" //
+                + "   RETURN;" //
+                + " END; $$");
+        executeQuery("SELECT COUNT(*) FROM plp_for_q_setof()");
+        assertEquals(3, getIntValue(1));
+
+        // 目标变量不是record/row时报42804
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_for_q_badtarget() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE i INT := 0;" //
+                + " BEGIN" //
+                + "   FOR i IN SELECT id FROM plp_q_t LOOP" //
+                + "     RETURN i;" //
+                + "   END LOOP;" //
+                + "   RETURN 0;" //
+                + " END; $$");
+        assertSqlState("42804", "SELECT plp_for_q_badtarget()");
+    }
+
     // RAISE NOTICE继续执行；RAISE EXCEPTION中断并带SQLSTATE
     @Test
     public void testRaise() throws Exception {
