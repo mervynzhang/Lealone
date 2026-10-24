@@ -604,12 +604,12 @@ public class PlpgsqlTest extends SqlTestBase {
         executeQuery("SELECT plp_rec_rebind()");
         assertEquals(42, getIntValue(1));
 
-        // %ROWTYPE数组暂不支持，但要报干净的不支持错误
+        // %ROWTYPE数组支持按下标写字段和读字段
         executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_array() RETURNS INT LANGUAGE plpgsql AS $$"
                 + " DECLARE r plp_rec_t%ROWTYPE[];" //
-                + " BEGIN RETURN 1; END; $$");
-        executeQueryThanAssertErrorCode("SELECT plp_rec_array()",
-                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+                + " BEGIN r[1].id := 7; RETURN r[1].id; END; $$");
+        executeQuery("SELECT plp_rec_array()");
+        assertEquals(7, getIntValue(1));
 
         // record当标量用要给出明确的不支持错误，不能漏内部CAST语法错
         executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_scalar(p INT) RETURNS INT LANGUAGE plpgsql AS $$"
@@ -936,12 +936,17 @@ public class PlpgsqlTest extends SqlTestBase {
         assertTrue(getBooleanValue(1));
     }
 
-    // 自定义复合类型没有用户类型体系，明确报不支持
+    // 自定义复合类型可以创建、使用和删除
     @Test
-    public void testCreateCompositeTypeUnsupported() throws Exception {
-        executeUpdateThanAssertErrorCode(
-                "CREATE TYPE plp_ct AS (a INT, b VARCHAR)",
-                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+    public void testCreateCompositeType() throws Exception {
+        executeUpdate("DROP TYPE IF EXISTS plp_ct");
+        executeUpdate("CREATE TYPE plp_ct AS (a INT, b VARCHAR)");
+        executeUpdate("CREATE FUNCTION plp_ct_f(i INT) RETURNS plp_ct LANGUAGE plpgsql "
+                + "AS $$ BEGIN RETURN ROW(i, 'x')::plp_ct; END; $$");
+        executeQuery("SELECT (plp_ct_f(1)).b");
+        assertEquals("x", getStringValue(1));
+        executeUpdate("DROP FUNCTION plp_ct_f");
+        executeUpdate("DROP TYPE plp_ct");
     }
 
     // RETURNS RECORD由OUT参数定义返回行，支持SELECT *和复合字段访问
@@ -1047,19 +1052,21 @@ public class PlpgsqlTest extends SqlTestBase {
                 queryRowList("SELECT id, name FROM plp_next_row(2)").toString());
     }
 
-    // %ROWTYPE数组要给出干净的不支持错误（两种写法）
+    // %ROWTYPE数组支持声明、下标读写和字段访问
     @Test
-    public void testRowTypeArrayUnsupported() throws Exception {
+    public void testRowTypeArray() throws Exception {
         executeUpdate("DROP TABLE IF EXISTS plp_arr_t");
-        executeUpdate("CREATE TABLE plp_arr_t(id INT)");
+        executeUpdate("CREATE TABLE plp_arr_t(id INT, name VARCHAR(20))");
         executeUpdate("CREATE OR REPLACE FUNCTION plp_arr1() RETURNS INT LANGUAGE plpgsql AS $$"
-                + " DECLARE arr plp_arr_t%ROWTYPE[]; BEGIN RETURN 1; END; $$");
-        executeQueryThanAssertErrorCode("SELECT plp_arr1()",
-                ErrorCode.FEATURE_NOT_SUPPORTED_1);
-        executeUpdate("CREATE OR REPLACE FUNCTION plp_arr2() RETURNS INT LANGUAGE plpgsql AS $$"
-                + " DECLARE arr plp_arr_t[]%ROWTYPE; BEGIN RETURN 1; END; $$");
-        executeQueryThanAssertErrorCode("SELECT plp_arr2()",
-                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+                + " DECLARE arr plp_arr_t%ROWTYPE[];" //
+                + " BEGIN arr[1].id := 11; RETURN arr[1].id; END; $$");
+        executeQuery("SELECT plp_arr1()");
+        assertEquals(11, getIntValue(1));
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_arr2() RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE arr plp_arr_t[]%ROWTYPE;" //
+                + " BEGIN arr[1] := ROW(2, 'b'); RETURN arr[1].name; END; $$");
+        executeQuery("SELECT plp_arr2()");
+        assertEquals("b", getStringValue(1));
     }
 
     private ArrayList<Integer> queryIntList(String sql) {
