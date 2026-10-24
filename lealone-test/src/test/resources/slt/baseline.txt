@@ -51,3 +51,15 @@ file	random/expr/slt_good_109.test	3	3
 fail	random/expr/slt_good_109.test	0dd9c4df73ad38dc	value	45438	SELECT ALL 14 / - CASE - 60 WHEN + 58 THEN - AVG ( DISTINCT + + 51 ) ELSE 29 END + + 23 AS col1
 fail	random/expr/slt_good_109.test	a0c236a4dd8e35c8	value	30436	SELECT - - 69 / - COALESCE ( - 14, + 45 * 38 * ( + 88 ) + + - 23 * + + COALESCE ( - 98, 43 * 96, + 41 * AVG ( ALL - 88 /...
 fail	random/expr/slt_good_109.test	a6edf75859d9bc10	value	87914	SELECT - MAX ( ALL + 37 ) + + 27 * COUNT ( * ) / + COALESCE ( + 26, - AVG ( ALL + - 51 ) ) AS col1
+file	random/select/slt_good_0.test	0	0
+file	random/select/slt_good_100.test	0	0
+file	random/select/slt_good_101.test	0	0
+file	random/select/slt_good_102.test	0	0
+file	random/select/slt_good_103.test	0	0
+file	random/select/slt_good_104.test	0	0
+file	random/select/slt_good_105.test	0	0
+file	random/select/slt_good_106.test	0	0
+file	random/select/slt_good_107.test	0	0
+file	random/select/slt_good_108.test	0	0
+file	random/select/slt_good_109.test	0	0
+file	random/select/slt_good_10.test	0	0
