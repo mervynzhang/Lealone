@@ -24,8 +24,11 @@ public class ConcurrentTransactionManager extends TransactionManager {
 
     @Override
     public AOTransaction removeTransaction(long tid, int bitIndex) {
-        currentTransactionCount.decrementAndGet();
         AOTransaction t = currentTransactions.remove(tid);
+        // 并发提交时可能已经被其他线程移除，不能重复递减，否则计数可能变成负数
+        if (t == null)
+            return null;
+        currentTransactionCount.decrementAndGet();
         super.removeTransaction(t);
         return t;
     }
