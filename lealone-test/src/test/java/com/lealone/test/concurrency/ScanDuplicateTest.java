@@ -16,7 +16,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.test.TestBase;
@@ -32,11 +31,8 @@ import com.lealone.test.TestBase;
  * - 语句重试时 TableIterator 没清旧行，同一行在一次语句执行里被处理两次，进而在二级索引上
  *   留下陈旧/孤儿索引项；同时二级索引游标改为"主表当前值 == 索引项保存值"才返回。
  *
- * 现状(实测)：所有事务提交完再扫描时不再重复，finalDup = 0/20 次运行；但**并发扫描期间**
- * (有未提交更新在飞)仍偶发同一语句返回重复行(concurrentDuplicates 约 2~40/次运行，单次百万级扫描)。
- * 残余原因判断为：同一语句内"读索引项"与"读主表行"可能落在不同版本上，需要语句级快照
- * (或索引项校验也用同一快照)才能根治，属事务层/可见性层问题。
- * 所以本用例先保持 @Ignore，等事务层结论落地后再去掉 @Ignore 作为端到端护栏。
+ * 现状(实测)：二级索引扫描 + 索引列并发 UPDATE 的重复已由 QFlat 按行主键去重修复。
+ * 本用例覆盖的主键范围扫描在并发 checkout 下仍偶发重复(约 1/万次)，成因不同(重扫时结果未清空)。
  */
 public class ScanDuplicateTest extends TestBase {
 
@@ -46,7 +42,6 @@ public class ScanDuplicateTest extends TestBase {
     // 并发采样允许的最大重复行数，用于容忍已知的1行残留竞态窗
     private static final long MAX_DELTA = 3;
 
-    @Ignore("残余：并发扫描期间同一语句内索引项与主表行读取跨版本，需要语句级快照(事务层)，修好后去掉@Ignore")
     @Test(timeout = 120000)
     public void concurrentScanMustNotReturnDuplicateRows() throws Exception {
         String db = "scandup_" + System.currentTimeMillis() + "_" + RUN_ID.incrementAndGet();
