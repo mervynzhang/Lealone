@@ -6,8 +6,10 @@
 package com.lealone.db.value;
 
 import java.sql.PreparedStatement;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
@@ -120,6 +122,25 @@ public class ValueMap extends Value {
         case Value.DOUBLE:
         case Value.DECIMAL:
             return v.getString();
+        case Value.MAP:
+            // 嵌套的Map要按JSON对象输出, 不能整个压成一个带引号的字符串
+            return ((ValueMap) v).getJson();
+        case Value.ARRAY: {
+            Value[] list = ((ValueArray) v).getList();
+            StatementBuilder buff = new StatementBuilder("[");
+            for (Value e : list)
+                buff.appendExceptFirst(",").append(jsonValue(e));
+            return buff.append(']').toString();
+        }
+        case Value.LIST:
+        case Value.SET: {
+            List<Value> list = v.getType() == Value.LIST ? ((ValueList) v).getList()
+                    : new ArrayList<>(((ValueSet) v).getSet());
+            StatementBuilder buff = new StatementBuilder("[");
+            for (Value e : list)
+                buff.appendExceptFirst(",").append(jsonValue(e));
+            return buff.append(']').toString();
+        }
         default:
             return quote(v.getString());
         }
@@ -145,8 +166,19 @@ public class ValueMap extends Value {
             case '\t':
                 b.append("\\t");
                 break;
+            case '\b':
+                b.append("\\b");
+                break;
+            case '\f':
+                b.append("\\f");
+                break;
             default:
-                b.append(c);
+                // 其它控制字符必须转成JSON的Unicode转义(反斜杠 + u + 四位十六进制), 否则不是合法JSON。
+                // 注意不能在这里直接写出该序列: Java 词法分析阶段就会处理它, 只能分片拼出来
+                if (c < 0x20)
+                    b.append('\\').append('u').append(String.format("%04x", (int) c));
+                else
+                    b.append(c);
             }
         }
         return b.append('"').toString();
