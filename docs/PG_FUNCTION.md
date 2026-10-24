@@ -81,10 +81,15 @@ SELECT var_count(1, 2, 3);  -- 3
 1. **函数体是单条查询**：`SELECT` / `VALUES` / `TABLE` / `WITH ... SELECT` / `(SELECT ...)`。
    创建时就校验第一条 token 是上面这些关键字，并且函数体里出现 `;` 或 `?` 会直接拒绝
    （防止一次执行多条语句、以及用户写的 `?` 和参数名替换出来的 `?` 混在一起）。
-   函数体的 SQL 语法正确性不做创建时校验，调用时才由嵌套连接解析（和 `CREATE ALIAS` 一样是延迟校验）。
+   建函数时还会在一个嵌套 session 里 prepare 一次函数体（**不执行**）：语法错误、列/表不存在、
+   常量返回值类型不匹配都在 `CREATE` 时报出；只有 setof/table/多个 OUT 参数的结果列形状留到调用时校验。
+   数据库启动回放 `sys(meta)` 时会跳过这个校验（此时函数体引用的表可能还没建出来），
+   等价于 PG 的 `check_function_bodies=off`。
 2. **标量函数**：取结果集**第一行第一列**作为返回值；结果集没有行时返回 `NULL`。
 3. **`RETURNS SETOF type`**：函数返回多行，每行只有一列，值的类型是声明的 `type`。
    列名和 PostgreSQL 一样是**函数名**（未加引号的标识符在 Lealone 里默认转成大写）。
+   当 `type` 是 `VOID` 时结果列类型是 `NULL`，函数体返回多少列都不关心，每一行都是一个空值
+   （PG 官方回归里 setof void 是 0 行，本分支按“每行空值”的约定实现，见 `PG_REGRESS.md` N1）。
 4. **`RETURNS TABLE(c1 t1, c2 t2, ...)`**：函数返回多行多列，结果列名/类型就是声明的那些。
    至少声明一列，列名不能重复（重名报 `SYNTAX_ERROR_1`）。
 5. **表函数调用**：setof 函数可以出现在 `FROM` 里，调用形式和表一样，可以带参数、别名、
@@ -100,7 +105,8 @@ SELECT var_count(1, 2, 3);  -- 3
 
 6. **结果校验**：函数体结果集的列数必须和声明的一致，否则报
    `COLUMN_COUNT_DOES_NOT_MATCH`。每一列按位置转换成声明的类型。
-   列数和类型的校验都发生在**调用时**，创建时不执行函数体（和标量函数一致）。
+   setof/table 的结果列数和类型转换仍发生在**调用时**，创建时不执行函数体；
+   标量返回值的列数和常量类型在创建时就校验（见第 1 条）。
 7. **select 列表里不展开**：PostgreSQL 里 `SELECT f(1)` 会把 setof 函数展开成多行，
    Lealone 不支持这种展开，遇到这种写法会明确报 `FEATURE_NOT_SUPPORTED`，
    提示改用 `SELECT * FROM f(...)`，不会静默返回第一行。
@@ -108,6 +114,7 @@ SELECT var_count(1, 2, 3);  -- 3
    所以 setof 函数也可以用 `CALL` 调用（PostgreSQL 的 `CALL` 只用于存储过程，这是 Lealone 的扩展）。
 9. **参数按名字引用**：创建时用 Lealone 自己的 tokenizer 对 body 切词，把与参数名匹配的**标识符**
    token 换成 `?`，并按出现顺序记录参数下标，运行时逐个绑定。同一个参数出现多次就绑多次（每次调用只求值一次实参）。
+   函数体是 `WITH ... SELECT` 时，CTE 查询里的参数也能正确绑定（多个 CTE 共用参数时按全局编号传值）。
    - 字符串字面量、美元引用字符串、注释都被 tokenizer 当成单个 token，里面的内容不会被替换。
    - 没加双引号的参数名大小写不敏感；加了双引号按 token 原文精确匹配。
    - 形如 `t.a` 的限定名里的标识符不会被当成参数引用。
@@ -259,7 +266,8 @@ PostgreSQL 允许 `f(int)` 与 `f(varchar)` 并存，Lealone 目前做不到。�
 
 ## 六、已知限制 / 额外发现但没修的问题
 
-1. 函数体的 SQL 语法在创建时不校验，`AS $$ SELECT FROM $$` 也能建成功，调用时才报错。
+1. 函数体的 SQL 语法/列名/常量返回类型现在建函数时就校验（数据库启动回放时跳过），
+   但 setof/table 的结果列形状仍是调用时校验；函数体里也不能写 `;` 和 `?`。
 2. 参数名与列名同名时参数优先（见上文）。
 3. `TABLE x` 作为函数体只支持裸表名：Lealone 的 `TABLE x` 语句本身不支持 `WHERE`（`TABLE t1 WHERE id = 1`
    会报语法错），所以 `TABLE` 函数体只能取整表的数据。
@@ -277,8 +285,8 @@ PostgreSQL 允许 `f(int)` 与 `f(varchar)` 并存，Lealone 目前做不到。�
 10. 标量函数当表函数用（`SELECT * FROM f(1)`）现在会报 `FUNCTION_MUST_RETURN_RESULT_SET_1`；
     以前会走 `JavaFunction.getValueForColumnList` 的类型转换失败，错误码不明确。
     只有 setof 函数和“多个 OUT/INOUT 参数”的函数返回类型才是 `Value.RESULT_SET`，可以出现在 FROM 里。
-11. 单个 OUT/INOUT 参数时只取函数体返回的第一列，函数体返回的列数和 OUT 参数个数不一致时
-    PostgreSQL 会报错，Lealone 这里静默忽略多余的列（标量函数本来就是这个语义）。
+11. 单个 OUT/INOUT 参数等价于标量返回，函数体必须只返回一列：函数体返回多列时建函数就报 22018
+    （调用路径也不会再静默取第一列）。
 12. 多个 OUT 参数时函数返回 `ValueResultSet`，所以 `SELECT f(1)` 这种“把整行当一个值”的写法不可用，
     必须写成 `SELECT * FROM f(1)`；函数体返回 0 行时得到 0 行结果（PostgreSQL 这里返回一行 NULL 记录）。
 13. `VARIADIC` 调用时传单个 NULL 会被当成“一个 NULL 元素”，PostgreSQL 会把它当成 NULL 数组。

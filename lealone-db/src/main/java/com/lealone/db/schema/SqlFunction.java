@@ -560,6 +560,16 @@ public class SqlFunction extends FunctionAlias {
                     if (returnType == Value.RESULT_SET) {
                         return createRecord(session, rs);
                     }
+                    // VOID不关心函数体返回什么
+                    if (returnType != Value.NULL) {
+                        int columnCount = rs.getMetaData().getColumnCount();
+                        if (columnCount != 1) {
+                            // 不能静默地只取第一列，PostgreSQL在建函数时就会报类型不匹配
+                            throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1,
+                                    "function " + getName() + " must return one column, but returns "
+                                            + columnCount);
+                        }
+                    }
                     if (!rs.next()) {
                         return ValueNull.INSTANCE;
                     }
@@ -603,11 +613,17 @@ public class SqlFunction extends FunctionAlias {
      */
     private Value readSetResult(ServerSession session, ResultSet rs) throws SQLException {
         SimpleResultSet simple = createSimpleResultSet();
+        // RETURNS SETOF VOID不关心函数体返回什么，每一行都是一个NULL
+        boolean voidResult = columnTypes.length == 1 && columnTypes[0] == Value.NULL;
         int columnCount = rs.getMetaData().getColumnCount();
-        if (columnCount != columnTypes.length) {
+        if (!voidResult && columnCount != columnTypes.length) {
             throw DbException.get(ErrorCode.COLUMN_COUNT_DOES_NOT_MATCH);
         }
         while (rs.next()) {
+            if (voidResult) {
+                simple.addRow(new Object[] { null });
+                continue;
+            }
             Object[] row = new Object[columnCount];
             for (int i = 0; i < columnCount; i++) {
                 Value v = DataType.convertToValue(session, rs.getObject(i + 1), columnTypes[i]);

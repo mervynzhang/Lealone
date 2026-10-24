@@ -218,6 +218,13 @@ public class ViewIndex extends IndexBase {
         }
         List<? extends CommandParameter> paramList = query.getParameters();
         if (originalParameters != null) {
+            // CTE的SQL里参数是全局编号(?N)，编译后的视图查询可能留下没被引用的占位参数，
+            // 先都设成NULL，避免执行前的参数检查因为占位参数没赋值而报错
+            for (int i = 0, size = paramList.size(); i < size; i++) {
+                CommandParameter param = paramList.get(i);
+                if (!param.isValueSet())
+                    param.setValue(ValueNull.INSTANCE, false);
+            }
             for (int i = 0, size = originalParameters.size(); i < size; i++) {
                 CommandParameter orig = originalParameters.get(i);
                 int idx = orig.getIndex();

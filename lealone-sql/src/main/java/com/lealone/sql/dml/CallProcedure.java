@@ -13,6 +13,7 @@ import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
 import com.lealone.db.value.Value;
+import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.PreparedSQLStatement;
 import com.lealone.sql.SQLStatement;
 import com.lealone.sql.executor.YieldableBase;
@@ -31,6 +32,8 @@ public class CallProcedure extends Call {
     private final SqlProcedure procedure;
     private final Expression[] args;
     private final Expression[] resultExpressions;
+    // 过程体里是否有查询语句: -1还没判断, 0没有, 1有
+    private int bodyHasQuery = -1;
 
     public CallProcedure(ServerSession session, SqlProcedure procedure, Expression[] args) {
         super(session);
@@ -63,10 +66,14 @@ public class CallProcedure extends Call {
         return true;
     }
 
-    // 存储过程按更新语句的方式执行，过程体里的查询结果集仍然可以通过executeQuery拿到
+    // 过程体里有查询语句时按查询语句执行，这样Statement.execute()也能通过getResultSet()拿到结果集；
+    // 只有更新语句的过程仍然按更新语句执行，保持原来的更新计数语义
     @Override
     public boolean isQuery() {
-        return false;
+        if (bodyHasQuery < 0) {
+            bodyHasQuery = LealoneSQLParser.hasQueryStatement(session, procedure.getBody()) ? 1 : 0;
+        }
+        return bodyHasQuery == 1;
     }
 
     @Override

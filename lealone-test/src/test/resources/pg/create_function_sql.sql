@@ -593,11 +593,11 @@ select twice_inc(11, 22) r;
 
 -- @case function_sql.bad_body_return_type
 -- @pg create_function_sql.sql:465-466
--- 缺失: Lealone 在建函数时不校验函数体, 'not an integer' 到调用时才报 22018;
---       PG 在建函数时报 42804(返回类型不匹配)
+-- 适配: PG 报 42804, Lealone 建函数时校验常量返回类型报 22018, 都是 CREATE 时拒绝;
+--       另外去掉函数体末尾的分号(Lealone 函数体不允许分号)
 create function test1 (a int) returns int language sql
-    as 'select ''not an integer'';';
--- PG 期望: CREATE 时报 42804
+    as 'select ''not an integer''';
+> exception 22018
 
 -- @case function_sql.bad_body_keyword
 -- @pg create_function_sql.sql:468-469
@@ -608,10 +608,11 @@ create function test1 (a int) returns int language sql
 
 -- @case function_sql.bad_body_columns
 -- @pg create_function_sql.sql:471-472
--- 缺陷: PG 报 42804(函数体返回多列), Lealone 建函数成功并静默取第一列
+-- 适配: PG 报 42804, Lealone 建函数时校验结果列数报 22018, 都是 CREATE 时拒绝;
+--       另外去掉函数体末尾的分号(Lealone 函数体不允许分号)
 create function test1 (a int) returns int language sql
-    as 'select 1, 2, 3;';
--- PG 期望: CREATE 时报 42804
+    as 'select 1, 2, 3';
+> exception 22018
 
 -- @case function_sql.bad_body_positional
 -- @pg create_function_sql.sql:474-475

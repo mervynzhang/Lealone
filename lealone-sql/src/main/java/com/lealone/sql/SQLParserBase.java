@@ -27,6 +27,7 @@ import com.lealone.db.DbSettings;
 import com.lealone.db.LealoneDatabase;
 import com.lealone.db.Mode;
 import com.lealone.db.Procedure;
+import com.lealone.db.command.CommandParameter;
 import com.lealone.db.RunMode;
 import com.lealone.db.SysProperties;
 import com.lealone.db.api.ErrorCode;
@@ -5227,9 +5228,16 @@ public class SQLParserBase implements SQLParser {
 
         if (readIf("RETURNS")) {
             if (readIf("SETOF")) {
-                Column returnColumn = parseColumnWithType(null);
-                command.setSetofReturnType(returnColumn.getOriginalSQL(), returnColumn.getType(),
-                        returnColumn.getPrecision(), returnColumn.getScale());
+                if (readIf("VOID")) {
+                    // VOID不是普通数据类型，setof void的每一行都是NULL
+                    DataType dataType = DataType.getDataType(Value.NULL);
+                    command.setSetofReturnType("VOID", Value.NULL, dataType.defaultPrecision,
+                            dataType.defaultScale);
+                } else {
+                    Column returnColumn = parseColumnWithType(null);
+                    command.setSetofReturnType(returnColumn.getOriginalSQL(), returnColumn.getType(),
+                            returnColumn.getPrecision(), returnColumn.getScale());
+                }
             } else if (readIf("TABLE")) {
                 read("(");
                 ArrayList<String> columnNames = Utils.newSmallArrayList();
@@ -5579,6 +5587,7 @@ public class SQLParserBase implements SQLParser {
             }
             Table recursiveTable = null;
             String querySQL;
+            int parameterCount = parameters == null ? 0 : parameters.size();
             try {
                 if (recursive) { // 递归CTE先创建一个空临时表，AS里的查询可以引用它自己
                     CreateTableData data = new CreateTableData();
@@ -5604,8 +5613,14 @@ public class SQLParserBase implements SQLParser {
                     session.removeLocalTempTable(recursiveTable);
                 }
             }
+            // CTE体里的?会被getPlanSQL写成?N，执行视图查询时要把这些参数的值传进去
+            ArrayList<CommandParameter> params = null;
+            if (parameters != null && parameters.size() > parameterCount) {
+                params = new ArrayList<>(parameters.size() - parameterCount);
+                params.addAll(parameters.subList(parameterCount, parameters.size()));
+            }
             int id = database.allocateObjectId();
-            TableView view = new TableView(schema, id, tempViewName, querySQL, null, cols, session,
+            TableView view = new TableView(schema, id, tempViewName, querySQL, params, cols, session,
                     recursive);
             view.setTableExpression(true);
             view.setTemporary(true);

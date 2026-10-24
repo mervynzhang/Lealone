@@ -35,7 +35,9 @@ CALL sp_ins(1, 10);
 | --- | --- |
 | 多语句过程体 | `CALL` 返回更新数 2，两行都写入 |
 | 带参过程 | 参数按位置绑定，写入对调用方可见（自动提交模式下） |
-| 过程体是查询 | `CALL` 返回结果集 |
+| 过程体是查询 | `CALL` 返回结果集；`Statement.execute()` 返回 true，`getResultSet()` 能拿到行 |
+| 只有更新语句的过程 | `Statement.execute()` 返回 false，`getUpdateCount()` 是累计更新数 |
+| 过程体里嵌套 `CALL` | 支持，内外层语句各自独立绑定 `?` 参数 |
 | 过程体第二条语句违反主键 | 抛 `DUPLICATE_KEY_1`，且**第一条语句的插入已回滚** |
 | 过程体里写 `COMMIT` | 抛 `FEATURE_NOT_SUPPORTED: transaction statement in procedure` |
 | `SELECT` 里调用过程 | 抛 `FUNCTION_NOT_FOUND_1` |
@@ -49,7 +51,8 @@ CALL sp_ins(1, 10);
 1. **不是完整的 PL**：没有 `BEGIN ... END` 块、变量声明、`IF`/`WHILE`、游标、异常处理。过程体只能是扁平的 SQL 语句串。
 2. **参数**：只有位置参数（`?`），没有 `OUT` / `INOUT`；**参数个数不匹配只在执行期报错**（`Parameter "#1" is not set`），建过程时不校验。
 3. **手动事务中的可见性**：过程跑在嵌套 session 里，未提交前调用方 session 看不到过程的写入。
-4. **不支持嵌套 `CALL`**：外层过程里调用内层过程会报 `Parameter "#1" is not set`。
+4. **参数绑定按语句独立**：过程体里每条语句的第 i 个 `?` 对应第 i 个实参，多条语句不共享参数下标
+   （嵌套 `CALL` 已支持，见第三节）。
 5. **不支持**：`RENAME PROCEDURE`、`INFORMATION_SCHEMA` 里的过程元数据视图、`OUT` 参数。
 6. **未验证**：集群 / 复制模式下过程的行为；`statement` 级复制的确定性校验。
 7. 过程体按字面切分后逐条 `prepareStatement`，每条语句都会走一次会话级语句缓存。
@@ -65,6 +68,10 @@ CALL sp_ins(1, 10);
 | `lealone-sql/.../sql/ddl/DropProcedure.java` | `DROP PROCEDURE` |
 | `lealone-sql/.../sql/dml/CallProcedure.java` | `CALL p(...)` 语句 |
 | `lealone-sql/.../sql/executor/YieldableCallProcedure.java` | 执行器：逐条驱动过程体语句 |
+
+`CALL` 是按查询语句还是更新语句执行，由 `CallProcedure.isQuery()` 判断：
+用 tokenizer 扫一遍过程体（只切词、不解析语句，避免 WITH 在 prepare 阶段建临时视图），
+遇到 `SELECT/VALUES/TABLE/WITH` 开头的语句就按查询执行，否则按更新执行。
 
 改动点：`DbObjectType` 新增 `PROCEDURE` 枚举值（追加在末尾，值写进 SYS 表）、`Schema` 新增查找、
 `ErrorCode` 与消息文件各加 2 条、`SQLStatement` 新增语句类型常量、`SQLParserBase` 新增两个解析方法、
