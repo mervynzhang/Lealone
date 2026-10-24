@@ -67,13 +67,13 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 13, skip 27)  脚本语句  43(通过  43, 失败 0)  被skip用例占  94 条
+[pgregress]   create_function_sql.sql  用例 40(执行 14, skip 26)  脚本语句  45(通过  45, 失败 0)  被skip用例占  92 条
 [pgregress]   create_procedure.sql     用例 22(执行  7, skip 15)  脚本语句  24(通过  24, 失败 0)  被skip用例占  63 条
 [pgregress]   plpgsql.sql              用例 18(执行  7, skip 11)  脚本语句  20(通过  20, 失败 0)  被skip用例占  27 条
 [pgregress]   rangefuncs.sql           用例  9(执行  6, skip  3)  脚本语句  21(通过  21, 失败 0)  被skip用例占   9 条
-[pgregress] 合计: 用例 89 (执行 33, skip 56), 脚本语句 108 (通过 108, 失败 0), 耗时 426ms
-[pgregress] skip 清单: 56 条用例, 点名跳过的 PG 语句 301 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 154 条在 skip 清单里
+[pgregress] 合计: 用例 89 (执行 34, skip 55), 脚本语句 110 (通过 110, 失败 0), 耗时 448ms
+[pgregress] skip 清单: 55 条用例, 点名跳过的 PG 语句 299 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 152 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  86 条在 skip 清单里
 [pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 40 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 21 条)
@@ -87,7 +87,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 56 条 / 301 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 55 条 / 299 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -109,7 +109,6 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 generate_series(), 且 select 列表里不展开 setof 函数 | 1 | 2 | function_sql.setof |
 | Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN | 1 | 10 | function_sql.setof_inline |
 | Lealone 函数体只允许单条查询(不支持 INSERT ... RETURNING) | 1 | 6 | function_sql.void_insert |
-| 依赖 generate_series(), 且 setof void 的行数语义和 PG 不同(PG 返回 0 行, Lealone 按本分支约定每行 NULL) | 1 | 2 | function_sql.setof_void |
 | Lealone 函数体只允许单条查询(不支持 DDL) | 1 | 8 | function_sql.ddl_in_body |
 | Lealone 无 CREATE OPERATOR CLASS/分区操作符类 | 1 | 6 | function_sql.partition_ops |
 | Lealone 不支持 $1/$2 位置参数 | 1 | 1 | function_sql.bad_body_positional |
@@ -151,10 +150,11 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | `plpgsql.recursion` | skip（无 PL/pgSQL） | 执行 2 条语句 | `LANGUAGE plpgsql` + `IF` + 递归调用 |
 | `plpgsql.exception_reraise` | skip（无 PL/pgSQL） | 执行 2 条语句 | 嵌套 `EXCEPTION WHEN OTHERS` + `RAISE;` |
 
-本轮修完函数/过程缺陷后，又有 4 个用例从 skip 清单里删掉并开始通过：
+本轮修完函数/过程缺陷后，又有 5 个用例从 skip 清单里删掉并开始通过：
 
 | 用例 | 原来 skip 的原因 | 现在 |
 | --- | --- | --- |
+| `function_sql.setof_void` | `SETOF VOID` 每行返回 Java 序列化字节 | 按 PG 对齐返回 0 行（函数体换成 `SYSTEM_RANGE` 以去掉 `generate_series` 依赖） |
 | `function_sql.bad_body_return_type` | 建函数时不校验函数体 | 建函数时准备一次函数体，常量类型错误在 CREATE 时报 22018 |
 | `function_sql.bad_body_columns` | 函数体返回多列静默取第一列 | 建函数时校验结果列数报 22018，调用时也不再静默取第一列 |
 | `procedure.body_select` | `CALL` 有结果集时 `execute()` 拿不到行 | 过程体里有查询语句时 `CALL` 按查询执行，`execute()` 返回 true |
@@ -184,7 +184,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | `STRICT` / `RETURNS NULL ON NULL INPUT` | 9 |
 | `RETURNS VOID` | 2 |
 | `LANGUAGE plpgsql`（递归/RAISE/嵌套 EXCEPTION/SELECT INTO/DECLARE/IF） | 13 |
-| 合计 | 39（加上本轮修复后: 脚本语句 47 → 108，用例 67 → 89，执行用例 14 → 33） |
+| 合计 | 39（加上本轮修复后: 脚本语句 47 → 110，用例 67 → 89，执行用例 14 → 34） |
 
 ## 七、缺陷清单（N1、N7~N11 已修复，其余待修）
 
@@ -201,8 +201,9 @@ select * from sv2();
 PG 里 `setof void` 每行是空值。标量 `RETURNS VOID` 已经修好，这条没有跟着修。
 用例 `function_sql.setof_void`。
 
-**已修复**：`RETURNS SETOF VOID` 的返回列现在按 `NULL` 处理，每一行都是空值（见 `PgFunctionDefectTest.testSetofVoid`）；
-用例 `function_sql.setof_void` 仍 skip，因为函数体依赖 `generate_series()`（另外 PG 实际是 0 行，和本分支约定的“每行 NULL”不同）。
+**已修复（按 PG 对齐）**：`RETURNS SETOF VOID` 和 PG 一样**不返回任何行**，函数体返回什么、返回多少列都不影响
+（见 `PgFunctionDefectTest.testSetofVoid`）。用例 `function_sql.setof_void` 已解锁：Lealone 没有
+`generate_series()`，函数体换成 `SYSTEM_RANGE`，期望输出就是 PG 的 `(0 rows)`。
 
 ### N2. 有 `OUT`/`INOUT` 参数的 PL/pgSQL 函数不能裸 `RETURN;`，也不能自然结束
 

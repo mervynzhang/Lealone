@@ -180,7 +180,9 @@ public class CreateSqlFunction extends SchemaStatement {
      * setof/table和多个OUT参数的结果列形状在调用时校验。
      */
     private void validateSqlBody() {
-        // 数据库启动时回放sys(meta)记录，此时函数体引用的表可能还没建出来，跳过校验
+        // 数据库启动时回放sys(meta)记录, 这时FUNCTION_ALIAS先于TABLE_OR_VIEW创建(DbObjectType.createOrder),
+        // 函数体引用的表还没建出来, 必须跳过校验, 否则重启会失败; 等价于PG的check_function_bodies=off。
+        // 这个判断不能删!
         if (session.getDatabase().isStarting())
             return;
         int outputCount = getOutputParameterCount();

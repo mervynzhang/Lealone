@@ -42,7 +42,6 @@ function_sql.or_replace_window	create_function_sql.sql:337-339	3	Lealone 不支�
 function_sql.setof	create_function_sql.sql:344-348	2	Lealone 无 generate_series(), 且 select 列表里不展开 setof 函数
 function_sql.setof_inline	create_function_sql.sql:353-376	10	Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN
 function_sql.void_insert	create_function_sql.sql:392-402	6	Lealone 函数体只允许单条查询(不支持 INSERT ... RETURNING)
-function_sql.setof_void	create_function_sql.sql:404-406	2	缺陷: RETURNS SETOF VOID 每行返回 Java 序列化字节, 且依赖 generate_series()
 function_sql.ddl_in_body	create_function_sql.sql:409-431	8	Lealone 函数体只允许单条查询(不支持 DDL)
 function_sql.anyarray_setof	create_function_sql.sql:434-447	2	Lealone 无 anyarray/anyelement 多态类型
 function_sql.partition_ops	create_function_sql.sql:449-461	6	Lealone 无 CREATE OPERATOR CLASS/分区操作符类

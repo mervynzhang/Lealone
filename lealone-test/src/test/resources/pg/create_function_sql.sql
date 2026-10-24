@@ -516,12 +516,16 @@ table sometable;
 
 -- @case function_sql.setof_void
 -- @pg create_function_sql.sql:404-406
--- 缺陷: RETURNS SETOF VOID 能建, 但每行返回 Java 序列化字节(和修好之前的 RETURNS VOID 一样);
---       这条还依赖 generate_series()
+-- 适配: Lealone 没有 generate_series(), 函数体换成 system_range; 和 PG 一样,
+--       RETURNS SETOF VOID 不返回任何行(函数体返回什么、返回多少列都不影响)
 create function voidtest5(a int) returns setof void language sql as
-$$ select generate_series(1, a) $$ stable;
+$$ select 1 from system_range(1, a) $$ stable;
+> update count: 0
+
 select * from voidtest5(3);
--- PG 期望: 3 行空值
+> VOIDTEST5
+> ---------
+> rows: 0
 
 -- @case function_sql.ddl_in_body
 -- @pg create_function_sql.sql:409-431
