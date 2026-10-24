@@ -13,7 +13,9 @@ import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueMap;
 import com.lealone.db.value.ValueNull;
+import com.lealone.db.value.ValueString;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.ExpressionColumn;
 
@@ -63,8 +65,11 @@ public class ExecuteService extends ExecuteStatement {
     public Result query(int maxRows) {
         setCurrentRowNumber(1);
         Value v = execute();
+        // 结果列的类型要跟实际返回值一致，否则数组之类的返回值在客户端取不到
+        ExpressionColumn c = new ExpressionColumn(session.getDatabase(),
+                new Column(serviceName + "." + methodName + "()", v.getType()));
         Value[] row = { v };
-        LocalResult result = new LocalResult(session, resultExpressions, 1);
+        LocalResult result = new LocalResult(session, new Expression[] { c }, 1);
         result.addRow(row);
         result.done();
         return result;
@@ -77,6 +82,17 @@ public class ExecuteService extends ExecuteStatement {
             methodArgs[i] = expressions.get(i).getValue(session);
         }
         Object obj = Service.execute(session, serviceName, methodName, methodArgs);
-        return DataType.convertToValue(session, obj, ValueNull.UNKNOWN);
+        Value v = DataType.convertToValue(session, obj, ValueNull.UNKNOWN);
+        // 模型结果是没有类型的Map，按JSON返回，客户端(比如ORM模型)才能直接解码；
+        // 声明为map/list/set的返回值要原样传回客户端
+        if (v.getType() == Value.MAP && !isCollectionReturnType()) {
+            return ValueString.get(((ValueMap) v).getJson());
+        }
+        return v;
+    }
+
+    private boolean isCollectionReturnType() {
+        int type = Service.getServiceMethodReturnType(session, serviceName, methodName);
+        return type == Value.MAP || type == Value.LIST || type == Value.SET;
     }
 }
