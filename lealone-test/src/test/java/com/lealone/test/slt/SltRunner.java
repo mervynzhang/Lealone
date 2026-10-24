@@ -106,7 +106,10 @@ public final class SltRunner {
         }
 
         public boolean gated() {
-            return !"statement".equals(kind);
+            // statement 失败必须同样计入回归门禁: 旧实现把 kind=="statement" 排除在外,
+            // 结果 SLT 脚本里的 DDL/DML(建索引、建表、插入)坏掉了门禁依然是 PASS,
+            // 只有 query 的失败才会计数 —— 这等于给"有第三方回归保护"一个假的保证。
+            return true;
         }
     }
 
