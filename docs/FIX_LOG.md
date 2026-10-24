@@ -106,6 +106,12 @@
 | 28 | `CheckpointDurabilityTest` 的重启校验会把**进程里一直在用的 `db_0`（lealone 元数据库）**复制到隔离目录，复制一个活跃库有竞态：子进程偶尔 `ExceptionInInitializerError`（实测全量套件 3 轮里 1 次），表现为该用例假红 | **未修**。试过的两条路都不行：① 子进程用自己的空 base dir 直接打开原库目录 → Lealone 把该目录当成新库（`Table "T" not found`），因为库名要靠 `db_0` 解析；② 只复制库目录不带 `db_0` → 同上。可行的后续方向：先让元数据库做一次 SYNC checkpooint 再复制，或让 `BackupRestoreCheck` 支持按存储路径构造库实例 | 已记录（不是引擎缺陷，属测试基建） |
 | 24 | 测试不 hermetic：不清理 `target/test-data` 再跑会有 131 errors；跑套件会改写被跟踪的 `orm/generated/*.java` | `TestBase.java:51`、`SqlTestBase` 默认库 |
 
+## 二点六、仍未完全消除的偶发（记录以防被当成"已修"）
+
+| 项 | 观察 |
+|---|---|
+| `JdbcConnectionTest` 偶发挂死 | 已修过一次（`e215f042a`：客户端事件循环注册失败时挂死整个套件），并在 `ClientTestBase` 加了 `@Rule Timeout(300s)`，让它变成失败而不是永久挂住。本轮全量两连跑里**又出现 1 次**（第 1 次 378 项中 `run(JdbcConnectionTest)` 超时 300 秒，第 2 次全绿），说明**还有第二条挂死路径**没被覆盖。目前没有线程栈；下一步应在超时时打印所有线程栈（`Thread.getAllStackTraces()`）定位，而不是靠猜 |
+
 ## 二半、方法论警示（验证时踩过的坑，必须记住）
 
 | 坑 | 现象 | 正确做法 |
