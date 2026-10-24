@@ -109,24 +109,6 @@ public class HttpServerStart extends HttpRouter implements ConfigListener {
             // asyncQuery(req, resp);
         }
 
-        private void asyncQuery(HttpServletRequest req, HttpServletResponse resp)
-                throws ServletException, IOException {
-            if (!req.isAsyncStarted())
-                req.startAsync();
-            req.getAsyncContext().start(() -> {
-                tmptest.model.User.dao.where().id.eq(1).findOneAsync().onComplete(ar -> {
-                    java.io.PrintWriter out;
-                    try {
-                        out = resp.getWriter();
-                        out.println("User: " + ar.getResult());
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                    req.getAsyncContext().complete();
-                });
-            });
-        }
-
         private void run(HttpServletRequest req, HttpServletResponse resp)
                 throws ServletException, IOException {
             resp.setContentType("text/plain;charset=UTF-8");
