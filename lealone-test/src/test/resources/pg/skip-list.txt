@@ -15,6 +15,7 @@
 #   skip-all   = 整个文件都不适用, 下面只点名了几个代表性用例
 # @pg-total create_function_sql.sql 179 converted
 # @pg-total create_procedure.sql 109 converted
+# @pg-total plpgsql.sql 935 skip-all
 #
 # 重新统计 PG 语句数: mvn -o -pl lealone-test test -Dtest=PgRegressTest \
 #   -Dpg.srcdir=/path/to/postgres/src/test/regress/sql
@@ -66,3 +67,9 @@ procedure.call_function	create_procedure.sql:236-237	2	Lealone 的 CALL 不区�
 procedure.alter_and_bad_def	create_procedure.sql:239-249	8	Lealone 不支持 ALTER PROCEDURE/ALTER FUNCTION 与 WINDOW/STRICT/VARIADIC/DEFAULT
 procedure.privileges	create_procedure.sql:258-267	10	Lealone 无过程级 EXECUTE 权限与 SET ROLE 语义
 procedure.routine_syntax	create_procedure.sql:272-278	5	Lealone 不支持 ALTER ROUTINE/DROP ROUTINE
+plpgsql.trigger_room	plpgsql.sql:130-140	2	Lealone 无 PL/pgSQL 与 CREATE TRIGGER 触发器
+plpgsql.trigger_raise	plpgsql.sql:162-172	2	Lealone 无 PL/pgSQL 与 CREATE TRIGGER 触发器
+plpgsql.recursion	plpgsql.sql:1429-1440	2	Lealone 无 PL/pgSQL 块语言(BEGIN..END/IF/LOOP/EXCEPTION)
+plpgsql.for_loop_setof	plpgsql.sql:1490-1524	6	Lealone 无 PL/pgSQL 块语言(BEGIN..END/IF/LOOP/EXCEPTION)
+plpgsql.exception_reraise	plpgsql.sql:2111-2131	2	Lealone 无 PL/pgSQL 块语言(BEGIN..END/IF/LOOP/EXCEPTION)
+plpgsql.out_params_exception	plpgsql.sql:3609-3638	6	Lealone 无 PL/pgSQL 块语言(BEGIN..END/IF/LOOP/EXCEPTION)
