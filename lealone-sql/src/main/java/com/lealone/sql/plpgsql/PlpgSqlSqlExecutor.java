@@ -81,21 +81,23 @@ public class PlpgSqlSqlExecutor {
     }
 
     /**
-     * 执行查询并丢弃结果，PERFORM语句使用。
+     * 执行查询并丢弃结果，PERFORM语句使用；返回读取到的行数。
      */
-    public void executeQuery(String sql, PlpgSqlVariableResolver resolver) {
+    public int executeQuery(String sql, PlpgSqlVariableResolver resolver) {
         PreparedSQLStatement statement = prepare(sql, resolver);
         if (!statement.isQuery()) {
             statement.close();
             throw DbException.get(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY);
         }
         Result result = statement.query(0);
+        int count = 0;
         try {
             if (result != null) {
                 while (result.next()) {
-                    // 丢弃每一行
+                    count++;
                 }
             }
+            return count;
         } finally {
             if (result != null)
                 result.close();

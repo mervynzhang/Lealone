@@ -483,6 +483,48 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals(42, getIntValue(1));
     }
 
+    // FOUND魔法变量：DML/PERFORM/SELECT INTO之后的值
+    @Test
+    public void testFoundVariable() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_found_t");
+        executeUpdate("CREATE TABLE plp_found_t(a INT)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_found() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r INT := 0; n INT := 0;" //
+                + " BEGIN" //
+                + "   INSERT INTO plp_found_t VALUES(1);" //
+                + "   IF FOUND THEN r := r + 1; END IF;" //
+                + "   UPDATE plp_found_t SET a = 100 WHERE a = 1;" //
+                + "   IF FOUND THEN r := r + 2; END IF;" //
+                + "   DELETE FROM plp_found_t WHERE a = 9999;" //
+                + "   IF NOT FOUND THEN r := r + 4; END IF;" //
+                + "   PERFORM * FROM plp_found_t;" //
+                + "   IF FOUND THEN r := r + 8; END IF;" //
+                + "   SELECT a INTO n FROM plp_found_t WHERE a = 8888;" //
+                + "   IF NOT FOUND THEN r := r + 16; END IF;" //
+                + "   SELECT a INTO n FROM plp_found_t WHERE a = 100;" //
+                + "   IF FOUND THEN r := r + 32; END IF;" //
+                + "   RETURN r;" //
+                + " END; $$");
+        executeQuery("SELECT plp_found()");
+        assertEquals(63, getIntValue(1));
+    }
+
+    // GET DIAGNOSTICS ... = ROW_COUNT
+    @Test
+    public void testGetDiagnosticsRowCount() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_rc_t");
+        executeUpdate("CREATE TABLE plp_rc_t(a INT)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_row_count() RETURNS BIGINT LANGUAGE plpgsql AS $$"
+                + " DECLARE n BIGINT := 0;" //
+                + " BEGIN" //
+                + "   INSERT INTO plp_rc_t VALUES(1), (2), (3);" //
+                + "   GET DIAGNOSTICS n = ROW_COUNT;" //
+                + "   RETURN n;" //
+                + " END; $$");
+        executeQuery("SELECT plp_row_count()");
+        assertEquals(3, getLongValue(1));
+    }
+
     private String getSqlState(String sql) throws Exception {
         try {
             try (Statement s = conn.createStatement(); ResultSet rs = s.executeQuery(sql)) {

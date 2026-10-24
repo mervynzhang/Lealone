@@ -10,7 +10,9 @@ import java.util.List;
 import com.lealone.common.exceptions.DbException;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueInt;
+import com.lealone.db.value.ValueLong;
 import com.lealone.db.value.ValueNull;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Assignment;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Block;
@@ -19,6 +21,7 @@ import com.lealone.sql.plpgsql.PlpgSqlAst.Continue;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Declaration;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Exit;
 import com.lealone.sql.plpgsql.PlpgSqlAst.For;
+import com.lealone.sql.plpgsql.PlpgSqlAst.GetDiagnostics;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Handler;
 import com.lealone.sql.plpgsql.PlpgSqlAst.If;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Loop;
@@ -81,6 +84,10 @@ public class PlpgSqlInterpreter {
     private final PlpgSqlSqlExecutor sqlExecutor;
 
     private PlpgSqlScope scope;
+    // FOUND魔法变量，DML/PERFORM/SELECT INTO之后由解释器设置
+    private PlpgSqlVariable foundVariable;
+    // 最近一条SQL语句处理的行数，GET DIAGNOSTICS ROW_COUNT用
+    private long lastRowCount;
     // 正在被EXCEPTION handler处理的异常，RAISE;用它重新抛出
     private RuntimeException currentException;
 
@@ -100,6 +107,7 @@ public class PlpgSqlInterpreter {
         scope = parameterScope;
         try {
             declareParameters(parameterNames, parameterTypes, parameterValues);
+            declareFoundVariable(parameterScope);
             try {
                 executeBlock(body);
                 // 非void函数执行到结尾还没有RETURN，PostgreSQL会报错
@@ -118,6 +126,19 @@ public class PlpgSqlInterpreter {
         } finally {
             scope = null;
         }
+    }
+
+    // FOUND总是存在，初始为false；用户也可以给FOUND赋值
+    private void declareFoundVariable(PlpgSqlScope parameterScope) {
+        foundVariable = new PlpgSqlVariable("FOUND", false, false, false);
+        foundVariable.setType(Value.BOOLEAN);
+        foundVariable.setInitialValue(ValueBoolean.get(false));
+        parameterScope.declare(foundVariable);
+    }
+
+    private void setFound(boolean found) {
+        if (foundVariable != null)
+            foundVariable.setValue(ValueBoolean.get(found));
     }
 
     private void declareParameters(String[] parameterNames, String[] parameterTypes,
@@ -228,6 +249,8 @@ public class PlpgSqlInterpreter {
             executeSql((SqlExec) node);
         } else if (node instanceof Perform) {
             executePerform((Perform) node);
+        } else if (node instanceof GetDiagnostics) {
+            executeGetDiagnostics((GetDiagnostics) node);
         } else if (node instanceof Loop) {
             executeLoop((Loop) node);
         } else if (node instanceof While) {
@@ -288,14 +311,28 @@ public class PlpgSqlInterpreter {
 
     private void executeSql(SqlExec node) {
         PlpgSqlSqlExecutor.SelectInto selectInto = PlpgSqlSqlExecutor.splitSelectInto(node.sql);
-        if (selectInto != null)
+        if (selectInto != null) {
             executeSelectInto(selectInto);
-        else
-            sqlExecutor.execute(node.sql, scope);
+            return;
+        }
+        String firstWord = firstWord(node.sql);
+        int count = sqlExecutor.execute(node.sql, scope);
+        // INSERT/UPDATE/DELETE/MERGE之后更新FOUND和ROW_COUNT
+        if (isDml(firstWord)) {
+            lastRowCount = count;
+            setFound(count > 0);
+        }
+    }
+
+    private static boolean isDml(String word) {
+        return "INSERT".equalsIgnoreCase(word) || "UPDATE".equalsIgnoreCase(word)
+                || "DELETE".equalsIgnoreCase(word) || "MERGE".equalsIgnoreCase(word)
+                || "REPLACE".equalsIgnoreCase(word) || "UPSERT".equalsIgnoreCase(word);
     }
 
     private void executeSelectInto(PlpgSqlSqlExecutor.SelectInto selectInto) {
         List<Value[]> rows = sqlExecutor.query(selectInto.query, scope, 2);
+        lastRowCount = rows.size();
         if (rows.isEmpty()) {
             if (selectInto.strict)
                 throw PlpgSqlException.noDataFound();
@@ -304,6 +341,7 @@ public class PlpgSqlInterpreter {
                 variable.checkCanAssign();
                 variable.setValue(ValueNull.INSTANCE);
             }
+            setFound(false);
             return;
         }
         if (selectInto.strict && rows.size() > 1)
@@ -318,6 +356,7 @@ public class PlpgSqlInterpreter {
             variable.checkCanAssign();
             variable.setValue(row[i]);
         }
+        setFound(true);
     }
 
     private void executePerform(Perform node) {
@@ -326,7 +365,18 @@ public class PlpgSqlInterpreter {
         if (!("SELECT".equalsIgnoreCase(firstWord) || "WITH".equalsIgnoreCase(firstWord)
                 || "VALUES".equalsIgnoreCase(firstWord) || "TABLE".equalsIgnoreCase(firstWord)))
             query = "SELECT " + query;
-        sqlExecutor.executeQuery(query, scope);
+        int count = sqlExecutor.executeQuery(query, scope);
+        lastRowCount = count;
+        setFound(count > 0);
+    }
+
+    private void executeGetDiagnostics(GetDiagnostics node) {
+        if (!"ROW_COUNT".equalsIgnoreCase(node.item))
+            throw DbException.getUnsupportedException(
+                    "GET DIAGNOSTICS " + node.item + " in PL/pgSQL");
+        PlpgSqlVariable variable = findVariable(node.target, node.targetQuoted);
+        variable.checkCanAssign();
+        variable.setValue(ValueLong.get(lastRowCount));
     }
 
     private static String firstWord(String sql) {

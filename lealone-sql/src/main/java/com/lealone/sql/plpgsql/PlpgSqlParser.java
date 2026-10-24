@@ -18,6 +18,7 @@ import com.lealone.sql.plpgsql.PlpgSqlAst.Continue;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Declaration;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Exit;
 import com.lealone.sql.plpgsql.PlpgSqlAst.For;
+import com.lealone.sql.plpgsql.PlpgSqlAst.GetDiagnostics;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Handler;
 import com.lealone.sql.plpgsql.PlpgSqlAst.If;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Loop;
@@ -39,7 +40,7 @@ import com.lealone.sql.plpgsql.PlpgSqlLexer.TokenType;
 public class PlpgSqlParser {
 
     private static final List<String> UNSUPPORTED_STATEMENTS = Arrays.asList("CASE", "EXECUTE",
-            "FOREACH", "GET", "ASSERT", "OPEN", "FETCH", "CLOSE", "COMMIT", "ROLLBACK",
+            "FOREACH", "ASSERT", "OPEN", "FETCH", "CLOSE", "COMMIT", "ROLLBACK",
             "SAVEPOINT", "RELEASE", "START");
 
     private final String source;
@@ -241,6 +242,8 @@ public class PlpgSqlParser {
             return parseRaise();
         if (isKeyword("PERFORM"))
             return parsePerform();
+        if (isKeyword("GET"))
+            return parseGetDiagnostics();
         if (isKeyword("NULL")) {
             next();
             expectOp(";");
@@ -411,13 +414,47 @@ public class PlpgSqlParser {
     private Return parseReturn() {
         Return node = new Return(current().start);
         expectKeyword("RETURN");
+        if (isKeyword("NEXT")) {
+            node.next = true;
+            next();
+            if (isOp(";")) {
+                next();
+                return node;
+            }
+            node.expression = captureExpression(new String[0], new String[] { ";" });
+            expectOp(";");
+            return node;
+        }
+        if (isKeyword("QUERY")) {
+            node.query = true;
+            next();
+            node.expression = captureExpression(new String[0], new String[] { ";" });
+            expectOp(";");
+            return node;
+        }
         if (isOp(";")) {
             next();
             return node;
         }
-        if (isKeyword("NEXT") || isKeyword("QUERY"))
-            throw unsupported("RETURN " + current().text);
         node.expression = captureExpression(new String[0], new String[] { ";" });
+        expectOp(";");
+        return node;
+    }
+
+    private GetDiagnostics parseGetDiagnostics() {
+        GetDiagnostics node = new GetDiagnostics(current().start);
+        expectKeyword("GET");
+        expectKeyword("DIAGNOSTICS");
+        Token target = expectIdentifier();
+        node.target = target.value;
+        node.targetQuoted = target.quoted;
+        if (!isOp("=") && !isOp(":="))
+            throw syntaxError(current(), "expected = in GET DIAGNOSTICS");
+        next();
+        Token item = expectIdentifier();
+        node.item = item.value.toUpperCase();
+        if (isOp(","))
+            throw unsupported("GET DIAGNOSTICS with multiple items");
         expectOp(";");
         return node;
     }
