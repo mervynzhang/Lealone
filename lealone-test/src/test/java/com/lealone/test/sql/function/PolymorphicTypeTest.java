@@ -91,6 +91,10 @@ public class PolymorphicTypeTest extends SqlTestBase {
         assertEquals("(1, 2, 3)", getStringValue(1));
         executeQuery("SELECT array_length(ARRAY[1, 2, 3], 1)");
         assertEquals(3, getIntValue(1));
+        executeQuery("SELECT array_length(ARRAY[1, 2, 3], 2)");
+        assertNull(getStringValue(1));
+        executeQuery("SELECT array_length(NULL, 1)");
+        assertNull(getStringValue(1));
         executeQuery("SELECT poly_arr(ARRAY[1, 2])");
         assertEquals("(1, 2)", getStringValue(1));
 

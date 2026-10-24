@@ -335,7 +335,7 @@ public class SystemFunction extends BuiltInFunction {
             break;
         }
         case ARRAY_LENGTH: {
-            if (v0 == null || v0.getType() != Value.ARRAY || args.length > 2) {
+            if (v0 == null || args.length > 2) {
                 result = ValueNull.INSTANCE;
                 break;
             }
@@ -344,7 +344,14 @@ public class SystemFunction extends BuiltInFunction {
                 result = ValueNull.INSTANCE;
                 break;
             }
-            result = ValueInt.get(((ValueArray) v0).getList().length);
+            if (v0.getType() == Value.ARRAY) {
+                result = ValueInt.get(((ValueArray) v0).getList().length);
+            } else if (v0.getType() == Value.LIST) {
+                // 兼容旧的ValueList路径(JSON/集合列)
+                result = ValueInt.get(((ValueList) v0).getList().size());
+            } else {
+                result = ValueNull.INSTANCE;
+            }
             break;
         }
         case NULLIF:

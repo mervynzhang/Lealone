@@ -216,6 +216,7 @@ public class ExpressionBuilder<M extends Model<M>> {
         ExpressionColumn ec = model.getExpressionColumn(propertyName);
         Function f = Function.getFunction(getModelTable().getDatabase(), "ARRAY_LENGTH");
         f.setParameter(0, ec);
+        f.doneWithParameters();
         ValueExpression v = ValueExpression.get(ValueInt.get(0));
         Comparison c = new Comparison(getModelTable().getSession(), compareType, f, v);
         setRootExpression(c);
