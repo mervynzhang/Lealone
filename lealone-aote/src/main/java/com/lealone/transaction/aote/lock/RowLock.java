@@ -12,10 +12,13 @@ import com.lealone.db.session.InternalSession;
 import com.lealone.storage.page.PageListener;
 import com.lealone.transaction.Transaction;
 import com.lealone.transaction.aote.AOTransaction;
+import com.lealone.transaction.aote.log.UndoLogRecord;
 
 public class RowLock extends Lock {
 
     private Lockable lockable;
+    // 本事务插入这条记录时对应的undo log，同事务内删除时直接用它，不用扫描undo log
+    private UndoLogRecord insertRecord;
 
     public RowLock(Lockable lockable) {
         this.lockable = lockable;
@@ -29,6 +32,14 @@ public class RowLock extends Lock {
     @Override
     public AOTransaction getTransaction() {
         return (AOTransaction) super.getTransaction();
+    }
+
+    public UndoLogRecord getInsertRecord() {
+        return insertRecord;
+    }
+
+    public void setInsertRecord(UndoLogRecord insertRecord) {
+        this.insertRecord = insertRecord;
     }
 
     public void removeLock(AOTransaction t) {

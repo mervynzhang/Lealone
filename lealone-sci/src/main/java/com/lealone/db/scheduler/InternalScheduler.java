@@ -38,6 +38,11 @@ public interface InternalScheduler extends Scheduler, SchedulerListener.Factory 
 
     void handlePageOperation(PageOperation po);
 
+    // 还有多少page operation在排队(包括异步调用的page operation)
+    default boolean hasPendingPageOperations() {
+        return false;
+    }
+
     void addWaitingScheduler(Scheduler scheduler);
 
     void wakeUpWaitingSchedulers();

@@ -21,6 +21,7 @@ import com.lealone.db.row.Row;
 import com.lealone.db.scheduler.InternalScheduler;
 import com.lealone.db.scheduler.Scheduler;
 import com.lealone.db.scheduler.SchedulerTaskManager;
+import com.lealone.db.scheduler.SchedulerThread;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.StandardTable;
 import com.lealone.db.value.Value;
@@ -55,6 +56,77 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
 
     public boolean hasPendingIndexOperation() {
         return indexOperationSize.get() > 0;
+    }
+
+    /**
+     * 把还没有执行的索引操作尽量执行完，返回还留在队列里的事务的最小事务id。
+     * 非唯一索引的写操作是异步批量执行的，执行checkpoint或关闭数据库时如果不先flush，
+     * 索引map会被保存成不完整的状态，而checkpoint同时会截断redo log，
+     * 重启后索引里就会永久丢失这部分记录(全表扫描正常，走索引的等值查询查不到)。
+     * 如果有些索引操作所属的事务还没有提交，它们不能执行，checkpoint必须把
+     * lastTransactionId限制在这些事务之前，让redo log在重启时把这些索引操作重做一遍。
+     */
+    public long flush() {
+        if (!hasPendingIndexOperation() && !scheduler.hasPendingPageOperations())
+            return Long.MAX_VALUE;
+        if (SchedulerThread.currentScheduler() == scheduler) {
+            // 当前线程就是这个索引操作绑定的调度器线程，直接执行，否则等待自己会死锁
+            run();
+            return getMinPendingTransactionId();
+        }
+        long deadline = System.currentTimeMillis() + 5000;
+        // 索引操作只是把page operation提交给调度器，所以还要等page operation真正执行完
+        while ((hasExecutableIndexOperation() || scheduler.hasPendingPageOperations())
+                && System.currentTimeMillis() < deadline) {
+            task.resetLast(); // 让周期任务马上执行，不用等下一次100ms周期
+            scheduler.wakeUp();
+            try {
+                Thread.sleep(1);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return getMinPendingTransactionId();
+            }
+        }
+        return getMinPendingTransactionId();
+    }
+
+    // 是否有可以立即执行的索引操作(已经提交或已经回滚)，未提交的事务会阻塞它后面的索引操作
+    private boolean hasExecutableIndexOperation() {
+        for (int i = 0, len = pendingIosArray.length; i < len; i++) {
+            LinkableList<IndexOperation> pendingIos = pendingIosArray[i];
+            if (pendingIos == null)
+                continue;
+            IndexOperation io = pendingIos.getHead();
+            while (io != null && io.isCompleted())
+                io = io.getNext();
+            if (io != null && io.getStatus() != 0)
+                return true;
+        }
+        return false;
+    }
+
+    // 还没有执行完的索引操作所属事务的最小事务id，没有就返回Long.MAX_VALUE
+    private long getMinPendingTransactionId() {
+        long minTid = Long.MAX_VALUE;
+        for (int i = 0, len = pendingIosArray.length; i < len; i++) {
+            LinkableList<IndexOperation> pendingIos = pendingIosArray[i];
+            if (pendingIos == null)
+                continue;
+            IndexOperation io = pendingIos.getHead();
+            while (io != null) {
+                if (!io.isCompleted()) {
+                    try {
+                        long tid = io.getTransaction().getTransactionId();
+                        if (tid < minTid)
+                            minTid = tid;
+                    } catch (Exception e) {
+                        // 事务已经关闭时忽略
+                    }
+                }
+                io = io.getNext();
+            }
+        }
+        return minTid;
     }
 
     private void addIndexOperation(InternalScheduler currentScheduler, IndexOperation io) {

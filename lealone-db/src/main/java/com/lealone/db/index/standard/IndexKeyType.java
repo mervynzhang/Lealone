@@ -9,8 +9,8 @@ import java.nio.ByteBuffer;
 
 import com.lealone.common.util.DataUtils;
 import com.lealone.db.DataBuffer;
+import com.lealone.db.index.standard.IndexKey.CompoundIndexKey;
 import com.lealone.db.index.standard.IndexKey.SingleIndexKey;
-import com.lealone.db.lock.Lock;
 import com.lealone.db.row.Row;
 import com.lealone.db.row.RowType;
 import com.lealone.db.value.CompareMode;
@@ -67,15 +67,28 @@ public abstract class IndexKeyType extends StandardDataType {
         } else {
             key = DataUtils.readVarLong(buff);
         }
+        if (columns == null || columns.length == 0) {
+            // 墓碑不保存列值，按索引的列数创建对应的key，并标记为已删除
+            IndexKey iKey = sortTypes.length == 1 //
+                    ? new SingleIndexKey(key, null)
+                    : new CompoundIndexKey(key, null);
+            iKey.setDeleted(true);
+            return iKey;
+        }
         return IndexKey.create(key, columns);
     }
 
     @Override
     public void write(DataBuffer buff, Object obj, int formatVersion) {
         IndexKey iKey = (IndexKey) obj;
-        Value[] columns = iKey.getColumns();
-        if (columns == null) {
-            columns = (Value[]) index.getDataMap().getOldValue(iKey);
+        Value[] columns;
+        if (iKey.isDeleted()) {
+            // 墓碑不把列值写到磁盘，避免重启后被当成正常的索引项
+            columns = new Value[0];
+        } else {
+            columns = iKey.getColumns();
+            if (columns == null)
+                columns = (Value[]) index.getDataMap().getOldValue(iKey);
             if (columns == null)
                 columns = new Value[0];
         }
@@ -110,8 +123,9 @@ public abstract class IndexKeyType extends StandardDataType {
 
     @Override
     public Object getSplitKey(Object keyObj) {
-        IndexKey iKey = (IndexKey) keyObj;
-        return iKey.copy(iKey.getLockedValue(), null);
+        // 用复制出来的key做分裂键，删除标记和列值都保留，
+        // 否则墓碑被复制成普通索引项后，BTree里会多出一个"活的"索引项
+        return ((IndexKey) keyObj).copyKey();
     }
 
     private static class SingleIndexKeyType extends IndexKeyType {
@@ -133,8 +147,9 @@ public abstract class IndexKeyType extends StandardDataType {
             }
             IndexKey aKey = (IndexKey) a;
             IndexKey bKey = (IndexKey) b;
-            Value ax = Lock.getLockedValue(aKey);
-            Value bx = Lock.getLockedValue(bKey);
+            // 删除的索引项保留了列值，所以这里总能拿到列值，比较函数仍然是全序的
+            Value ax = aKey.getColumn(0);
+            Value bx = bKey.getColumn(0);
             if (bx == null) {
                 bx = (Value) index.getDataMap().getOldValue(bKey);
                 if (bx == null)
@@ -150,7 +165,7 @@ public abstract class IndexKeyType extends StandardDataType {
         @Override
         public int getMemory(Object obj) {
             SingleIndexKey k = (SingleIndexKey) obj;
-            Value column = Lock.getLockedValue(k);
+            Value column = k.getColumn(0);
             return 32 + (column != null ? column.getMemory() : 0);
         }
 
@@ -191,8 +206,13 @@ public abstract class IndexKeyType extends StandardDataType {
             }
             IndexKey aKey = (IndexKey) a;
             IndexKey bKey = (IndexKey) b;
-            Value[] ax = Lock.getLockedValue(aKey);
-            Value[] bx = Lock.getLockedValue(bKey);
+            Value[] ax = aKey.getColumns();
+            Value[] bx = bKey.getColumns();
+            if (ax == null) {
+                ax = (Value[]) index.getDataMap().getOldValue(aKey);
+                if (ax == null)
+                    return -1;
+            }
             if (bx == null) {
                 bx = (Value[]) index.getDataMap().getOldValue(bKey);
                 if (bx == null)
@@ -208,7 +228,7 @@ public abstract class IndexKeyType extends StandardDataType {
         @Override
         public int getMemory(Object obj) {
             IndexKey k = (IndexKey) obj;
-            return 32 + RowType.getColumnsMemory(k);
+            return 32 + RowType.getColumnsMemory(k.getColumns());
         }
 
         @Override

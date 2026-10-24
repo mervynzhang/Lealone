@@ -33,6 +33,23 @@ public abstract class UndoLogRecord {
     UndoLogRecord next;
     UndoLogRecord prev;
 
+    /**
+     * 本记录是否是"复活墓碑"(把已删除的记录重新写活)。
+     * 复活前的状态是"已删除"，所以不能用 oldValue 判断该怎么回滚：
+     * oldValue 传 null 会被当成 insert(回滚时物理删除)，传新值又会被恢复成新值。
+     * 也不能往 oldValue 里塞别的类型：row map 的 oldValue 必须是 Value[]，
+     * 提交时要按 Value[] 计算内存(pageUsedMemory)，否则会抛 ClassCastException。
+     * 所以只用这个标记影响回滚方式。
+     */
+    private boolean revivedFromDelete;
+    private long revivedOldRowId = Long.MIN_VALUE;
+
+    public UndoLogRecord setRevivedFromDelete(long oldRowId) {
+        this.revivedFromDelete = true;
+        this.revivedOldRowId = oldRowId;
+        return this;
+    }
+
     @SuppressWarnings("unchecked")
     public UndoLogRecord(StorageMap<?, ?> map, Object key, Lockable lockable, Object oldValue) {
         this.map = (StorageMap<Object, ?>) map;
@@ -43,6 +60,25 @@ public abstract class UndoLogRecord {
 
     public void setUndone(boolean undone) {
         this.undone = undone;
+    }
+
+    public boolean isUndone() {
+        return undone;
+    }
+
+    // 按 key 查到的记录是否就是当前这条(唯一索引下同键可能有多条)
+    private boolean isRemovable(Object key) {
+        Object found = map.get(key);
+        return found == null || found == lockable;
+    }
+
+    /**
+     * 索引项的key就是它自己，用lockable自身去删除时compare(a,a)直接返回0，能稳定命中。
+     */
+    private Object removalKey() {
+        if (lockable.isIndexKey())
+            return lockable;
+        return key;
     }
 
     protected boolean ignore() {
@@ -62,7 +98,10 @@ public abstract class UndoLogRecord {
             TransactionalValue.commit(true, map, key, lockable);
         } else if (lockable.getLockedValue() == null) { // delete
             if (!te.containsRepeatableReadTransactions()) {
-                lockable.getPageListener().getPageReference().remove(key);
+                // 唯一索引比较时不看 rowId，如果索引里同时存在同键的另一条记录，
+                // 按 key 删除可能删掉别人，所以先确认按 key 找到的就是这条记录
+                if (isRemovable(key))
+                    lockable.getPageListener().getPageReference().remove(removalKey());
             } else {
                 map.decrementSize(); // 要减去1
                 TransactionalValue.commit(false, map, key, lockable);
@@ -77,8 +116,13 @@ public abstract class UndoLogRecord {
         if (ignore())
             return;
 
-        if (oldValue == null) {
-            lockable.getPageListener().getPageReference().remove(key);
+        if (revivedFromDelete) {
+            // 撤销"复活"：恢复成墓碑，并把 rowId 换回被删除那一行的
+            if (lockable.isIndexKey() && revivedOldRowId != Long.MIN_VALUE)
+                lockable.setKey(revivedOldRowId);
+            lockable.setLockedValue(null);
+        } else if (oldValue == null) {
+            lockable.getPageListener().getPageReference().remove(removalKey());
         } else {
             TransactionalValue.rollback(oldValue, lockable);
         }

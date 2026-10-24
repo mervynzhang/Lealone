@@ -336,6 +336,17 @@ public class StandardTable extends Table {
         return indexOperators;
     }
 
+    @Override
+    public long flushIndexOperations() {
+        long minTid = Long.MAX_VALUE;
+        for (int i = 0, size = indexOperators.size(); i < size; i++) {
+            long tid = indexOperators.get(i).flush();
+            if (tid < minTid)
+                minTid = tid;
+        }
+        return minTid;
+    }
+
     private StandardDelegateIndex createDelegateIndex(int indexId, String indexName, IndexType indexType,
             int mainIndexColumn) {
         indexType.setDelegate(true);

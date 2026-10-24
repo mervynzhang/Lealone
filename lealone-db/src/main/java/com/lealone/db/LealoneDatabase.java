@@ -22,7 +22,7 @@ import com.lealone.transaction.TransactionEngine;
 
 /**
  * 最顶层的数据库，用于管理所有应用创建的数据库
- * 
+ *
  * @author zhh
  */
 public class LealoneDatabase extends Database
@@ -74,7 +74,28 @@ public class LealoneDatabase extends Database
 
         init();
         createRootUserIfNotExists();
+        // checkpoint保存存储引擎的map前，先执行完所有数据库中还没执行的异步索引操作
+        getTransactionEngine().setBeforeCheckpointHandler(this::flushIndexOperations);
         getTransactionEngine().addGcTask(this);
+    }
+
+    /**
+     * 执行完所有数据库中还没执行的异步索引操作。
+     * 非唯一索引的写操作是异步批量执行的，checkpoint保存索引map前必须先执行完，
+     * 否则重启后索引会丢失记录。
+     *
+     * @return 还没执行完的索引操作所属事务的最小事务id，没有就返回Long.MAX_VALUE
+     */
+    public long flushIndexOperations() {
+        long minTid = Long.MAX_VALUE;
+        for (Database db : getDatabases()) {
+            if (db.isInitialized()) {
+                long tid = db.flushIndexOperations();
+                if (tid < minTid)
+                    minTid = tid;
+            }
+        }
+        return minTid;
     }
 
     public synchronized Database createEmbeddedDatabase(String name, ConnectionInfo ci) {
@@ -140,7 +161,7 @@ public class LealoneDatabase extends Database
     /**
      * Get database with the given name.
      * This method throws an exception if the database does not exist.
-     * 
+     *
      * @param name the database name
      * @return the database
      * @throws DbException if the database does not exist

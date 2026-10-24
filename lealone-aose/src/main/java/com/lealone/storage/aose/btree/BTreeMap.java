@@ -491,7 +491,8 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
 
     @Override
     public boolean hasUnsavedChanges() {
-        return getRootPage().getPos() == 0;
+        // 除了root page，并发刷脏页时子页也可能还是脏页(此时root page已经被写成非脏页)
+        return getRootPage().getPos() == 0 || btreeStorage.getBTreeGC().hasDirtyPages();
     }
 
     public Page gotoLeafPage(Object key) {
