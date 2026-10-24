@@ -26,6 +26,7 @@ import com.lealone.db.session.ServerSession;
 import com.lealone.db.session.Session;
 import com.lealone.db.table.Column;
 import com.lealone.db.table.Table;
+import com.lealone.db.table.TableView;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueNull;
 import com.lealone.sql.IExpression;
@@ -650,6 +651,22 @@ public class TableFilter extends ColumnResolverBase {
         buff.append(table.getSQL());
         if (alias != null) {
             buff.append(' ').append(session.getDatabase().quoteIdentifier(alias));
+        } else if (isDerivedTable()) {
+            // 派生表的列别名列表必须跟在别名后面，没有别名时补一个
+            buff.append(' ').append(session.getDatabase().quoteIdentifier(table.getName()));
+        }
+        if (isDerivedTable()) {
+            // 派生表的列别名列表也要出现在SQL里，否则重新编译时列名就丢了
+            String[] columnNames = ((TableView) table).getColumnNames();
+            if (columnNames != null) {
+                buff.append('(');
+                for (int i = 0; i < columnNames.length; i++) {
+                    if (i > 0)
+                        buff.append(", ");
+                    buff.append(session.getDatabase().quoteIdentifier(columnNames[i]));
+                }
+                buff.append(')');
+            }
         }
         if (index != null) {
             buff.append('\n');
@@ -688,6 +705,12 @@ public class TableFilter extends ColumnResolverBase {
             buff.append("\n    /* scanCount: ").append(scanCount).append(" */");
         }
         return buff.toString();
+    }
+
+    // 派生表(临时的视图)支持列别名列表，如 (SELECT 1, 2) t(a, b)
+    private boolean isDerivedTable() {
+        return table instanceof TableView && table.isTemporary()
+                && ((TableView) table).getColumnNames() != null;
     }
 
     /**
