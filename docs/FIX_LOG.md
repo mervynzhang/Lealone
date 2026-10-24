@@ -16,6 +16,7 @@
 |---|---|---|---|---|
 | 1 | 关联子查询只在最内层与外层关联时，中间层子查询结果被跨外层行复用，返回上一行的过期值（静默错数据） | `CorrelatedVisitor` 展开嵌套子查询，并把嵌套查询自己的 `TableFilter` 并入"自己的列"集合 | 新增 `CorrelatedSubqueryTest` 4 例；回退本改动后正好两条嵌套用例变红（`expected:<2> but was:<1>`），两条对照仍绿 | 已修复 |
 | 2 | 异步提交回调在事务已结束时会丢失（语句挂死），重复提交时会重复执行（客户端收到两次响应） | `undoLog == null` 时补调 `asyncCommitComplete()`；`asyncCommitComplete()` 先取走 `asyncTask` 再置空，保证恰好一次 | 新增 `AsyncCommitCallbackTest` 2 例；去掉补调 → 30s 超时"没有回调"；去掉取走置空 → `expected:<1> but was:<2>` | 已修复 |
+| 14 | `SequenceLockedExceptionTest` 的 worker 抛异常后不 `countDown()`，主线程 `latch.await()` 永久挂死（surefire 也无超时），会把 CI 卡死 | worker 用 `finally { latch.countDown(); }` 并把异常存起来；主线程 `await(30s)` + 重新抛出；加 `@Test(timeout=60000)`；`lock_timeout` 从 1000000 降到 10000；补 conn/stmt 关闭 | 注入一个 worker 失败（改成查不存在的表）后：**0.2 秒内明确失败**（`worker 线程执行失败: Table "NOT_EXIST_TABLE" not found`）而不是挂死；正常路径连跑 2 次通过 | 已修复 |
 | 13 | 列存表把 `columnIndexes == null` 当成"一列都不加载"：重启后 `SCRIPT` 导出直接 `NullPointerException: Value.getPrecision() because "v" is null`，整行读全为 null，`CREATE INDEX`/`ExternalService` 同路径受影响 | `BTreeCursor` 把 null 列集当整行取；`ColumnStorageLeafPage.getValue(index, int[])` 对 null 列集加载全部列页；新增 `beforeWrite` 覆盖，保存前确保列页已加载 | 两进程探针：回退修复后重启执行 `SCRIPT` 报上述 NPE，带修复则导出 5 行且整行读 `7,v7,70`；新增 `ColumnStorageFullRowTest` 3 例（整行读、SCRIPT 导出、CHECKPOINT SYNC 后 SUM 校验，连跑 3 轮稳定）。**注：该 NPE 需要重启才复现，池内用例只锁定行为** | 已修复 |
 | 12 | 死代码：`IndexOperator.addIndexOperation(...)` 5 参重载零调用者；`BTreeStorage` 里 `thirdLastChunk != lastChunk` 恒真（`findThirdLastChunk` 取 `maxSeq-2`，与 `lastChunk` 序号必然不同） | 删除这两处；`Chunk.getOffset()` 的 >2G 溢出检查**保留**（零成本安全网，删掉才是退步） | 无新增测试（纯减法），全量套件验证 | 已修复 |
 | 11 | `CreateTable` 失败路径用 `schema.remove(..., null)`，但注释写的理由（"remove 再用同一个 lock 会回滚两次，把上一条 DDL 创建的对象也回滚掉"）与事实不符：重复回滚已由 `TransactionalDbObjects` 的幂等守卫兜住 | 保留 `null`（改回 `lock` 会把 handler 注册到已 unlock 的锁上，变成 stale handler），把注释改成真实理由 | 新增 `CreateTableFailureTest` 2 例：建表失败不能回滚掉之前创建的表；显式事务内建表后回滚要消失、事务前的表要保留 | 已修复（注释+用例） |
@@ -58,7 +59,6 @@
 | # | 问题 | 位置 |
 |---|---|---|
 | 22 | SLT 门禁假绿：statement 失败永不计入门禁；baseline 只比"每文件失败计数" | `SltRunner.java:108-110`、`SltBaseline.java:156-159` |
-| 23 | `SequenceLockedExceptionTest` worker 抛异常后不 `countDown()`，主线程永久挂死 | `SequenceLockedExceptionTest.java:29,36,45,62-64` |
 | 24 | 测试不 hermetic：不清理 `target/test-data` 再跑会有 131 errors；跑套件会改写被跟踪的 `orm/generated/*.java` | `TestBase.java:51`、`SqlTestBase` 默认库 |
 
 ## 三、判定为"问题不成立或未能复现"（不动）
