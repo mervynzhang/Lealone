@@ -394,7 +394,7 @@ public class Select extends Query {
             // PostgreSQL里setof函数出现在select列表会展开成多行，Lealone不支持这种展开，
             // 这里明确报错，避免把整个结果集当成一个值返回
             if (nonAlias instanceof Function && ((Function) nonAlias).isSetReturning()) {
-                String name = nonAlias.getColumnName();
+                String name = ((Function) nonAlias).getFunctionName();
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                         "set-returning function " + name + " in select list, use SELECT * FROM "
                                 + name + "(...) instead");

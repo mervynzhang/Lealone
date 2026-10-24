@@ -224,6 +224,13 @@ public abstract class Function extends Expression {
     public abstract boolean isDeterministic();
 
     /**
+     * 函数名(给其它包用，getName()是包内可见的)
+     */
+    public String getFunctionName() {
+        return getName();
+    }
+
+    /**
      * Whether the function returns multiple rows (a set-returning function).
      *
      * @return true if it does
