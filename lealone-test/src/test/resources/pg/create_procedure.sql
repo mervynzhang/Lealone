@@ -156,12 +156,16 @@ call ptest4a(NULL, NULL);
 > 1 2
 > rows: 1
 
--- PG 的 ptest4b(INOUT 交叉传递 + 嵌套 CALL) 在 PG 里就是 "error, not supported";
--- Lealone 在 CREATE 阶段直接拒绝: 带 OUT/INOUT 的过程体最后一条语句必须是查询, 所以这里不放进来
+-- PG 的 ptest4b(INOUT 交叉传递 + 嵌套 CALL) 在 CREATE 阶段就报 0A000 "calling procedures with
+-- output arguments is not supported in SQL functions"; Lealone 对齐为 50100 + 同样的信息
 
 -- 单个 INOUT 参数是复合类型的情况(以前会解析混乱)
 create type int8_tbl as (q1 bigint, q2 bigint);
 > update count: 0
+
+-- 过程体里调用带 OUT/INOUT 参数的过程在 CREATE 阶段就被拒绝(PG: 0A000, Lealone: 50100)
+create procedure ptest4b(inout b int, inout a int) as $$ call ptest4a(?, ?) $$;
+> exception 50100
 
 create procedure ptest4c(inout comp int8_tbl) as $$ SELECT ROW(1, 2); $$;
 > update count: 0

@@ -66,6 +66,28 @@ public class LealoneSQLParser extends SQLParserBase {
         return checkQueryStatement(session, body, true);
     }
 
+    /**
+     * 只切词判断过程体里有没有CALL语句，不解析语句，避免解析时在会话里创建临时视图等副作用。
+     */
+    public static boolean hasCallStatement(ServerSession session, String body) {
+        LealoneSQLParser parser = new LealoneSQLParser(session);
+        parser.initialize(body);
+        parser.read();
+        boolean statementStart = true;
+        while (parser.currentTokenType != END) {
+            if (statementStart) {
+                if ("CALL".equalsIgnoreCase(parser.currentToken))
+                    return true;
+                statementStart = false;
+            }
+            if (parser.currentTokenType == KEYWORD && ";".equals(parser.currentToken)) {
+                statementStart = true;
+            }
+            parser.read();
+        }
+        return false;
+    }
+
     private static boolean checkQueryStatement(ServerSession session, String body,
             boolean onlyLast) {
         LealoneSQLParser parser = new LealoneSQLParser(session);

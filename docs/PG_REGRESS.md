@@ -69,10 +69,10 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 
 ```
 [pgregress]   create_function_sql.sql  用例 40(执行 19, skip 21)  脚本语句  75(通过  75, 失败 0)  被skip用例占  70 条
-[pgregress]   create_procedure.sql     用例 24(执行 14, skip 10)  脚本语句  61(通过  61, 失败 0)  被skip用例占  37 条
+[pgregress]   create_procedure.sql     用例 24(执行 14, skip 10)  脚本语句  63(通过  63, 失败 0)  被skip用例占  37 条
 [pgregress]   plpgsql.sql              用例 23(执行 18, skip  5)  脚本语句  56(通过  56, 失败 0)  被skip用例占  12 条
 [pgregress]   rangefuncs.sql           用例 10(执行  9, skip  1)  脚本语句  35(通过  35, 失败 0)  被skip用例占   5 条
-[pgregress] 合计: 用例 97 (执行 60, skip 37), 脚本语句 227 (通过 227, 失败 0), 耗时 521ms
+[pgregress] 合计: 用例 97 (执行 60, skip 37), 脚本语句 229 (通过 229, 失败 0), 耗时 543ms
 [pgregress] skip 清单: 37 条用例, 点名跳过的 PG 语句 204 条
 [pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 129 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  55 条在 skip 清单里
@@ -157,6 +157,11 @@ PG 文档明确写了 OUT 位置的表达式不会被求值。修复点是 `Yiel
 `call ptest9(1/0)` 这一句；`call ptest9(1./0.)` PG 报的是"找不到 ptest9(numeric)过程"(类型不匹配)，
 Lealone 允许 numeric 隐式转成 int，仍按 Lealone 实际行为断言成功并注明是适配。
 回归用例：`com.lealone.test.sql.ddl.ProcedureOutArgTest`。
+
+同一轮还顺带对齐了 N1 的邻居（过程体里嵌套调用带 OUT 参数的过程）：PG 在 CREATE 阶段就报
+0A000 "calling procedures with output arguments is not supported in SQL functions"，
+Lealone 以前报的是误导性的"过程体最后一条必须是查询"，现在错误码/时机/文案都和 PG 对齐，
+用例 `procedure.inout_params` 里的 ptest4b 已启用。回归用例：`com.lealone.test.sql.ddl.ProcedureNestedCallOutTest`。
 
 ### N2. 无名参数的报错很误导
 

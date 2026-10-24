@@ -17,6 +17,8 @@ import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
 import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.SQLStatement;
+import com.lealone.sql.ParsedSQLStatement;
+import com.lealone.sql.dml.CallProcedure;
 
 /**
  * This class represents the statement
@@ -103,6 +105,22 @@ public class CreateProcedure extends SchemaStatement {
         }
     }
 
+    // SQL过程体里调用带OUT/INOUT参数的过程时输出值会被丢掉, PostgreSQL在CREATE阶段就报FEATURE_NOT_SUPPORTED
+    private void checkCallWithOutputParameters() {
+        if (isPlpgSql() || body == null)
+            return;
+        if (!LealoneSQLParser.hasCallStatement(session, body))
+            return;
+        for (String sql : LealoneSQLParser.splitStatements(session, body)) {
+            ParsedSQLStatement statement = session.createParser().parse(sql);
+            if (statement instanceof CallProcedure
+                    && ((CallProcedure) statement).hasOutputParameters()) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "calling procedures with output arguments is not supported in SQL functions");
+            }
+        }
+    }
+
     // 只有入参参与过程签名，OUT参数不影响重载
     private int[] getInputParameterTypeIds() {
         int count = 0;
@@ -150,6 +168,7 @@ public class CreateProcedure extends SchemaStatement {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                     "BEGIN ATOMIC procedure body with LANGUAGE " + language);
         }
+        checkCallWithOutputParameters();
         checkOutputParameters();
         SqlProcedure procedure = new SqlProcedure(schema, getObjectId(), procedureName, body,
                 language, atomicBody, parameters.toArray(new Column[0]), toIntArray(parameterModes));

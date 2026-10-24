@@ -110,6 +110,20 @@ public class CallProcedure extends Call {
         resolved = true;
     }
 
+    // 候选过程里有没有带OUT/INOUT参数、并且实参个数也对得上的重载
+    public boolean hasOutputParameters() {
+        for (int i = 0; i < candidates.size(); i++) {
+            SqlProcedure candidate = candidates.get(i);
+            if (!candidate.hasOutputParameters())
+                continue;
+            // 实参个数对不上的重载运行期本来也调不到
+            if (candidate.getInputParameterCount() == args.length
+                    || candidate.getParameterCount() == args.length)
+                return true;
+        }
+        return false;
+    }
+
     private void initResultExpressions() {
         ExpressionColumn c = new ExpressionColumn(session.getDatabase(),
                 new Column(procedure.getName() + "()", Value.INT));
