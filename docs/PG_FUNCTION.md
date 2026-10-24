@@ -4,12 +4,18 @@
 参数在函数体里按名字引用。实现落在 `SqlFunction`（`FunctionAlias` 的子类）上，schema 注册/查找、
 `JavaFunction` 表达式、错误码、`getCreateSQL` 持久化全部复用既有的 `FunctionAlias` 机制。
 
+本文档已包含参数机制：`OUT`/`INOUT` 参数、`STRICT`、`VARIADIC`、调用期类型转换，
+以及“按参数类型重载”的评估结论（见第五节）。
+
 ## 一、支持的语法
 
 ```sql
-CREATE [OR REPLACE] FUNCTION [IF NOT EXISTS] [schema.]name(p1 type, p2 type, ...) RETURNS type
+CREATE [OR REPLACE] FUNCTION [IF NOT EXISTS] [schema.]name(
+        [IN | OUT | INOUT | VARIADIC] [p1] type[[]], ...)
+    [RETURNS type]                 -- 有OUT/INOUT参数时可以省略
     [LANGUAGE SQL]
     [IMMUTABLE | STABLE | VOLATILE]
+    [STRICT | RETURNS NULL ON NULL INPUT]
     AS $$ body $$;
 
 DROP FUNCTION [IF EXISTS] [schema.]name[(type, ...)];
@@ -19,7 +25,9 @@ DROP FUNCTION [IF EXISTS] [schema.]name[(type, ...)];
 - `LANGUAGE SQL` 可选，写其它语言（如 `plpgsql`）直接报 `FEATURE_NOT_SUPPORTED`。
 - `LANGUAGE` 子句与易变性关键字（`IMMUTABLE`/`STABLE`/`VOLATILE`）都是可选的，且顺序任意，但都必须写在
   `AS` 之前。
-- `DROP FUNCTION` 后面可选的 `(type, ...)` 会被解析后丢弃（不支持按参数类型重载）。
+- 参数模式：`IN`（默认）、`OUT`、`INOUT`、`VARIADIC`；数组类型可以写 `type[]` 或 `type ARRAY`。
+- `OUT`/`INOUT` 参数可以只写类型不写名字（内部用 `$1`、`$2`... 作为名字）。
+- `DROP FUNCTION` 后面可选的 `(type, ...)` 会被解析后丢弃（不支持按参数类型重载，见第五节）。
 - 例：
 
 ```sql
@@ -27,6 +35,16 @@ CREATE FUNCTION add_one(a INT) RETURNS INT LANGUAGE SQL IMMUTABLE AS $$ SELECT a
 CREATE OR REPLACE FUNCTION find_name(a INT) RETURNS VARCHAR AS
     $$ SELECT name FROM pgf_user WHERE id = a $$;
 DROP FUNCTION IF EXISTS add_one;
+
+-- OUT参数组成返回行，RETURNS可以省略
+CREATE FUNCTION f(IN a INT, OUT b INT) AS $$ SELECT a + 1 $$;
+-- INOUT既是入参也是返回列
+CREATE FUNCTION g(INOUT x INT) AS $$ SELECT x * 2 $$;
+-- 任一入参为NULL时不执行函数体
+CREATE FUNCTION safe_div(IN a INT) RETURNS INT STRICT AS $$ SELECT 1 / a $$;
+-- 最后一个参数是数组，调用时展开
+CREATE FUNCTION var_count(VARIADIC nums INT[]) RETURNS INT AS $$ SELECT ARRAY_LENGTH(nums) $$;
+SELECT var_count(1, 2, 3);  -- 3
 ```
 
 ## 二、语义
@@ -51,12 +69,39 @@ DROP FUNCTION IF EXISTS add_one;
 5. **删除**：`DROP FUNCTION` 删除不存在函数时报 `FUNCTION_ALIAS_NOT_FOUND_1`（90077），
    加 `IF EXISTS` 不报错。
 6. **持久化**：`getCreateSQL()` 生成
-   `CREATE FUNCTION <name>(<"参数名" 类型, ...>) RETURNS <类型> <IMMUTABLE|VOLATILE> AS <函数体>`，
+   `CREATE FUNCTION <name>([OUT|INOUT] [VARIADIC] <"参数名" 类型[[]], ...) [RETURNS <类型>] [STRICT]
+   <IMMUTABLE|VOLATILE> AS <函数体>`，
    参数名用 `database.quoteIdentifier` 输出，函数体用 `StringUtils.quoteStringSQL` 输出
    （含换行/非 ASCII 字符时会变成 `STRINGDECODE(...)`）。这条语句能被自己的 parser 原样回放，
    重启后从 sys(meta) 表回放即可继续使用（已用“新 JVM 进程打开旧库”的方式实测）。
 7. **函数体里的表名按调用方当前的 schema 解析**（嵌套连接在 schema 不是 `PUBLIC` 时会先 `USE` 一下调用方的 schema）。
    函数名本身仍按 Lealone 既有规则解析：未限定名只查 session 当前 schema。
+8. **OUT / INOUT 参数**：`OUT` 参数不出现在实参列表里，`INOUT` 参数既算入参也算返回列；
+   返回列按参数声明顺序排列。
+   - 恰好一个 `OUT`/`INOUT` 参数时，函数返回一个标量，类型就是该参数的类型，
+     调用形式是 `SELECT f(1)`；此时 `RETURNS` 可写可不写，写了必须和该参数类型一致。
+   - 有多个 `OUT`/`INOUT` 参数时，函数返回一个只含一行的结果集，
+     调用形式是 `SELECT * FROM f(1)`（实现上返回类型是 `Value.RESULT_SET`，走既有的 `FunctionTable`）；
+     此时不能再写 `RETURNS`。
+   - 只有 `OUT` 参数、没有入参时可以直接 `SELECT f()`。
+   - `OUT` 参数在函数体里被引用时绑定为 NULL（PostgreSQL 里在 SQL 函数体中引用 OUT 参数是非法的），
+     因此不要依赖这种写法。
+9. **STRICT**：任一入参为 NULL 时不执行函数体，直接返回 NULL（`INOUT` 算入参，`OUT` 不算）。
+   等价写法 `RETURNS NULL ON NULL INPUT` 也支持。函数体不会被求值，所以像
+   `SELECT 1 / a` 这种“NULL 会报错但 0 才真正报错”的写法可以安全用 STRICT 保护。
+10. **VARIADIC**：必须是参数列表最后一个参数，且类型必须是数组（`type[]`/`type ARRAY`）。
+   调用时最后一个参数位置可以传 0 到多个实参，运行期打包成 `ValueArray` 传给函数体：
+   - 不传时是空数组（不是 NULL），固定参数仍然不能少；
+   - 展开出来的每个实参都按**数组元素类型**转换；
+   - 只传一个数组值时直接当数组用（不再多包一层）。Lealone 目前没有 `ARRAY[...]` 字面量，
+     所以这条只有函数返回数组时才用得上。
+11. **调用期类型转换**：实参按参数声明的类型转换（`Value.convertTo`）后再绑定给函数体，
+   和 PostgreSQL “实参按声明类型做隐式转换”对齐；不能转换时抛 `DATA_CONVERSION_ERROR_1`（22018，
+   PostgreSQL 这里是 42883/22P02 一类），错误信息里带上参数名、实参值和目标类型。
+   转换发生在执行期，所以常量实参在 prepare/optimize 阶段就会报错，列这种非常量实参在运行时才报错。
+   注意 Lealone 的类型转换比 PostgreSQL 宽松（例如 `INT` 声明可以接受 `'5'` 这种字符串、
+   `INT` 声明接受 `VARCHAR` 列、甚至标量会被 `toArray()` 包成单元素数组），
+   这里只保证“不能转换时一定报错”，不保证和 PostgreSQL 的可转换集合完全一致。
 
 ## 三、实现要点
 
@@ -67,6 +112,9 @@ DROP FUNCTION IF EXISTS add_one;
   嵌套连接和 `FunctionAlias` 调用 Java 方法时用的是同一套机制，事务挂到父事务上。
 - `SqlFunctionBodyParser`（`lealone-sql/.../sql/SqlFunctionBodyParser.java`）继承 `LealoneSQLParser`，
   借用它的 tokenizer 做“参数名换 `?`”。
+- 参数模式/数组类型/STRICT 都在 parser 里解析成 `parameterModes`/`parameterTypeIds`/
+  `parameterComponentTypes` 三个数组交给 `SqlFunction`；入参、返回列的下标在 `setParameters` 里一次算好，
+  运行时不再按模式分支去猜。
 - `CreateSqlFunction`（`lealone-sql/.../sql/ddl/CreateSqlFunction.java`）负责加排它锁、处理
   `OR REPLACE`/`IF NOT EXISTS`、`schema.add`；语句类型复用 `SQLStatement.CREATE_ALIAS`，
 - `DROP FUNCTION` 复用 `DropFunctionAlias`（同样是 `DbObjectType.FUNCTION_ALIAS`）。
@@ -77,20 +125,54 @@ DROP FUNCTION IF EXISTS add_one;
 
 - `LANGUAGE plpgsql` 等块语言与 `BEGIN ... END` 函数体
 - `RETURNS SETOF` / `RETURNS TABLE` / 复合类型或行返回
-- `OUT` / `INOUT` 参数、`VARIADIC`、`STRICT`
 - `SECURITY DEFINER`/`SECURITY INVOKER`、`COST`/`ROWS`/`SET` 子句
-- 按参数类型重载（同名函数只能有一个）、`ALTER FUNCTION`、`COMMENT ON FUNCTION`
+- 按参数类型重载（同名函数只能有一个，详见第五节）、`ALTER FUNCTION`、`COMMENT ON FUNCTION`
 - `DROP FUNCTION ... CASCADE/RESTRICT`
+- 多维数组参数（`INT[][]`）、`OUT` 参数是数组类型时的返回列类型推导（只按 `Value.ARRAY` 处理）
 
-## 五、已知限制 / 额外发现但没修的问题
+## 五、按参数类型重载：评估结论（未实现）
+
+PostgreSQL 允许 `f(int)` 与 `f(varchar)` 并存，Lealone 目前做不到。评估改动面后**没有实现**，
+卡点在“schema 对象以名字为唯一键”这一层，不在 DDL 或调用表达式的表面代码：
+
+1. **对象存储层**：`Schema` 把每类 `SchemaObject` 放在
+   `TransactionalDbObjects` 里，`add/copyOnAdd/remove/find` 全部用 `dbObject.getName()` 做 `CaseInsensitiveMap` 的 key
+   （`TransactionalDbObjects.add`）。同名函数第二个 `put` 会**直接覆盖**第一个；
+   更关键的是数据库启动回放 meta 记录时走的是同一条 `dbObjects.add(obj)` 路径，
+   即便 DDL 阶段骗过去了，重启后也只剩一个重载。要干净支持重载，必须让
+   FUNCTION_ALIAS 的 key 变成“名字+参数类型签名”，于是所有按名字的查找
+   （`findFunction`/`getFunction`/`DROP FUNCTION`/`OR REPLACE`/`IF NOT EXISTS`/`SET COMMENT`/
+   `GenScript`/`InfoMetaTable`/`Schema.removeSchemaObjects`）都要跟着改成按签名或返回候选集合。
+2. **通用性影响**：`TransactionalDbObjects` 是所有 DbObjectType 共用的多版本容器，
+   改 key 语义会波及 `CREATE ALIAS`、`DROP ALIAS`、`COMMENT ON ALIAS` 的既有行为；
+   只在 FUNCTION_ALIAS 上做特例则需要新的按类型分支，代码会变得不干净。
+3. **解析层**：`SQLParserBase.readJavaFunction` 是**先按名字取到 `FunctionAlias` 再解析实参**的，
+   `CREATE ALIAS` 也走这条路。要按类型选重载，必须改成先解析实参、再做候选函数的重载消解，
+   而 PostgreSQL 的消解规则（精确匹配 → 首选类型 → 隐式转换 → 歧义报错）还要给 `Expression`
+   在 prepare 阶段计算出足够精确的静态类型，Lealone 这一层目前有不少 `Value.UNKNOWN`。
+4. **DDL 层**：`CREATE FUNCTION` 的重复检测、`OR REPLACE` 的替换目标、`DROP FUNCTION name(types)`
+   的定位都要按签名做，且类型文本要归一化（`INT`/`INTEGER`/`INT4` 视为同一类型）后才能比较。
+
+粗估：即便只做一个“简化版消解规则”，也需要改上述四层、约 300~400 行并且动到通用对象存储，
+风险会外溢到 `CREATE ALIAS` 与重启回放，不符合“300 行内干净实现”的前提，因此本次不做。
+`PgFunctionParamTest.testOverloadByParameterType` 用 `@Ignore` 保留了 PostgreSQL 期望的行为，
+`PgFunctionParamTest.testOverloadNotSupported` 断言了当前“同名函数不能并存”的现状。
+
+## 六、已知限制 / 额外发现但没修的问题
 
 1. 函数体的 SQL 语法在创建时不校验，`AS $$ SELECT FROM $$` 也能建成功，调用时才报错。
 2. 参数名与列名同名时参数优先（见上文）。
 3. `TABLE x` 作为函数体只支持裸表名：Lealone 的 `TABLE x` 语句本身不支持 `WHERE`（`TABLE t1 WHERE id = 1`
    会报语法错），所以 `TABLE` 函数体只能取整表的第一行第一列。
 4. 函数名解析仍只查 session 当前 schema，`USE s3` 之后调用 `PUBLIC` 里的函数必须写成 `PUBLIC.f()`。
-5. 把标量函数当表函数用（`SELECT * FROM f(1)`）会走 `JavaFunction.getValueForColumnList`，
+5. 把**标量**返回的函数当表函数用（`SELECT * FROM f(1)`）会走 `JavaFunction.getValueForColumnList`，
    那里要求返回值是 `ValueResultSet`，标量函数会类型转换失败；`CREATE ALIAS` 的标量函数本来也是这样。
+   只有“多个 OUT/INOUT 参数”的函数返回类型才是 `Value.RESULT_SET`，可以出现在 FROM 里。
 6. DDL 回滚后，同一个 session 里之前 prepare 过的 `SELECT f(...)` 可能命中缓存的执行计划，
    仍然返回旧结果（函数对象其实已经回滚掉了，新 session 调用会报找不到）。这是 DDL 与
    prepared statement 缓存之间的老问题，不在本次改动范围内。
+7. 单个 OUT/INOUT 参数时只取函数体返回的第一列，函数体返回的列数和 OUT 参数个数不一致时
+   PostgreSQL 会报错，Lealone 这里静默忽略多余的列（标量函数本来就是这个语义）。
+8. 多个 OUT 参数时函数返回 `ValueResultSet`，所以 `SELECT f(1)` 这种“把整行当一个值”的写法不可用，
+   必须写成 `SELECT * FROM f(1)`；函数体返回 0 行时得到 0 行结果（PostgreSQL 这里返回一行 NULL 记录）。
+9. `VARIADIC` 调用时传单个 NULL 会被当成“一个 NULL 元素”，PostgreSQL 会把它当成 NULL 数组。
