@@ -172,6 +172,21 @@ public class Schema extends DbObjectBase {
         return (HashMap<String, T>) dbObjectsArray[type.value].getDbObjects();
     }
 
+    /**
+     * 对象在schema里的存放key。函数支持按参数类型重载，同名不同参数类型的函数用不同的key，
+     * 其它对象类型仍然只用名字做key。
+     */
+    private static String getDbObjectKey(SchemaObject obj) {
+        return getDbObjectKey(obj, obj.getName());
+    }
+
+    private static String getDbObjectKey(SchemaObject obj, String name) {
+        if (obj instanceof SqlFunction) {
+            return ((SqlFunction) obj).getOverloadKey(name);
+        }
+        return name;
+    }
+
     public DbObjectLock tryExclusiveLock(DbObjectType type, ServerSession session) {
         DbObjectLock lock = locks[type.value];
         if (lock.tryExclusiveLock(session)) {
@@ -195,6 +210,7 @@ public class Schema extends DbObjectBase {
         SystemOutline.createNode(SystemOutlineNode.addSchemaObject);
         TransactionalDbObjects dbObjects = dbObjectsArray[obj.getType().value];
         int id = obj.getId();
+        String key = getDbObjectKey(obj);
 
         if (SysProperties.CHECK) {
             if (obj.getSchema() != this) {
@@ -208,7 +224,7 @@ public class Schema extends DbObjectBase {
                     DbException.throwInternalError("object id is not enabled: " + id);
                 }
             }
-            if (dbObjects.containsKey(session, obj.getName()))
+            if (dbObjects.containsKey(session, key))
                 DbException.throwInternalError("object already exists: " + obj.getName());
         }
 
@@ -217,13 +233,13 @@ public class Schema extends DbObjectBase {
         // 如果数据库正在启动阶段(执行meta表中的create语句的阶段)，
         // 因为此时是单线程运行的，所以也只需简单增加一个SchemaObject即可
         if (id <= 0 || session == null || database.isStarting()) {
-            dbObjects.add(obj);
+            dbObjects.add(key, obj);
             return;
         }
 
         // 先执行addMeta再执行put，因为addMeta可能会失败
         database.tryAddMeta(session, obj);
-        dbObjects.copyOnAdd(session, obj);
+        dbObjects.copyOnAdd(session, key, obj);
 
         if (lock != null) {
             lock.addHandler(ar -> {
@@ -258,7 +274,7 @@ public class Schema extends DbObjectBase {
         }
 
         database.updateMeta(session, obj, oldRow);
-        dbObjects.copyOnAdd(session, obj);
+        dbObjects.copyOnAdd(session, getDbObjectKey(obj), obj);
 
         if (lock != null) {
             lock.addHandler(ar -> {
@@ -279,25 +295,26 @@ public class Schema extends DbObjectBase {
      */
     public void remove(ServerSession session, SchemaObject obj, DbObjectLock lock) {
         String objName = obj.getName();
+        String objKey = getDbObjectKey(obj);
         DbObjectType type = obj.getType();
         if (session != null && removeLocalTempSchemaObject(session, obj)) {
             freeUniqueName(objName);
             obj.invalidate();
         } else {
             TransactionalDbObjects dbObjects = dbObjectsArray[type.value];
-            if (SysProperties.CHECK && !dbObjects.containsKey(session, objName)) {
+            if (SysProperties.CHECK && !dbObjects.containsKey(session, objKey)) {
                 DbException.throwInternalError("not found: " + objName);
             }
 
             if (session == null) {
-                dbObjects.remove(objName);
+                dbObjects.remove(objKey);
                 removeInternal(obj);
                 return;
             }
 
             obj.removeChildrenAndResources(session, lock);
             database.tryRemoveMeta(session, obj, lock);
-            dbObjects.copyOnRemove(session, objName);
+            dbObjects.copyOnRemove(session, objKey);
 
             if (lock != null) {
                 lock.addHandler(ar -> {
@@ -354,19 +371,22 @@ public class Schema extends DbObjectBase {
     public void rename(ServerSession session, SchemaObject obj, String newName, DbObjectLock lock) {
         TransactionalDbObjects dbObjects = dbObjectsArray[obj.getType().value];
         String oldName = obj.getName();
+        String oldKey = getDbObjectKey(obj);
+        // 函数改名时参数签名不变，新key用新名字算
+        String newKey = getDbObjectKey(obj, newName);
         if (SysProperties.CHECK) {
-            if (!dbObjects.containsKey(session, oldName)) {
+            if (!dbObjects.containsKey(session, oldKey)) {
                 DbException.throwInternalError("not found: " + oldName);
             }
-            if (oldName.equals(newName) || dbObjects.containsKey(session, newName)) {
+            if (oldName.equals(newName) || dbObjects.containsKey(session, newKey)) {
                 DbException.throwInternalError("object already exists: " + newName);
             }
         }
 
         obj.checkRename();
-        dbObjects.copyOnRemove(session, oldName);
+        dbObjects.copyOnRemove(session, oldKey);
         obj.rename(newName);
-        dbObjects.add(obj);
+        dbObjects.add(newKey, obj);
 
         lock.addHandler(ar -> {
             if (ar.isSucceeded() && ar.getResult()) {
@@ -471,13 +491,45 @@ public class Schema extends DbObjectBase {
 
     /**
      * Try to find a user defined function with this name. This method returns
-     * null if no object with this name exists.
+     * null if no object with this name exists. 同名函数有多个重载时返回其中一个，
+     * 需要区分重载时用{@link #findFunctions}。
      *
      * @param functionAlias the object name
      * @return the object or null
      */
     public FunctionAlias findFunction(ServerSession session, String functionAlias) {
-        return find(DbObjectType.FUNCTION_ALIAS, session, functionAlias);
+        DbObject obj = dbObjectsArray[DbObjectType.FUNCTION_ALIAS.value].find(session, functionAlias);
+        if (obj != null) {
+            return (FunctionAlias) obj;
+        }
+        ArrayList<FunctionAlias> list = findFunctions(session, functionAlias);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /**
+     * 找出同名的所有函数(按参数类型重载)，按对象id排序，保证每次的消解结果一致。
+     *
+     * @param functionAlias the function name
+     * @return 可能为空的名字相同的函数列表
+     */
+    public ArrayList<FunctionAlias> findFunctions(ServerSession session, String functionAlias) {
+        ArrayList<FunctionAlias> list = new ArrayList<>();
+        for (DbObject obj : dbObjectsArray[DbObjectType.FUNCTION_ALIAS.value].findAll(session)) {
+            if (functionAlias.equalsIgnoreCase(obj.getName())) {
+                list.add((FunctionAlias) obj);
+            }
+        }
+        for (int i = 1; i < list.size(); i++) {
+            FunctionAlias f = list.get(i);
+            int id = f.getId();
+            int j = i - 1;
+            while (j >= 0 && list.get(j).getId() > id) {
+                list.set(j + 1, list.get(j));
+                j--;
+            }
+            list.set(j + 1, f);
+        }
+        return list;
     }
 
     /**
@@ -687,11 +739,15 @@ public class Schema extends DbObjectBase {
     }
 
     public FunctionAlias getFunction(ServerSession session, String name) {
-        FunctionAlias functionAlias = findFunction(session, name);
-        if (functionAlias == null) {
+        ArrayList<FunctionAlias> list = findFunctions(session, name);
+        if (list.isEmpty()) {
             throw DbException.get(ErrorCode.FUNCTION_ALIAS_NOT_FOUND_1, name);
         }
-        return functionAlias;
+        if (list.size() > 1) {
+            // 同名函数有多个重载，看不出要操作的是哪一个
+            throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, name);
+        }
+        return list.get(0);
     }
 
     public UserDataType getUserDataType(ServerSession session, String name) {

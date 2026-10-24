@@ -9,7 +9,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.common.exceptions.DbException;
@@ -230,10 +229,14 @@ public class PgFunctionParamTest extends SqlTestBase {
         executeQueryThanAssertErrorCode("SELECT p_conv_int('2020-01-02')",
                 ErrorCode.DATA_CONVERSION_ERROR_1);
 
-        // 按声明类型转成VARCHAR
+        // 按声明类型转成VARCHAR: 整数到VARCHAR不是隐式转换(和PostgreSQL一致)，必须显式CAST
         executeUpdate(
                 "CREATE OR REPLACE FUNCTION p_conv_str(a VARCHAR) RETURNS VARCHAR AS $$ SELECT a $$");
-        executeQuery("SELECT p_conv_str(42)");
+        executeQueryThanAssertErrorCode("SELECT p_conv_str(42)", ErrorCode.FUNCTION_NOT_FOUND_1);
+        executeQuery("SELECT p_conv_str(CAST(42 AS VARCHAR))");
+        assertEquals("42", getStringValue(1));
+        // 字符串字面量没有类型(PostgreSQL的unknown字面量)，可以按参数类型解析
+        executeQuery("SELECT p_conv_str('42')");
         assertEquals("42", getStringValue(1));
 
         // 字符串转DATE
@@ -248,11 +251,13 @@ public class PgFunctionParamTest extends SqlTestBase {
         executeQuery("SELECT p_conv_inout('21')");
         assertEquals(42, getIntValue(1));
 
-        // 非字面量的实参在运行时转换
+        // 列的类型是已知的，VARCHAR列不能隐式转成INT参数，要写显式CAST
         executeUpdate("DROP TABLE IF EXISTS p_conv_t");
         executeUpdate("CREATE TABLE p_conv_t(id INT PRIMARY KEY, s VARCHAR(20))");
         executeUpdate("INSERT INTO p_conv_t VALUES(1, '10')");
-        executeQuery("SELECT p_conv_int(s) FROM p_conv_t WHERE id = 1");
+        executeQueryThanAssertErrorCode("SELECT p_conv_int(s) FROM p_conv_t WHERE id = 1",
+                ErrorCode.FUNCTION_NOT_FOUND_1);
+        executeQuery("SELECT p_conv_int(CAST(s AS INT)) FROM p_conv_t WHERE id = 1");
         assertEquals(11, getIntValue(1));
 
         // VARIADIC展开出来的每个实参也按数组元素类型转换
@@ -266,22 +271,19 @@ public class PgFunctionParamTest extends SqlTestBase {
         assertEquals(7, getIntValue(1));
     }
 
-    // 按参数类型重载目前不支持: schema里的函数对象以名字做唯一键
+    // 参数类型相同的函数仍然不能重复创建(重载只看参数类型)
     @Test
-    public void testOverloadNotSupported() throws Exception {
+    public void testDuplicateSignatureRejected() throws Exception {
         executeUpdate("CREATE OR REPLACE FUNCTION p_ov(a INT) RETURNS VARCHAR AS $$ SELECT 'int' $$");
         executeQuery("SELECT p_ov(1)");
         assertEquals("int", getStringValue(1));
 
-        // 同名但参数类型不同的函数不能并存
         executeUpdateThanAssertErrorCode(
-                "CREATE FUNCTION p_ov(a VARCHAR) RETURNS VARCHAR AS $$ SELECT 'varchar' $$",
+                "CREATE FUNCTION p_ov(a INT) RETURNS VARCHAR AS $$ SELECT 'int2' $$",
                 ErrorCode.FUNCTION_ALIAS_ALREADY_EXISTS_1);
     }
 
-    // PostgreSQL允许 f(int) 和 f(varchar) 并存, Lealone目前做不到, 见 docs/PG_FUNCTION.md
-    @Ignore("schema对象按名字做唯一键(TransactionalDbObjects/SCRIPT回放都以getName()为key), "
-            + "同名函数会互相覆盖; 按签名存储需要改动通用对象存储层与解析/DDL/持久化多处, 超出本次范围")
+    // PostgreSQL允许 f(int) 和 f(varchar) 并存，按实参类型消解
     @Test
     public void testOverloadByParameterType() throws Exception {
         executeUpdate(

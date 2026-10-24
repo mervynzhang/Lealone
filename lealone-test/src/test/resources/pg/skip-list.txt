@@ -37,7 +37,6 @@ function_sql.pg_get_functiondef_sqlbody	create_function_sql.sql:214-228	13	Lealo
 function_sql.sql_body_view	create_function_sql.sql:232-242	6	Lealone 无 SQL 标准函数体(RETURN 表达式)
 function_sql.sql_body_tempseq	create_function_sql.sql:244-253	3	Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD
 function_sql.information_schema	create_function_sql.sql:256-323	19	Lealone 没有 information_schema.routines 等视图
-function_sql.overload	create_function_sql.sql:326-331	4	Lealone 不支持按参数类型重载
 function_sql.or_replace_window	create_function_sql.sql:337-339	3	Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转
 function_sql.setof_inline	create_function_sql.sql:353-376	10	Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN
 function_sql.void_insert	create_function_sql.sql:392-402	6	函数体只支持带RETURNING的DML(voidtest3 是不带RETURNING的INSERT)

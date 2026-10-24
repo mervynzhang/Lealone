@@ -7,7 +7,7 @@
 子句里当表函数用。
 
 本文档已包含参数机制：`OUT`/`INOUT` 参数、`STRICT`、`VARIADIC`、调用期类型转换，
-以及“按参数类型重载”的评估结论（见第五节）。
+以及“按参数类型重载”的实现与消解规则（见第五节）。
 
 第三轮（R3）补上了 PostgreSQL 的函数 DDL 属性：`ALTER FUNCTION`、`SECURITY DEFINER`/`INVOKER`、
 `CALLED ON NULL INPUT`、`COST`/`ROWS`/`SET`/`LEAKPROOF`/`WINDOW`、`DROP FUNCTION` 的参数类型列表、
@@ -52,7 +52,7 @@ DROP FUNCTION [IF EXISTS] [schema.]name[(type, ...)];
   `AS` 之前。
 - 参数模式：`IN`（默认）、`OUT`、`INOUT`、`VARIADIC`；数组类型可以写 `type[]` 或 `type ARRAY`。
 - `OUT`/`INOUT`/`VARIADIC` 参数可以只写类型不写名字（内部用 `$1`、`$2`... 作为名字）。
-- `DROP FUNCTION` 后面可选的 `(type, ...)` 会被解析后丢弃（不支持按参数类型重载，见第五节）。
+- `DROP FUNCTION` 后面可选的 `(type, ...)` 用来定位具体是哪个重载（见第五节）；不写时要求这个名字只有一个重载。
 - 例：
 
 ```sql
@@ -198,7 +198,7 @@ SELECT var_count(1, 2, 3);  -- 3
 | `WINDOW` | 只解析 + 持久化 | Lealone 没有窗口函数框架，标记不生效；保留是为了 PG 的 DDL 能过 |
 | `COST n` / `ROWS n` | 只解析 + 持久化 | 优化器不使用这两个提示（`JavaFunction.getCost()` 仍按固定值算）；`ROWS` 在 PostgreSQL 里只对 SETOF 有意义，这里不做校验 |
 | `SET configuration_parameter = value` | 只解析 + 持久化 | **不会**真的在嵌套会话里执行这个 SET（避免 `work_mem` 这类 Lealone 不认识的参数直接报错），`SET search_path` 也不改变 schema 解析；`RESET name` / `RESET ALL` 只是把条目从列表里删掉。没加引号的标识符值会按 Lealone 的规则大写（如 `s1` → `S1`） |
-| `DROP FUNCTION name(type, ...)` | 完整（无重载） | 参数类型参与签名校验：类型/个数对不上就报 `FUNCTION_NOT_FOUND_1`（90022，消息里带实际签名），`IF EXISTS` 时不报错。只比较类型，忽略 `varchar(10)` 这类 typmod；没有类型列表时按名字删除 |
+| `DROP FUNCTION name(type, ...)` | 完整 | 参数类型用来在重载里定位函数：类型/个数对不上的重载不会被删，找不到时报 `FUNCTION_NOT_FOUND_1`（90022），`IF EXISTS` 时不报错。只比较类型，忽略 `varchar(10)` 这类 typmod；不写类型列表时，名字只有一个重载就删它，有多个重载报 `AMBIGUOUS_FUNCTION_NAME_1`（90152，对应 PG 的 42725） |
 | `COMMENT ON FUNCTION name[(type)] IS '...'` | 完整 | 复用既有的 COMMENT 机制（`COMMENT ON ALIAS` 也能读写同一份注释），持久化成 `COMMENT ON ALIAS ...` |
 
 `ALTER FUNCTION` 的对象是 `SqlFunction`（含 PL/pgSQL 函数）；对 `CREATE ALIAS` 建的 Java 函数报
@@ -256,9 +256,11 @@ SELECT var_count(1, 2, 3);  -- 3
 
 - select 列表里展开 setof 函数（`SELECT f(1)` 展开成多行）、以及 `f(1) + 1` 这类嵌套使用
 - `ROWS n` 只当属性存着，不作为优化器的行数提示
-- `RETURNS RECORD`/复合类型/`SETOF <表名>` 的返回类型；多 `OUT` 参数函数的 record 值在表达式里不能取字段
 - `ROWS FROM(...)` 多函数合并成一个表函数（单个函数的 `WITH ORDINALITY` 已支持）
-- 按参数类型重载（同名函数不能并存，见第五节）、`ALTER PROCEDURE`/`ALTER ROUTINE`
+- 自定义复合类型（`CREATE TYPE ... AS (...)`）、`%ROWTYPE` 数组、整行 `record` 当标量
+- 存储过程按参数类型重载（`SqlProcedure` 仍然同名唯一）、`ALTER PROCEDURE`/`ALTER ROUTINE`
+- `COMMENT ON FUNCTION name(type)` 仍按函数名存（多个重载共用一份注释）
+- PG 的 preferred-type 平局再选；`CREATE FUNCTION f(int)`（参数只写类型不写名）
 - `ALTER FUNCTION ... SET SCHEMA`（换 schema）、`SET configuration_parameter FROM CURRENT`
 - `DROP FUNCTION ... CASCADE/RESTRICT`
 - `SET`/`RESET` 只落 DDL，不真正影响函数体执行时的会话参数（见2.8节）
@@ -266,33 +268,89 @@ SELECT var_count(1, 2, 3);  -- 3
 - `LATERAL`：函数表实参不能引用同一 FROM 里其它表的列
 - 多维数组参数（`INT[][]`）、`OUT` 参数是数组类型时的返回列类型推导（只按 `Value.ARRAY` 处理）
 
-## 五、按参数类型重载：评估结论（未实现）
+## 五、按参数类型重载（已实现）
 
-PostgreSQL 允许 `f(int)` 与 `f(varchar)` 并存，Lealone 目前做不到。评估改动面后**没有实现**，
-卡点在“schema 对象以名字为唯一键”这一层，不在 DDL 或调用表达式的表面代码：
+PostgreSQL 允许 `f(int)` 与 `f(varchar)` 并存并按实参类型选一个，Lealone 从这一轮开始也支持，
+作用域限定在 `SqlFunction`（PostgreSQL 风格的 `CREATE FUNCTION`）；`CREATE ALIAS` 建的 Java 函数
+仍然同名唯一、调用时按声明类型宽松转换，行为不变。
 
-1. **对象存储层**：`Schema` 把每类 `SchemaObject` 放在
-   `TransactionalDbObjects` 里，`add/copyOnAdd/remove/find` 全部用 `dbObject.getName()` 做 `CaseInsensitiveMap` 的 key
-   （`TransactionalDbObjects.add`）。同名函数第二个 `put` 会**直接覆盖**第一个；
-   更关键的是数据库启动回放 meta 记录时走的是同一条 `dbObjects.add(obj)` 路径，
-   即便 DDL 阶段骗过去了，重启后也只剩一个重载。要干净支持重载，必须让
-   FUNCTION_ALIAS 的 key 变成“名字+参数类型签名”，于是所有按名字的查找
-   （`findFunction`/`getFunction`/`DROP FUNCTION`/`OR REPLACE`/`IF NOT EXISTS`/`SET COMMENT`/
-   `GenScript`/`InfoMetaTable`/`Schema.removeSchemaObjects`）都要跟着改成按签名或返回候选集合。
-2. **通用性影响**：`TransactionalDbObjects` 是所有 DbObjectType 共用的多版本容器，
-   改 key 语义会波及 `CREATE ALIAS`、`DROP ALIAS`、`COMMENT ON ALIAS` 的既有行为；
-   只在 FUNCTION_ALIAS 上做特例则需要新的按类型分支，代码会变得不干净。
-3. **解析层**：`SQLParserBase.readJavaFunction` 是**先按名字取到 `FunctionAlias` 再解析实参**的，
-   `CREATE ALIAS` 也走这条路。要按类型选重载，必须改成先解析实参、再做候选函数的重载消解，
-   而 PostgreSQL 的消解规则（精确匹配 → 首选类型 → 隐式转换 → 歧义报错）还要给 `Expression`
-   在 prepare 阶段计算出足够精确的静态类型，Lealone 这一层目前有不少 `Value.UNKNOWN`。
-4. **DDL 层**：`CREATE FUNCTION` 的重复检测、`OR REPLACE` 的替换目标、`DROP FUNCTION name(types)`
-   的定位都要按签名做，且类型文本要归一化（`INT`/`INTEGER`/`INT4` 视为同一类型）后才能比较。
+```sql
+CREATE FUNCTION f(a INT) RETURNS INT AS $$ SELECT a + 1 $$;
+CREATE FUNCTION f(a VARCHAR) RETURNS VARCHAR AS $$ SELECT a || '!' $$;
+SELECT f(1);            -- 2
+SELECT f('x');          -- x!
+DROP FUNCTION f(INT);   -- 只删int版本
+SELECT f(1);            -- 报错 90022: int不能隐式转成varchar，找不到 f(int)
+SELECT f('x');          -- x!
+```
 
-粗估：即便只做一个“简化版消解规则”，也需要改上述四层、约 300~400 行并且动到通用对象存储，
-风险会外溢到 `CREATE ALIAS` 与重启回放，不符合“300 行内干净实现”的前提，因此本次不做。
-`PgFunctionParamTest.testOverloadByParameterType` 用 `@Ignore` 保留了 PostgreSQL 期望的行为，
-`PgFunctionParamTest.testOverloadNotSupported` 断言了当前“同名函数不能并存”的现状。
+### 5.1 存储方案：FUNCTION_ALIAS 的 key 带上参数签名
+
+`Schema` 里每类对象都放在 `TransactionalDbObjects` 里，key 原来是 `obj.getName()`。现在
+`Schema.getDbObjectKey()` 对 `SqlFunction` 返回 `名字(参数类型id,...)`（数组参数还带上元素类型），
+其它对象类型原样返回名字，因此：
+
+* `CREATE ALIAS`、`TABLE`、`INDEX` 等共用同一套容器的对象类型**完全不受影响**；
+* `TransactionalDbObjects` 只是新增了“按key存/取”和 `findAll(session)`（同一套多版本可见性规则），
+  原有按名字的方法都转调新方法，语义不变；
+* 数据库启动回放 meta 记录时走的是同一条 `Schema.add` 路径，所以**重启后所有重载都在**；
+* `SCRIPT` 遍历 `getAllSchemaObjects(FUNCTION_ALIAS)` 拿到的是每个重载各一条，`SqlFunction.getDropSQL()`
+  会写成 `DROP FUNCTION IF EXISTS f(INT)`，回放时不会因为重载歧义而失败；
+* `findFunction(name)` 保持“按名字返回一个”，新增 `findFunctions(name)` 返回按 id 排序的候选集合，
+  `DROP/ALTER/CREATE OR REPLACE/IF NOT EXISTS/COMMENT` 用签名在候选集合里定位。
+
+`INFORMATION_SCHEMA.FUNCTION_ALIASES` 里每个重载一行（`PARAMETER_TYPES`/`PARAMETER_TYPE_IDS` 不同）。
+
+### 5.2 消解规则
+
+顺序（数字越小越优先）：
+
+1. **完全匹配**：实参类型 id 和形参类型 id 相同 → 0；
+2. **隐式转换**：PostgreSQL `pg_cast.castcontext='implicit'` 的那部分 → 1；
+3. **没有类型的实参**（`NULL`、字符串字面量，对应 PG 的 unknown 字面量）→ 字符串类型形参记 1、
+   其它类型形参记 2（PG 规则 4.f：优先选字符串类别）；
+4. 其余一律不匹配（`MATCH_NONE`）。
+
+总权重最小的候选胜出；有多个候选并列最小且无法区分时，和 PG 一样报
+`AMBIGUOUS_FUNCTION_NAME_1`（90152，SQLState 42725）。只有一个候选时也做同样的检查，
+类型不兼容就报 `FUNCTION_NOT_FOUND_1`（90022，消息里带实际签名，如 `F(INTEGER)`）。
+
+隐式转换矩阵（`SqlFunction.isImplicitConvertible`）：
+
+| 从 | 到 | 说明 |
+| --- | --- | --- |
+| 同类型 id | 同类型 id | 完全匹配 |
+| TINYINT → SMALLINT/INT/BIGINT/DECIMAL/REAL/DOUBLE | 加宽 | 整数只往更宽的方向转 |
+| SMALLINT → INT/BIGINT/DECIMAL/REAL/DOUBLE | 加宽 | |
+| INT → BIGINT/DECIMAL/REAL/DOUBLE | 加宽 | |
+| BIGINT → DECIMAL/REAL/DOUBLE | 加宽 | |
+| REAL → DOUBLE | 加宽 | |
+| DECIMAL → FLOAT/DOUBLE/整数 | 特殊 | DECIMAL 在 Lealone 里兼作“数值表达式类型还没推导出来”的默认类型（函数体里的参数占位符参与运算时就是 DECIMAL），所以放开 DECIMAL 往其它数值类型的转换，否则嵌套调用会被误判成函数不存在 |
+| CHAR/VARCHAR/TEXT 之间 | 互相 | 字符串类型之间视为隐式 |
+| DATE → TIMESTAMP | 单向 | 反过来不行 |
+| `NULL` / 字符串字面量 → 任意类型 | 无类型实参 | 运行期按形参类型转换，转换失败报 22018 |
+| `int → varchar`、`varchar → int`、`boolean → int`、`double → decimal`、`timestamp → date` 等 | 不允许 | 必须显式 `CAST`，否则报 90022 |
+
+已知与 PostgreSQL 的差异：
+
+* 数值族“加宽”的判断是**类型 id** 级别的，不区分 `INT` 和 `INTEGER`（同一个 id），
+  也不考虑 `NUMERIC(10,2)` 和 `NUMERIC(20,4)` 的差异（只看 `Value.DECIMAL`）；
+* PG 在“多个候选都是隐式转换”时还会用 preferred type（`float8`/`text`/`timestamptz`）再选一次，
+  Lealone 没有这一层，直接报歧义（例如 `f(bigint)` 与 `f(double)` 被 `SMALLINT` 实参调用）；
+* 无类型实参只认 `NULL` 和**字符串字面量**；`CAST('5' AS VARCHAR)` 这种显式转过的常量在解析期
+  已经是 `ValueExpression`，也会被当成无类型（PG 里它是 text，需要隐式/显式转换才行）；
+* `CREATE FUNCTION f(int)` 这种“参数只写类型不写名字”的写法还不支持（参数名必填），
+  和重载无关，是词法层的老限制。
+
+### 5.3 相关文件
+
+| 文件 | 作用 |
+| --- | --- |
+| `Schema.getDbObjectKey/findFunctions/findFunction` | 按签名存放、按名字取候选集合 |
+| `SqlFunction.getOverloadKey/getMatchScore/isImplicitConvertible` | 签名、匹配权重、隐式转换矩阵 |
+| `JavaFunction.resolveOverload` | 按实参静态类型选重载（解析期定不下来就等到 `optimize`） |
+| `CreateSqlFunction/DropFunctionAlias/AlterSqlFunction` | 按签名创建/替换/删除/修改 |
+| `FunctionOverloadTest` | 重载、DROP、OR REPLACE、SCRIPT 往返、重启、NULL/无类型实参、隐式转换矩阵 |
 
 ## 六、已知限制 / 额外发现但没修的问题
 

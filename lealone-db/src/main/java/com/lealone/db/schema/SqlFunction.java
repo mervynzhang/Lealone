@@ -311,7 +311,7 @@ public class SqlFunction extends FunctionAlias {
 
     /**
      * 判断函数是否匹配DROP FUNCTION/ALTER FUNCTION里写的参数类型列表。
-     * 不支持重载，所以只比较入参的类型；没写参数类型列表时总是匹配。
+     * 只比较入参的类型；没写参数类型列表时总是匹配。
      */
     public boolean matchesSignature(int[] argumentTypeIds) {
         if (argumentTypeIds == null) {
@@ -326,6 +326,163 @@ public class SqlFunction extends FunctionAlias {
             }
         }
         return true;
+    }
+
+    /**
+     * 同名函数按参数类型重载，所以schema里存函数对象的key要带上入参签名。
+     * 参数类型相同的函数对应同一个key，不同时各占一个key。
+     */
+    public String getOverloadKey() {
+        return getOverloadKey(getName());
+    }
+
+    public String getOverloadKey(String name) {
+        if (parameterTypeIds == null) {
+            return name;
+        }
+        StatementBuilder buff = new StatementBuilder(name).append('(');
+        for (int i = 0; i < inputParameterCount; i++) {
+            int index = inputIndexes[i];
+            buff.appendExceptFirst(",");
+            buff.append(parameterTypeIds[index]);
+            if (parameterTypeIds[index] == Value.ARRAY) {
+                buff.append('/').append(parameterComponentTypes[index]);
+            }
+        }
+        return buff.append(')').toString();
+    }
+
+    /**
+     * 入参的类型id列表，用于重载消解和按签名查找函数。
+     */
+    public int[] getInputParameterTypeIds() {
+        int[] types = new int[inputParameterCount];
+        for (int i = 0; i < inputParameterCount; i++) {
+            types[i] = parameterTypeIds[inputIndexes[i]];
+        }
+        return types;
+    }
+
+    /**
+     * 数组入参的元素类型，非数组参数为-1。
+     */
+    public int getInputParameterComponentType(int inputIndex) {
+        return parameterComponentTypes[inputIndexes[inputIndex]];
+    }
+
+    public int getInputParameterCount() {
+        return inputParameterCount;
+    }
+
+    public boolean isVariadic() {
+        return variadic;
+    }
+
+    /** 实参类型和参数类型完全一致，匹配程度最高 */
+    public static final int MATCH_EXACT = 0;
+    /** 实参类型可以隐式转成参数类型(PostgreSQL的castcontext=implicit) */
+    public static final int MATCH_IMPLICIT = 1;
+    /** 实参是没有类型的字面量(比如'5')或者NULL，由参数类型决定它的类型 */
+    public static final int MATCH_UNTYPED = 2;
+    /** 类型不兼容，需要显式CAST，这个函数不可能是被调用的重载 */
+    public static final int MATCH_NONE = -1;
+
+    /**
+     * 计算实参类型和函数声明的匹配程度，返回值越小匹配越好，MATCH_NONE表示不匹配。
+     * 实参个数必须和入参个数一致，VARIADIC参数可以展开成任意多个实参。
+     */
+    public int getMatchScore(int[] argumentTypeIds) {
+        if (argumentTypeIds == null || parameterTypeIds == null) {
+            return MATCH_NONE;
+        }
+        int fixedCount = variadic ? inputParameterCount - 1 : inputParameterCount;
+        if (variadic ? argumentTypeIds.length < fixedCount : argumentTypeIds.length != fixedCount) {
+            return MATCH_NONE;
+        }
+        int score = 0;
+        for (int i = 0; i < argumentTypeIds.length; i++) {
+            int index = i < fixedCount ? inputIndexes[i] : inputIndexes[fixedCount];
+            int parameterType = parameterTypeIds[index];
+            // VARIADIC展开出来的实参匹配的是数组元素类型
+            if (variadic && i >= fixedCount) {
+                parameterType = parameterComponentTypes[index];
+            }
+            int match = getTypeMatch(argumentTypeIds[i], parameterType);
+            if (match == MATCH_NONE) {
+                return MATCH_NONE;
+            }
+            score += match;
+        }
+        return score;
+    }
+
+    private static int getTypeMatch(int argumentType, int parameterType) {
+        if (argumentType == parameterType) {
+            return MATCH_EXACT;
+        }
+        // 实参没有类型(NULL或者字符串字面量)时由参数类型决定，
+        // 和PostgreSQL一样优先选字符串类型的重载
+        if (argumentType == Value.UNKNOWN || argumentType == Value.NULL) {
+            return DataType.isStringType(parameterType) ? MATCH_IMPLICIT : MATCH_UNTYPED;
+        }
+        if (parameterType == Value.UNKNOWN || parameterType == Value.NULL) {
+            return MATCH_UNTYPED;
+        }
+        if (isImplicitConvertible(argumentType, parameterType)) {
+            return MATCH_IMPLICIT;
+        }
+        return MATCH_NONE;
+    }
+
+    /**
+     * 实参类型能否隐式转成参数类型。只覆盖PostgreSQL里castcontext为implicit的类型对，
+     * 比如整数加宽、数值转浮点、字符串类型之间、DATE转TIMESTAMP；
+     * 而 int转varchar、varchar转int、boolean转int 这些在PostgreSQL里都不是隐式转换，
+     * 必须显式CAST，否则函数调用会报函数不存在。
+     */
+    public static boolean isImplicitConvertible(int fromType, int toType) {
+        if (fromType == toType) {
+            return true;
+        }
+        // 字符串类型之间可以隐式转换，比如VARCHAR到CHAR
+        if (DataType.isStringType(fromType) && DataType.isStringType(toType)) {
+            return true;
+        }
+        // DECIMAL在Lealone里还兼作"数值类型还没推导出来"的默认类型(比如函数体里没类型的
+        // 参数占位符参与运算时就是DECIMAL)，所以DECIMAL转其它数值类型也按隐式转换处理
+        if (fromType == Value.DECIMAL && isNumericType(toType)) {
+            return true;
+        }
+        switch (toType) {
+        // 整数只能往更宽的类型转
+        case Value.SHORT:
+            return fromType == Value.BYTE;
+        case Value.INT:
+            return fromType == Value.BYTE || fromType == Value.SHORT;
+        case Value.LONG:
+            return fromType == Value.BYTE || fromType == Value.SHORT || fromType == Value.INT;
+        // 整数和REAL可以隐式转成DECIMAL/DOUBLE
+        case Value.DECIMAL:
+            return isIntegerType(fromType) || fromType == Value.FLOAT;
+        case Value.DOUBLE:
+            return isIntegerType(fromType) || fromType == Value.FLOAT || fromType == Value.DECIMAL;
+        case Value.FLOAT:
+            return isIntegerType(fromType);
+        // PostgreSQL允许DATE隐式转TIMESTAMP，反过来不行
+        case Value.TIMESTAMP:
+            return fromType == Value.DATE;
+        default:
+            return false;
+        }
+    }
+
+    private static boolean isIntegerType(int type) {
+        return type == Value.BYTE || type == Value.SHORT || type == Value.INT || type == Value.LONG;
+    }
+
+    private static boolean isNumericType(int type) {
+        return isIntegerType(type) || type == Value.DECIMAL || type == Value.DOUBLE
+                || type == Value.FLOAT;
     }
 
     // 用于报错信息的签名，例如 F(INT, VARCHAR)
@@ -557,9 +714,25 @@ public class SqlFunction extends FunctionAlias {
         return Double.toString(value);
     }
 
+    // 同名函数可能有多个重载，DROP语句必须写上参数类型，否则SCRIPT回放时删不掉指定的重载
     @Override
     public String getDropSQL() {
-        return "DROP FUNCTION IF EXISTS " + getSQL();
+        return "DROP FUNCTION IF EXISTS " + getSQL() + '(' + getInputParameterTypesSQL() + ')';
+    }
+
+    // DROP FUNCTION name(types)里的参数类型列表，空列表表示没有参数
+    private String getInputParameterTypesSQL() {
+        StatementBuilder buff = new StatementBuilder();
+        for (int i = 0; i < inputParameterCount; i++) {
+            int index = inputIndexes[i];
+            buff.appendExceptFirst(", ");
+            if (parameterTypes != null && index < parameterTypes.length) {
+                buff.append(parameterTypes[index]);
+            } else {
+                buff.append(DataType.getDataType(parameterTypeIds[index]).name);
+            }
+        }
+        return buff.toString();
     }
 
     @Override
