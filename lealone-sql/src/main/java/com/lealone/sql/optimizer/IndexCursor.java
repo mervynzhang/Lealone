@@ -260,6 +260,11 @@ public class IndexCursor implements Cursor {
     }
 
     @Override
+    public boolean isSearchRowUpToDate() {
+        return cursor == null || cursor.isSearchRowUpToDate();
+    }
+
+    @Override
     public boolean next() {
         while (true) {
             if (cursor == null) {
