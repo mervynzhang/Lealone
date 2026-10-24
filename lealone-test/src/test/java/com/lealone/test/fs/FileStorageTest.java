@@ -82,6 +82,25 @@ public class FileStorageTest extends FsTestBase {
         fs.close();
     }
 
+    // 块长度为正但超出文件剩余范围(不是 Integer.MAX_VALUE 那种极端值)时也是同一类损坏:
+    // 必须按读到末尾处理(不能按这个长度去分配内存), 同时留一条 warn 日志便于排查
+    @Test
+    public void testChunkLengthExceedsFileSize() throws Exception {
+        String fileName = joinDirs("FileStorageTest", "ChunkLengthTooLarge.dat");
+        byte[] bytes = new byte[Constants.FILE_BLOCK_SIZE * 2];
+        // 声明一个比文件剩余空间大得多的块, 但还远没到 Integer.MAX_VALUE
+        ByteBuffer.wrap(bytes).putInt(Constants.FILE_BLOCK_SIZE * 1024);
+        OutputStream out = FileUtils.newOutputStream(fileName, false);
+        out.write(bytes);
+        out.close();
+
+        FileStorage fs = FileStorage.open(null, fileName, "r");
+        FileStorageInputStream in = new FileStorageInputStream(fs, null, false, false);
+        assertEquals(-1, in.read());
+        in.close();
+        fs.close();
+    }
+
     private void testStream(String compressionAlgorithm) throws Exception {
         boolean compression = compressionAlgorithm != null;
         String fileName = "FileStorageStreamTest.dat";
