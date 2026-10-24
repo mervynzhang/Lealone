@@ -833,6 +833,58 @@ public class ServerSession extends SessionBase implements InternalSession {
         sessionStatus = SessionStatus.TRANSACTION_NOT_START;
     }
 
+    /**
+     * 立刻关闭一个嵌套连接(autoCommit场景用)。
+     * 自动提交时函数体的语句已经各自提交了, 不需要攒到语句结束再统一关闭;
+     * 大表上逐行调用函数时嵌套连接数量是O(行数), 攒着既吃内存又让调度器要扫的session数变大。
+     */
+    public void closeNestedConnection(Connection conn) {
+        removeNestedConnection(conn);
+        try {
+            conn.close();
+        } catch (Exception e) {
+            // 关闭失败不影响已经取到的返回值
+        }
+    }
+
+    private void removeNestedConnection(Connection conn) {
+        if (nestedConnections == null) {
+            return;
+        }
+        int size = nestedConnections.size();
+        // 刚创建的连接通常在末尾(LIFO), 这样摘链是O(1)
+        if (size > 0 && nestedConnections.get(size - 1) == conn) {
+            nestedConnections.remove(size - 1);
+        } else {
+            nestedConnections.remove(conn);
+        }
+        if (nestedConnections.isEmpty()) {
+            nestedConnections = null;
+        }
+    }
+
+    /**
+     * 立刻关闭一个嵌套会话(autoCommit场景用), 语义和closeNestedConnection一样。
+     */
+    public void closeNestedSession(ServerSession nestedSession) {
+        if (nestedSessions != null) {
+            int size = nestedSessions.size();
+            if (size > 0 && nestedSessions.get(size - 1) == nestedSession) {
+                nestedSessions.remove(size - 1);
+            } else {
+                nestedSessions.remove(nestedSession);
+            }
+            if (nestedSessions.isEmpty()) {
+                nestedSessions = null;
+            }
+        }
+        try {
+            nestedSession.close();
+        } catch (Exception e) {
+            // 关闭失败不影响已经取到的返回值
+        }
+    }
+
     private void commitOrRollbackNestedConnections(boolean commit) {
         if (nestedConnections != null) {
             for (Connection conn : nestedConnections) {

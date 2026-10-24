@@ -60,6 +60,9 @@ public class PlpgSqlFunction extends SqlFunction {
             if (autoCommit)
                 nestedSession.commit();
             success = true;
+            // 提交完就可以立刻关掉嵌套会话, 不用攒到语句结束(大表逐行调用时是O(行数)个)
+            if (autoCommit)
+                session.closeNestedSession(nestedSession);
             return value;
         } finally {
             // 异常离开函数时整个函数体的修改都要回滚，对应PostgreSQL的语句级子事务

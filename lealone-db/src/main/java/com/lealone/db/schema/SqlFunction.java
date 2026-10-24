@@ -1224,36 +1224,49 @@ public class SqlFunction extends FunctionAlias {
      */
     protected Value executeFunction(ServerSession session, Value[] values) {
         Connection conn = createNestedConnection(session);
+        // 外层是自动提交时, 函数体的语句已经各自提交, 用完就可以立刻关掉嵌套连接,
+        // 不必等到整条语句结束(否则大表上逐行调用函数会把嵌套连接攒成O(行数)个)
+        boolean autoClose = session.isAutoCommit();
+        boolean success = false;
         try {
             // 函数体里的表名按调用方当前的schema解析
             String schemaName = session.getCurrentSchemaName();
             if (!Constants.SCHEMA_MAIN.equals(schemaName)) {
                 conn.setSchema(schemaName);
             }
+            Value result;
             if (atomicBodySqls != null) {
-                return executeAtomicBody(session, conn, values);
-            }
-            PreparedStatement prep = conn.prepareStatement(bodySql);
-            try {
-                for (int i = 0; i < bodyParameterIndexes.length; i++) {
-                    prep.setObject(i + 1, values[bodyParameterIndexes[i]]);
-                }
-                if (isPlainVoidReturn()) {
-                    // RETURNS VOID时函数体可以是普通DML, 执行完丢弃结果并返回NULL
-                    executeVoidBody(prep);
-                    return ValueNull.INSTANCE;
-                }
-                ResultSet rs = prep.executeQuery();
+                result = executeAtomicBody(session, conn, values);
+            } else {
+                PreparedStatement prep = conn.prepareStatement(bodySql);
                 try {
-                    return valueFromResultSet(session, rs);
+                    for (int i = 0; i < bodyParameterIndexes.length; i++) {
+                        prep.setObject(i + 1, values[bodyParameterIndexes[i]]);
+                    }
+                    if (isPlainVoidReturn()) {
+                        // RETURNS VOID时函数体可以是普通DML, 执行完丢弃结果并返回NULL
+                        executeVoidBody(prep);
+                        result = ValueNull.INSTANCE;
+                    } else {
+                        ResultSet rs = prep.executeQuery();
+                        try {
+                            result = valueFromResultSet(session, rs);
+                        } finally {
+                            rs.close();
+                        }
+                    }
                 } finally {
-                    rs.close();
+                    prep.close();
                 }
-            } finally {
-                prep.close();
             }
+            success = true;
+            return result;
         } catch (SQLException e) {
             throw DbException.convert(e);
+        } finally {
+            if (success && autoClose) {
+                session.closeNestedConnection(conn);
+            }
         }
     }
 
