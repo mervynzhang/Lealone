@@ -128,6 +128,11 @@ public class CompositeTypeTest extends SqlTestBase {
         executeQuery("SELECT * FROM comp_setof_sql()");
         assertEquals(3, getIntValue(1));
         assertEquals("c", getStringValue(2));
+        executeUpdate("CREATE OR REPLACE FUNCTION comp_setof_param(c comp) RETURNS SETOF comp "
+                + "LANGUAGE sql AS $$ SELECT c $$");
+        executeQuery("SELECT * FROM comp_setof_param(ROW(11, 's')::comp)");
+        assertEquals(11, getIntValue(1));
+        assertEquals("s", getStringValue(2));
         executeUpdate("CREATE OR REPLACE FUNCTION comp_setof_next() RETURNS SETOF comp "
                 + "LANGUAGE plpgsql AS $$ BEGIN RETURN NEXT ROW(5, 'n')::comp; END; $$");
         executeQuery("SELECT * FROM comp_setof_next()");
@@ -160,6 +165,7 @@ public class CompositeTypeTest extends SqlTestBase {
         executeUpdate("DROP FUNCTION comp_setof");
         executeUpdate("DROP FUNCTION comp_setof_sql");
         executeUpdate("DROP FUNCTION comp_setof_next");
+        executeUpdate("DROP FUNCTION comp_setof_param");
         executeUpdate("DROP TYPE comp");
     }
 }
