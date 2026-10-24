@@ -40,6 +40,7 @@ import com.lealone.db.result.SortOrder;
 import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.Sequence;
+import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.schema.UserAggregate;
 import com.lealone.db.schema.UserDataType;
 import com.lealone.db.service.Service;
@@ -5132,74 +5133,141 @@ public class SQLParserBase implements SQLParser {
         read("(");
         ArrayList<String> parameterNames = Utils.newSmallArrayList();
         ArrayList<String> parameterTypes = Utils.newSmallArrayList();
+        ArrayList<Integer> parameterTypeIds = Utils.newSmallArrayList();
+        ArrayList<Integer> parameterComponentTypes = Utils.newSmallArrayList();
+        ArrayList<Integer> parameterModes = Utils.newSmallArrayList();
+        boolean variadic = false;
+        int variadicParameterIndex = -1;
         if (!readIf(")")) {
+            int parameterIndex = 0;
             do {
-                String parameterName = readColumnIdentifier();
-                if (isDuplicateParameter(parameterNames, parameterName)) {
-                    throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
-                            "duplicate parameter name: " + parameterName);
+                parameterIndex++;
+                // PostgreSQL风格的参数模式，默认是IN
+                int mode = SqlFunction.PARAM_IN;
+                boolean isVariadic = false;
+                if (readIf("IN")) {
+                    if (readIf("OUT")) {
+                        mode = SqlFunction.PARAM_INOUT;
+                    }
+                } else if (readIf("OUT")) {
+                    mode = SqlFunction.PARAM_OUT;
+                } else if (readIf("INOUT")) {
+                    mode = SqlFunction.PARAM_INOUT;
+                } else if (readIf("VARIADIC")) {
+                    isVariadic = true;
                 }
-                Column column = parseColumnWithType(null);
+                String parameterName;
+                Column column;
+                // OUT/INOUT/VARIADIC参数可以只写类型不写名字(名字只用于在函数体里引用)
+                if ((mode != SqlFunction.PARAM_IN || isVariadic) && isDataTypeName(currentToken)) {
+                    parameterName = "$" + parameterIndex;
+                    column = parseColumnWithType(null);
+                } else {
+                    parameterName = readColumnIdentifier();
+                    if (isDuplicateParameter(parameterNames, parameterName)) {
+                        throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                                "duplicate parameter name: " + parameterName);
+                    }
+                    column = parseColumnWithType(null);
+                }
+                // 数组类型: PostgreSQL的 type[] 或 type ARRAY 写法
+                int type = column.getType();
+                int componentType = -1;
+                String typeSql = column.getOriginalSQL();
+                if (readIf("[")) {
+                    read("]");
+                    componentType = type;
+                    type = Value.ARRAY;
+                    typeSql += "[]";
+                } else if (readIf("ARRAY")) {
+                    componentType = type;
+                    type = Value.ARRAY;
+                    typeSql += "[]";
+                } else if (type == Value.ARRAY) {
+                    // 只写ARRAY时不知道元素类型
+                    componentType = Value.UNKNOWN;
+                }
+                if (isVariadic) {
+                    if (type != Value.ARRAY) {
+                        throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                                "VARIADIC parameter must be an array type: " + parameterName);
+                    }
+                    variadic = true;
+                    variadicParameterIndex = parameterIndex;
+                }
                 parameterNames.add(parameterName);
-                parameterTypes.add(column.getOriginalSQL());
+                parameterTypes.add(typeSql);
+                parameterTypeIds.add(type);
+                parameterComponentTypes.add(componentType);
+                parameterModes.add(mode);
             } while (readIf(","));
             read(")");
         }
         int count = parameterNames.size();
+        if (variadic && variadicParameterIndex != count) {
+            throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                    "VARIADIC parameter must be the last parameter");
+        }
         String[] names = new String[count];
         String[] types = new String[count];
         parameterNames.toArray(names);
         parameterTypes.toArray(types);
-        command.setParameters(names, types);
+        command.setParameters(names, types, toIntArray(parameterTypeIds),
+                toIntArray(parameterComponentTypes), toIntArray(parameterModes), variadic);
 
-        read("RETURNS");
-        if (readIf("SETOF")) {
-            Column returnColumn = parseColumnWithType(null);
-            command.setSetofReturnType(returnColumn.getOriginalSQL(), returnColumn.getType(),
-                    returnColumn.getPrecision(), returnColumn.getScale());
-        } else if (readIf("TABLE")) {
-            read("(");
-            ArrayList<String> columnNames = Utils.newSmallArrayList();
-            ArrayList<String> columnTypeSqls = Utils.newSmallArrayList();
-            ArrayList<Integer> columnTypes = Utils.newSmallArrayList();
-            ArrayList<Long> columnPrecisions = Utils.newSmallArrayList();
-            ArrayList<Integer> columnScales = Utils.newSmallArrayList();
-            do {
-                String columnName = readColumnIdentifier();
-                if (isDuplicateParameter(columnNames, columnName)) {
-                    throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
-                            "duplicate column name: " + columnName);
+        if (readIf("RETURNS")) {
+            if (readIf("SETOF")) {
+                Column returnColumn = parseColumnWithType(null);
+                command.setSetofReturnType(returnColumn.getOriginalSQL(), returnColumn.getType(),
+                        returnColumn.getPrecision(), returnColumn.getScale());
+            } else if (readIf("TABLE")) {
+                read("(");
+                ArrayList<String> columnNames = Utils.newSmallArrayList();
+                ArrayList<String> columnTypeSqls = Utils.newSmallArrayList();
+                ArrayList<Integer> columnTypes = Utils.newSmallArrayList();
+                ArrayList<Long> columnPrecisions = Utils.newSmallArrayList();
+                ArrayList<Integer> columnScales = Utils.newSmallArrayList();
+                do {
+                    String columnName = readColumnIdentifier();
+                    if (isDuplicateParameter(columnNames, columnName)) {
+                        throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                                "duplicate column name: " + columnName);
+                    }
+                    Column column = parseColumnWithType(null);
+                    columnNames.add(columnName);
+                    columnTypeSqls.add(column.getOriginalSQL());
+                    columnTypes.add(column.getType());
+                    columnPrecisions.add(column.getPrecision());
+                    columnScales.add(column.getScale());
+                } while (readIf(","));
+                read(")");
+                int columnCount = columnNames.size();
+                String[] columnNameArray = new String[columnCount];
+                String[] columnTypeSqlArray = new String[columnCount];
+                int[] columnTypeArray = new int[columnCount];
+                long[] columnPrecisionArray = new long[columnCount];
+                int[] columnScaleArray = new int[columnCount];
+                for (int i = 0; i < columnCount; i++) {
+                    columnNameArray[i] = columnNames.get(i);
+                    columnTypeSqlArray[i] = columnTypeSqls.get(i);
+                    columnTypeArray[i] = columnTypes.get(i);
+                    columnPrecisionArray[i] = columnPrecisions.get(i);
+                    columnScaleArray[i] = columnScales.get(i);
                 }
-                Column column = parseColumnWithType(null);
-                columnNames.add(columnName);
-                columnTypeSqls.add(column.getOriginalSQL());
-                columnTypes.add(column.getType());
-                columnPrecisions.add(column.getPrecision());
-                columnScales.add(column.getScale());
-            } while (readIf(","));
-            read(")");
-            int columnCount = columnNames.size();
-            String[] columnNameArray = new String[columnCount];
-            String[] columnTypeSqlArray = new String[columnCount];
-            int[] columnTypeArray = new int[columnCount];
-            long[] columnPrecisionArray = new long[columnCount];
-            int[] columnScaleArray = new int[columnCount];
-            for (int i = 0; i < columnCount; i++) {
-                columnNameArray[i] = columnNames.get(i);
-                columnTypeSqlArray[i] = columnTypeSqls.get(i);
-                columnTypeArray[i] = columnTypes.get(i);
-                columnPrecisionArray[i] = columnPrecisions.get(i);
-                columnScaleArray[i] = columnScales.get(i);
+                command.setTableReturnType(columnNameArray, columnTypeSqlArray, columnTypeArray,
+                        columnPrecisionArray, columnScaleArray);
+            } else {
+                Column returnColumn = parseColumnWithType(null);
+                command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
             }
-            command.setTableReturnType(columnNameArray, columnTypeSqlArray, columnTypeArray,
-                    columnPrecisionArray, columnScaleArray);
         } else {
-            Column returnColumn = parseColumnWithType(null);
-            command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
+            // 有OUT/INOUT参数时可以省略RETURNS，返回类型由OUT参数推导
+            command.setReturnType(null, Value.UNKNOWN);
         }
 
-        // LANGUAGE子句和易变性关键字都是可选的，且顺序任意
+        // LANGUAGE子句、易变性关键字和STRICT都是可选的，且顺序任意
         boolean deterministic = false;
+        boolean strict = false;
         while (true) {
             if (readIf("LANGUAGE")) {
                 String language = readStringOrIdentifier();
@@ -5211,6 +5279,15 @@ public class SQLParserBase implements SQLParser {
                 deterministic = true;
             } else if (readIf("VOLATILE")) {
                 deterministic = false;
+            } else if (readIf("STRICT")) {
+                strict = true;
+            } else if (readIf("RETURNS")) {
+                // RETURNS NULL ON NULL INPUT是STRICT的标准SQL写法
+                read("NULL");
+                read("ON");
+                read("NULL");
+                read("INPUT");
+                strict = true;
             } else {
                 break;
             }
@@ -5218,6 +5295,7 @@ public class SQLParserBase implements SQLParser {
         read("AS");
         String body = readString();
         command.setDeterministic(deterministic);
+        command.setStrict(strict);
         ArrayList<Integer> bodyParameterIndexes = Utils.newSmallArrayList();
         String bodySql = SqlFunctionBodyParser.parseBody(session, body, parameterNames,
                 bodyParameterIndexes);
@@ -5237,6 +5315,22 @@ public class SQLParserBase implements SQLParser {
             }
         }
         return false;
+    }
+
+    // 判断当前token是不是数据类型名，用于识别省略了名字的OUT/INOUT参数
+    private boolean isDataTypeName(String token) {
+        if (token == null) {
+            return false;
+        }
+        return DataType.getTypeByName(StringUtils.toUpperEnglish(token)) != null;
+    }
+
+    private static int[] toIntArray(ArrayList<Integer> list) {
+        int[] array = new int[list.size()];
+        for (int i = 0; i < array.length; i++) {
+            array[i] = list.get(i);
+        }
+        return array;
     }
 
     protected StatementBase parseDropSqlFunction() {

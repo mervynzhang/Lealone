@@ -24,6 +24,10 @@ public class CreateSqlFunction extends SchemaStatement {
     private String functionName;
     private String[] parameterNames;
     private String[] parameterTypes;
+    private int[] parameterTypeIds;
+    private int[] parameterComponentTypes;
+    private int[] parameterModes;
+    private boolean variadic;
     private String returnTypeSql;
     private int returnType;
     // RETURNS SETOF/RETURNS TABLE声明的结果列
@@ -38,6 +42,7 @@ public class CreateSqlFunction extends SchemaStatement {
     private String bodySql;
     private int[] bodyParameterIndexes;
     private boolean deterministic;
+    private boolean strict;
     private boolean ifNotExists;
     private boolean orReplace;
 
@@ -54,9 +59,14 @@ public class CreateSqlFunction extends SchemaStatement {
         this.functionName = functionName;
     }
 
-    public void setParameters(String[] parameterNames, String[] parameterTypes) {
+    public void setParameters(String[] parameterNames, String[] parameterTypes, int[] parameterTypeIds,
+            int[] parameterComponentTypes, int[] parameterModes, boolean variadic) {
         this.parameterNames = parameterNames;
         this.parameterTypes = parameterTypes;
+        this.parameterTypeIds = parameterTypeIds;
+        this.parameterComponentTypes = parameterComponentTypes;
+        this.parameterModes = parameterModes;
+        this.variadic = variadic;
     }
 
     public void setReturnType(String returnTypeSql, int returnType) {
@@ -107,6 +117,10 @@ public class CreateSqlFunction extends SchemaStatement {
         this.deterministic = deterministic;
     }
 
+    public void setStrict(boolean strict) {
+        this.strict = strict;
+    }
+
     public void setIfNotExists(boolean ifNotExists) {
         this.ifNotExists = ifNotExists;
     }
@@ -135,15 +149,17 @@ public class CreateSqlFunction extends SchemaStatement {
         }
         int id = getObjectId();
         SqlFunction function = new SqlFunction(schema, id, functionName);
-        function.setParameters(parameterNames, parameterTypes);
+        function.setParameters(parameterNames, parameterTypes, parameterTypeIds,
+                parameterComponentTypes, parameterModes, variadic);
+        // setof/table的结果列要先设置，setReturnType里要检查它和OUT/INOUT参数是否冲突
         if (returnColumns) {
             function.setReturnColumns(returnsTable, columnNames, columnTypeSqls, columnTypes,
                     columnPrecisions, columnScales);
-        } else {
-            function.setReturnType(returnTypeSql, returnType);
         }
+        function.setReturnType(returnTypeSql, returnType);
         function.setBody(body, bodySql, bodyParameterIndexes);
         function.setDeterministic(deterministic);
+        function.setStrict(strict);
         schema.add(session, function, lock);
         return 0;
     }
