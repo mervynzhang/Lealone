@@ -83,10 +83,16 @@ public class ExecuteService extends ExecuteStatement {
         }
         Object obj = Service.execute(session, serviceName, methodName, methodArgs);
         Value v = DataType.convertToValue(session, obj, ValueNull.UNKNOWN);
-        // 结果列声明为STRING，Map结果按JSON返回
-        if (v.getType() == Value.MAP) {
+        // 模型结果是没有类型的Map，按JSON返回，客户端(比如ORM模型)才能直接解码；
+        // 声明为map/list/set的返回值要原样传回客户端
+        if (v.getType() == Value.MAP && !isCollectionReturnType()) {
             return ValueString.get(((ValueMap) v).getJson());
         }
         return v;
+    }
+
+    private boolean isCollectionReturnType() {
+        int type = Service.getServiceMethodReturnType(session, serviceName, methodName);
+        return type == Value.MAP || type == Value.LIST || type == Value.SET;
     }
 }
