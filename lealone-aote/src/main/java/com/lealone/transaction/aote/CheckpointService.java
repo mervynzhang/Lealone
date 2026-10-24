@@ -278,7 +278,17 @@ public class CheckpointService implements Runnable {
         // 否则索引map会保存成不完整的状态，而checkpoint之后redo log里的对应记录会被截断。
         // 如果还有一些索引操作所属的事务没有提交，只能把lastTransactionId限制在它们之前，
         // 这样重启时redo log会把这些索引操作重做一遍。
-        long pendingTransactionId = aote.runBeforeCheckpointHandler();
+        long pendingTransactionId;
+        try {
+            pendingTransactionId = aote.runBeforeCheckpointHandler();
+        } catch (Throwable t) {
+            // 前置处理器失败(比如flush索引操作时出错)，无法确定哪些索引操作还没生效。
+            // 这时候绝不能保存: 保存会把redo log截断到当前lastTransactionId，
+            // 那些还没写进索引map的操作就永久丢了(重启后走索引查不到)。
+            // 放弃本次检查点, 让redo log保持原样, 下次检查点再试。
+            logger.error("Skip this checkpoint: failed to run before checkpoint handler", t);
+            return;
+        }
         if (pendingTransactionId > 0 && pendingTransactionId < lastTransactionId)
             lastTransactionId = pendingTransactionId;
         try {
