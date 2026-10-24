@@ -33,6 +33,7 @@ public class CreateSqlFunction extends SchemaStatement {
     private String bodySql;
     private int[] bodyParameterIndexes;
     private boolean deterministic;
+    private boolean strict;
     private boolean ifNotExists;
     private boolean orReplace;
 
@@ -80,6 +81,10 @@ public class CreateSqlFunction extends SchemaStatement {
         this.deterministic = deterministic;
     }
 
+    public void setStrict(boolean strict) {
+        this.strict = strict;
+    }
+
     public void setIfNotExists(boolean ifNotExists) {
         this.ifNotExists = ifNotExists;
     }
@@ -113,6 +118,7 @@ public class CreateSqlFunction extends SchemaStatement {
         function.setReturnType(returnTypeSql, returnType);
         function.setBody(body, bodySql, bodyParameterIndexes);
         function.setDeterministic(deterministic);
+        function.setStrict(strict);
         schema.add(session, function, lock);
         return 0;
     }

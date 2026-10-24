@@ -121,6 +121,50 @@ public class PgFunctionParamTest extends SqlTestBase {
         assertEquals(42, getIntValue(1));
     }
 
+    // STRICT: 任一入参为NULL时不执行函数体, 直接返回NULL
+    @Test
+    public void testStrict() throws Exception {
+        executeUpdate(
+                "CREATE OR REPLACE FUNCTION p_strict_div(a INT) RETURNS INT STRICT AS $$ SELECT 1 / a $$");
+        executeQuery("SELECT p_strict_div(2)");
+        assertEquals(0, getIntValue(1));
+
+        // 入参是0时函数体会真的执行, 报除零错误
+        executeQueryThanAssertErrorCode("SELECT p_strict_div(0)", ErrorCode.DIVISION_BY_ZERO_1);
+
+        // 入参是NULL时函数体不执行, 所以不会除零, 直接返回NULL
+        executeQuery("SELECT p_strict_div(NULL)");
+        assertNull(getStringValue(1));
+
+        // 多个入参时任一为NULL就不执行
+        executeUpdate("CREATE OR REPLACE FUNCTION p_strict_add(a INT, b INT) RETURNS INT STRICT "
+                + "AS $$ SELECT a + b $$");
+        executeQuery("SELECT p_strict_add(1, NULL), p_strict_add(NULL, 1), p_strict_add(1, 2)");
+        assertNull(getStringValue(1));
+        assertNull(getStringValue(2));
+        assertEquals(3, getIntValue(3));
+
+        // STRICT作用于入参, OUT参数不算入参
+        executeUpdate("CREATE OR REPLACE FUNCTION p_strict_out(IN a INT, OUT b INT) STRICT "
+                + "AS $$ SELECT a + 1 $$");
+        executeQuery("SELECT p_strict_out(NULL)");
+        assertNull(getStringValue(1));
+
+        // 标准SQL写法 RETURNS NULL ON NULL INPUT 等价于STRICT
+        executeUpdate("CREATE OR REPLACE FUNCTION p_strict_sql(a INT) RETURNS INT "
+                + "RETURNS NULL ON NULL INPUT AS $$ SELECT 1 / a $$");
+        executeQuery("SELECT p_strict_sql(NULL)");
+        assertNull(getStringValue(1));
+
+        // STRICT要能被持久化和回放
+        String createSql = getCreateSql("P_STRICT_DIV");
+        assertTrue(createSql, createSql.contains(" STRICT "));
+        executeUpdate("DROP FUNCTION p_strict_div");
+        executeUpdate(createSql);
+        executeQuery("SELECT p_strict_div(4)");
+        assertEquals(0, getIntValue(1));
+    }
+
     // 从SCRIPT的输出里找出指定函数的CREATE FUNCTION语句
     private String getCreateSql(String functionName) {
         String prefix = "CREATE FUNCTION " + functionName;

@@ -57,6 +57,7 @@ public class SqlFunction extends FunctionAlias {
     private int[] inputIndexes; // 入参在参数列表中的下标
     private int[] outputIndexes; // 返回列对应的参数下标
     private int inputParameterCount;
+    private boolean strict;
 
     private String returnTypeSql;
     private int returnType;
@@ -148,6 +149,10 @@ public class SqlFunction extends FunctionAlias {
         }
     }
 
+    public void setStrict(boolean strict) {
+        this.strict = strict;
+    }
+
     /**
      * 设置函数体。
      *
@@ -200,6 +205,9 @@ public class SqlFunction extends FunctionAlias {
         if (outputIndexes.length == 0) {
             buff.append(" RETURNS ").append(returnTypeSql);
         }
+        if (strict) {
+            buff.append(" STRICT");
+        }
         buff.append(isDeterministic() ? " IMMUTABLE" : " VOLATILE");
         buff.append(" AS ").append(StringUtils.quoteStringSQL(body));
         return buff.toString();
@@ -225,6 +233,14 @@ public class SqlFunction extends FunctionAlias {
         Arrays.fill(values, ValueNull.INSTANCE);
         for (int i = 0; i < inputParameterCount; i++) {
             values[inputIndexes[i]] = args[i].getValue(session);
+        }
+        if (strict) {
+            // 任一入参为NULL时不执行函数体, 直接返回NULL
+            for (int index : inputIndexes) {
+                if (values[index] == ValueNull.INSTANCE) {
+                    return ValueNull.INSTANCE;
+                }
+            }
         }
         Connection conn = session.createNestedConnection(false);
         try {

@@ -5187,8 +5187,9 @@ public class SQLParserBase implements SQLParser {
             command.setReturnType(null, Value.UNKNOWN);
         }
 
-        // LANGUAGE子句和易变性关键字都是可选的，且顺序任意
+        // LANGUAGE子句、易变性关键字和STRICT都是可选的，且顺序任意
         boolean deterministic = false;
+        boolean strict = false;
         while (true) {
             if (readIf("LANGUAGE")) {
                 String language = readStringOrIdentifier();
@@ -5200,6 +5201,15 @@ public class SQLParserBase implements SQLParser {
                 deterministic = true;
             } else if (readIf("VOLATILE")) {
                 deterministic = false;
+            } else if (readIf("STRICT")) {
+                strict = true;
+            } else if (readIf("RETURNS")) {
+                // RETURNS NULL ON NULL INPUT是STRICT的标准SQL写法
+                read("NULL");
+                read("ON");
+                read("NULL");
+                read("INPUT");
+                strict = true;
             } else {
                 break;
             }
@@ -5207,6 +5217,7 @@ public class SQLParserBase implements SQLParser {
         read("AS");
         String body = readString();
         command.setDeterministic(deterministic);
+        command.setStrict(strict);
         ArrayList<Integer> bodyParameterIndexes = Utils.newSmallArrayList();
         String bodySql = SqlFunctionBodyParser.parseBody(session, body, parameterNames,
                 bodyParameterIndexes);
