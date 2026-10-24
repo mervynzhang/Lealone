@@ -134,7 +134,8 @@ public class ServerSession extends SessionBase implements InternalSession {
     private boolean containsDDL;
     private boolean containsDatabaseStatement;
 
-    private Transaction transaction;
+    // 其他线程(比如调度线程)也会读写，需要volatile保证可见性
+    private volatile Transaction transaction;
 
     private ArrayList<Connection> nestedConnections;
     private ArrayList<ServerSession> nestedSessions;
@@ -1290,10 +1291,11 @@ public class ServerSession extends SessionBase implements InternalSession {
     }
 
     public Value getTransactionId() {
-        if (transaction == null) {
+        Transaction t = transaction;
+        if (t == null) {
             return ValueNull.INSTANCE;
         }
-        return ValueString.get(Long.toString(transaction.getTransactionId()));
+        return ValueString.get(Long.toString(t.getTransactionId()));
     }
 
     /**
@@ -1307,22 +1309,23 @@ public class ServerSession extends SessionBase implements InternalSession {
 
     @Override
     public Transaction getTransaction() {
-        if (transaction != null) {
+        Transaction t = transaction;
+        if (t != null) {
             // 事务可能已经被异步提交或回滚了，不能再把已结束的事务返回给调用方，
             // 否则后续每条语句都会报Transaction is closed
-            if (!transaction.isClosed())
-                return transaction;
+            if (!t.isClosed())
+                return t;
             transaction = null;
         }
 
         RunMode runMode = getRunMode();
-        Transaction transaction = database.getTransactionEngine().beginTransaction(runMode,
-                transactionIsolationLevel, getScheduler());
-        transaction.setSession(this);
+        t = database.getTransactionEngine().beginTransaction(runMode, transactionIsolationLevel,
+                getScheduler());
+        t.setSession(this);
 
         sessionStatus = SessionStatus.TRANSACTION_NOT_COMMIT;
-        this.transaction = transaction;
-        return transaction;
+        this.transaction = t;
+        return t;
     }
 
     public SQLParser getParser() {
@@ -1360,29 +1363,38 @@ public class ServerSession extends SessionBase implements InternalSession {
         this.sessionStatus = sessionStatus;
     }
 
-    private ServerSession lockedBy;
+    // 等锁状态打包成不可变对象整体替换，其他线程(比如调度线程)读到的总是一致的快照
+    private static class LockWaitInfo {
+        final ServerSession lockedBy; // 持有锁的事务所在的session，可能为null
+        final Transaction lockedByTransaction;
+        final Object lockedObject;
+        final long lockStartTime;
 
-    // 被哪个事务锁住记录了
-    private volatile Transaction lockedByTransaction;
-    private Object lockedObject;
-    private long lockStartTime;
+        LockWaitInfo(ServerSession lockedBy, Transaction lockedByTransaction, Object lockedObject,
+                long lockStartTime) {
+            this.lockedBy = lockedBy;
+            this.lockedByTransaction = lockedByTransaction;
+            this.lockedObject = lockedObject;
+            this.lockStartTime = lockStartTime;
+        }
+    }
+
+    private volatile LockWaitInfo lockWaitInfo;
 
     @Override
-    public void setLockedBy(SessionStatus sessionStatus, Transaction lockedByTransaction,
+    public synchronized void setLockedBy(SessionStatus sessionStatus, Transaction lockedByTransaction,
             Object lockedObject) {
-        this.sessionStatus = sessionStatus;
-        this.lockedByTransaction = lockedByTransaction;
-        this.lockedObject = lockedObject;
         if (lockedByTransaction != null) {
+            LockWaitInfo old = lockWaitInfo;
             // 重试时不能重置等待起点，否则LOCK_TIMEOUT永远不会触发
-            if (lockStartTime == 0) {
-                lockStartTime = System.currentTimeMillis();
-            }
-            lockedBy = (ServerSession) lockedByTransaction.getSession();
+            long lockStartTime = old != null ? old.lockStartTime : System.currentTimeMillis();
+            Session s = lockedByTransaction.getSession();
+            lockWaitInfo = new LockWaitInfo(s instanceof ServerSession ? (ServerSession) s : null,
+                    lockedByTransaction, lockedObject, lockStartTime);
         } else {
-            lockStartTime = 0;
-            lockedBy = null;
+            lockWaitInfo = null;
         }
+        this.sessionStatus = sessionStatus;
     }
 
     private InternalScheduler scheduler;
@@ -1473,6 +1485,8 @@ public class ServerSession extends SessionBase implements InternalSession {
 
     private void endYieldableCommand() {
         yieldableCommand = null;
+        // 语句结束了，等锁状态一起清掉，避免下一条语句用到上一条语句的等待起点
+        reset();
     }
 
     @Override
@@ -1502,9 +1516,9 @@ public class ServerSession extends SessionBase implements InternalSession {
                 }
             }
             // 存储引擎可能通过SchedulerLock提前唤醒，需要重新加上
-            ServerSession s = lockedBy;
-            if (s != null) {
-                s.addWaitingScheduler(getScheduler());
+            LockWaitInfo info = lockWaitInfo;
+            if (info != null && info.lockedBy != null) {
+                info.lockedBy.addWaitingScheduler(getScheduler());
             }
         case TRANSACTION_COMMITTING:
         case STATEMENT_RUNNING:
@@ -1516,25 +1530,14 @@ public class ServerSession extends SessionBase implements InternalSession {
     // 当前事务申请锁失败被挂起时，只是把session变成等待状态，然后用lockedByTransaction指向占有锁的事务，
     // 等lockedByTransaction提交或回滚后，不需要修改被挂起事务的状态，只需要唤醒被挂起事务的调度线程重试即可。
     private void wakeUpIfNeeded() {
-        Transaction t = lockedByTransaction;
-        if (t != null && t.isClosed()) {
-            if (DbException.ASSERT) {
-                DbException.assertTrue(lockedByTransaction != null);
-            }
+        LockWaitInfo info = lockWaitInfo;
+        if (info != null && info.lockedByTransaction.isClosed()) {
             reset(SessionStatus.RETRYING_RETURN_ACK);
         }
     }
 
-    // 等锁超时检查，等锁的路径上都要调用，否则LOCK_TIMEOUT形同虚设
-    public void checkLockTimeout() {
-        DbException e = buildLockTimeoutError();
-        if (e != null) {
-            rollback();
-            throw e;
-        }
-    }
-
-    // 调度线程里不能直接抛异常，返回错误交给正在等待的语句
+    // 等锁超时检查，超时返回错误(事务已经回滚)，没超时返回null。
+    // 只能在执行这条语句的线程里调用，因为它会回滚事务
     @Override
     public Throwable getLockTimeoutError() {
         DbException e = buildLockTimeoutError();
@@ -1543,23 +1546,42 @@ public class ServerSession extends SessionBase implements InternalSession {
         return e;
     }
 
+    // 只判断等锁是否超时，不改变session状态，可以在其他线程里调用
+    @Override
+    public boolean isLockWaitTimeout() {
+        return buildLockTimeoutError() != null;
+    }
+
+    // 等锁超时后只把session标成就绪，让重试这条语句的线程自己抛超时错误，
+    // 不能在这里回滚事务或者执行语句，否则会跟执行语句的线程互相破坏状态
+    @Override
+    public boolean retryForLockTimeout() {
+        // 等待起点不能重置，否则重试时又变成从头开始等，LOCK_TIMEOUT永远不会触发
+        return compareAndSet(SessionStatus.WAITING, SessionStatus.RETRYING_RETURN_ACK);
+    }
+
+    // 只根据快照构造错误，不修改任何状态，可能在其他线程里调用
     private DbException buildLockTimeoutError() {
-        if (lockedByTransaction != null
-                && System.currentTimeMillis() - lockStartTime > getLockTimeout()) {
-            String lockedObjectStr = lockedObject.toString();
-            // 发生死锁了
-            if (lockedBy.lockedByTransaction == transaction) {
-                String msg = getMsg(transaction.getTransactionId(), this, lockedByTransaction);
-                msg += "\r\n" + getMsg(lockedByTransaction.getTransactionId(),
-                        lockedByTransaction.getSession(), transaction);
-                msg += ", the locked object: " + lockedObjectStr;
-                return DbException.get(ErrorCode.DEADLOCK_1, msg);
-            } else {
-                String msg = getMsg(transaction.getTransactionId(), this, lockedByTransaction);
-                return DbException.get(ErrorCode.LOCK_TIMEOUT_1, lockedObjectStr, msg);
-            }
+        LockWaitInfo info = lockWaitInfo;
+        Transaction self = transaction;
+        if (info == null || self == null)
+            return null;
+        if (System.currentTimeMillis() - info.lockStartTime <= getLockTimeout())
+            return null;
+        Transaction lockedByTransaction = info.lockedByTransaction;
+        String lockedObjectStr = info.lockedObject == null ? "null" : info.lockedObject.toString();
+        // 发生死锁了
+        LockWaitInfo lockedByInfo = info.lockedBy != null ? info.lockedBy.lockWaitInfo : null;
+        if (lockedByInfo != null && lockedByInfo.lockedByTransaction == self) {
+            String msg = getMsg(self.getTransactionId(), this, lockedByTransaction);
+            msg += "\r\n" + getMsg(lockedByTransaction.getTransactionId(),
+                    lockedByTransaction.getSession(), self);
+            msg += ", the locked object: " + lockedObjectStr;
+            return DbException.get(ErrorCode.DEADLOCK_1, msg);
+        } else {
+            String msg = getMsg(self.getTransactionId(), this, lockedByTransaction);
+            return DbException.get(ErrorCode.LOCK_TIMEOUT_1, lockedObjectStr, msg);
         }
-        return null;
     }
 
     private static String getMsg(long tid, InternalSession session, Transaction transaction) {
@@ -1575,16 +1597,13 @@ public class ServerSession extends SessionBase implements InternalSession {
         return yieldableCommand == null;
     }
 
-    private void reset(SessionStatus sessionStatus) {
+    private synchronized void reset(SessionStatus sessionStatus) {
         this.sessionStatus = sessionStatus;
         reset();
     }
 
     private void reset() {
-        lockedBy = null;
-        lockedByTransaction = null;
-        lockedObject = null;
-        lockStartTime = 0;
+        lockWaitInfo = null;
     }
 
     private void clean() {
