@@ -33,6 +33,7 @@ import com.lealone.db.ManualCloseable;
 import com.lealone.db.Procedure;
 import com.lealone.db.RunMode;
 import com.lealone.db.SysProperties;
+import com.lealone.db.api.CursorPortal;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.async.AsyncCallback;
 import com.lealone.db.async.AsyncResult;
@@ -121,6 +122,8 @@ public class ServerSession extends SessionBase implements InternalSession {
     private long transactionStart;
     private long currentCommandStart;
     private HashMap<String, Value> variables;
+    // PL/pgSQL游标的门户注册表，事务结束时统一关闭(见endTransaction)
+    private HashMap<String, CursorPortal> cursorPortals;
     private HashSet<Result> temporaryResults;
     private int queryTimeout;
     // PostgreSQL的check_function_bodies，默认开启
@@ -656,11 +659,27 @@ public class ServerSession extends SessionBase implements InternalSession {
     }
 
     private void endTransaction() {
+        closeCursorPortals();
         containsDDL = false;
         containsDatabaseStatement = false;
         wakeUpWaitingSchedulers();
         transactionStart = 0;
         transaction = null;
+    }
+
+    // 门户只在事务内可见，提交或回滚时统一关闭
+    public HashMap<String, CursorPortal> getCursorPortals() {
+        if (cursorPortals == null)
+            cursorPortals = new HashMap<>();
+        return cursorPortals;
+    }
+
+    private void closeCursorPortals() {
+        if (cursorPortals != null) {
+            for (CursorPortal portal : cursorPortals.values())
+                portal.closePortal();
+            cursorPortals.clear();
+        }
     }
 
     private void unlinkLob(HashMap<String, ValueLob> lobMap) {

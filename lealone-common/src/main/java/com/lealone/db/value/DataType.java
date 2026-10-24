@@ -170,6 +170,7 @@ public class DataType {
                         "NVARCHAR2",
                         "VARCHAR_CASESENSITIVE",
                         "CHARACTER VARYING",
+                        "REFCURSOR",
                         "TID" });
         add(Value.STRING, Types.LONGVARCHAR, "String", createString(true),
                 new String[] { "LONGVARCHAR", "LONGNVARCHAR" });
