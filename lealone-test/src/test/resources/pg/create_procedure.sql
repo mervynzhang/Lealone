@@ -4,10 +4,9 @@
 -- 约定同 create_function_sql.sql。这份文件的适配点主要是:
 --   1. PG 的过程写成 CREATE PROCEDURE p(x text) LANGUAGE SQL AS $$ INSERT ... VALUES (1, x) $$,
 --      Lealone 的过程体是"用分号分隔的语句串, 参数用 ? 按位置引用", 所以过程体改成 VALUES (1, ?);
---   2. PG 的过程体里可以写 CALL 另一个过程、可以用 $1/参数名, Lealone 的过程体里再写 CALL
---      会和外层 ? 绑定冲突(90012), 这一条按缺陷记录并 skip;
---   3. PG 的 CALL 用 execute() 就能拿到结果集, Lealone 只有 executeQuery() 拿得到,
---      被 skip 的用例里写清了是哪一种情况。
+--   2. PG 的过程体里可以写 CALL 另一个过程、可以用 $1/参数名, Lealone 的过程体里统一用 ?;
+--   3. PG 的 CALL 用 execute() 就能拿到结果集, Lealone 的过程体里有查询语句时也一样
+--      (只有更新语句的过程仍按更新语句执行)。
 
 -- ---------------------------------------------------------------------------
 -- 基本的过程定义和调用
@@ -101,28 +100,37 @@ end;
 
 -- @case procedure.body_select
 -- @pg create_procedure.sql:53-59
--- 缺陷: CALL 的过程体是 SELECT 时, Statement.execute() 返回 updateCount 0 且 getResultSet() 为 null,
---       只有 executeQuery() 能拿到那一行; PG 的 CALL ptest2() 会返回一行 5
+-- 适配: CALL 的过程体是 SELECT 时按查询语句执行, Statement.execute() 也能拿到结果集
+-- 适配: Lealone 的 CREATE PROCEDURE 没有 LANGUAGE 子句
 create procedure ptest2()
-language sql
-as $$
-select 5;
-$$;
+as $$ select 5 $$;
+> update count: 0
+
 call ptest2();
--- PG 期望: 一行 5
+> 5
+> -
+> 5
+> rows: 1
 
 -- @case procedure.nested_call
 -- @pg create_procedure.sql:63-74
--- 缺陷: 过程体里再 CALL 别的过程时, 内层 CALL 的 ? 和外层参数绑定冲突, 报 90012 Parameter "#1" is not set
+-- 适配: PG 过程体里用参数名和 $1 引用参数, Lealone 过程体里统一用 ?;
+--       过程体的每条语句各自独立绑定参数
 create procedure ptest3(y text)
-language sql
-as $$
-call ptest1(y);
-call ptest1($1);
-$$;
+as $$ call ptest1(?); call ptest1(?) $$;
+> update count: 0
+
 call ptest3('b');
+> update count: 2
+
 select * from cp_test;
--- PG 期望: cp_test 多两行 (1,b)
+> A B
+> - -----
+> 1 a
+> 1 b
+> 1 b
+> 1 xyzzy
+> rows: 4
 
 -- @case procedure.inout_params
 -- @pg create_procedure.sql:79-102
@@ -307,8 +315,10 @@ select a, b from cp_test order by b;
 > - -----
 > 1 a
 > 1 b
+> 1 b
+> 1 b
 > 1 xyzzy
-> rows: 3
+> rows: 5
 
 drop procedure ptest1;
 > update count: 0

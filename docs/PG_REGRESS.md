@@ -67,14 +67,14 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 11, skip 29)  脚本语句  41(通过  41, 失败 0)  被skip用例占  96 条
-[pgregress]   create_procedure.sql     用例 22(执行  5, skip 17)  脚本语句  19(通过  19, 失败 0)  被skip用例占  68 条
+[pgregress]   create_function_sql.sql  用例 40(执行 13, skip 27)  脚本语句  43(通过  43, 失败 0)  被skip用例占  94 条
+[pgregress]   create_procedure.sql     用例 22(执行  7, skip 15)  脚本语句  24(通过  24, 失败 0)  被skip用例占  63 条
 [pgregress]   plpgsql.sql              用例 18(执行  7, skip 11)  脚本语句  20(通过  20, 失败 0)  被skip用例占  27 条
 [pgregress]   rangefuncs.sql           用例  9(执行  6, skip  3)  脚本语句  21(通过  21, 失败 0)  被skip用例占   9 条
-[pgregress] 合计: 用例 89 (执行 29, skip 60), 脚本语句 101 (通过 101, 失败 0), 耗时 482ms
-[pgregress] skip 清单: 60 条用例, 点名跳过的 PG 语句 309 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 156 条在 skip 清单里
-[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  92 条在 skip 清单里
+[pgregress] 合计: 用例 89 (执行 33, skip 56), 脚本语句 108 (通过 108, 失败 0), 耗时 426ms
+[pgregress] skip 清单: 56 条用例, 点名跳过的 PG 语句 301 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 154 条在 skip 清单里
+[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  86 条在 skip 清单里
 [pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 40 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 21 条)
 ```
@@ -87,7 +87,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 60 条 / 309 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 56 条 / 301 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -109,19 +109,16 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 generate_series(), 且 select 列表里不展开 setof 函数 | 1 | 2 | function_sql.setof |
 | Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN | 1 | 10 | function_sql.setof_inline |
 | Lealone 函数体只允许单条查询(不支持 INSERT ... RETURNING) | 1 | 6 | function_sql.void_insert |
-| 缺陷: RETURNS SETOF VOID 每行返回 Java 序列化字节, 且依赖 generate_series() | 1 | 2 | function_sql.setof_void |
+| 依赖 generate_series(), 且 setof void 的行数语义和 PG 不同(PG 返回 0 行, Lealone 按本分支约定每行 NULL) | 1 | 2 | function_sql.setof_void |
 | Lealone 函数体只允许单条查询(不支持 DDL) | 1 | 8 | function_sql.ddl_in_body |
 | Lealone 无 CREATE OPERATOR CLASS/分区操作符类 | 1 | 6 | function_sql.partition_ops |
-| 缺陷: 建函数时不校验函数体, 错误推迟到调用时 | 1 | 1 | function_sql.bad_body_return_type |
-| 缺陷: 函数体返回多列时静默取第一列 | 1 | 1 | function_sql.bad_body_columns |
 | Lealone 不支持 $1/$2 位置参数 | 1 | 1 | function_sql.bad_body_positional |
 | Lealone 无 anyelement/anyarray 多态类型 | 1 | 4 | function_sql.empty_body_call |
 | Lealone 的 CALL 不区分函数与过程 | 2 | 3 | procedure.call_random, procedure.call_function |
 | Lealone 客户端没有 psql 元命令, 也没有 pg_get_functiondef() | 1 | 1 | procedure.psql_meta |
 | Lealone 无 BEGIN ATOMIC 过程体 | 1 | 5 | procedure.atomic_body |
 | Lealone 过程体不能执行 DDL | 1 | 2 | procedure.utility_body |
-| 缺陷: CALL 返回结果集时 execute() 拿不到行 | 2 | 4 | procedure.body_select, procedure.collation |
-| 缺陷: 过程体里嵌套 CALL 参数绑定冲突(90012) | 1 | 4 | procedure.nested_call |
+| Lealone 没有 collation 概念(execute() 拿不到 CALL 结果集的问题已修) | 1 | 2 | procedure.collation |
 | CREATE PROCEDURE 不接受 OUT/INOUT 参数(目前只有 CREATE FUNCTION 支持) | 1 | 6 | procedure.inout_params |
 | Lealone 不支持 DEFAULT 参数与命名实参 | 1 | 7 | procedure.named_default |
 | Lealone 过程体不能为空, 也无 BEGIN ATOMIC | 1 | 3 | procedure.empty_body |
@@ -154,6 +151,15 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | `plpgsql.recursion` | skip（无 PL/pgSQL） | 执行 2 条语句 | `LANGUAGE plpgsql` + `IF` + 递归调用 |
 | `plpgsql.exception_reraise` | skip（无 PL/pgSQL） | 执行 2 条语句 | 嵌套 `EXCEPTION WHEN OTHERS` + `RAISE;` |
 
+本轮修完函数/过程缺陷后，又有 4 个用例从 skip 清单里删掉并开始通过：
+
+| 用例 | 原来 skip 的原因 | 现在 |
+| --- | --- | --- |
+| `function_sql.bad_body_return_type` | 建函数时不校验函数体 | 建函数时准备一次函数体，常量类型错误在 CREATE 时报 22018 |
+| `function_sql.bad_body_columns` | 函数体返回多列静默取第一列 | 建函数时校验结果列数报 22018，调用时也不再静默取第一列 |
+| `procedure.body_select` | `CALL` 有结果集时 `execute()` 拿不到行 | 过程体里有查询语句时 `CALL` 按查询执行，`execute()` 返回 true |
+| `procedure.nested_call` | 过程体里嵌套 `CALL` 参数绑定冲突(90012) | 过程体每条语句独立绑定参数 |
+
 新加的用例（都是 PG 原文的段落，按新能力挑出来的）：
 
 | 新用例 | PG 出处 | 覆盖的能力 |
@@ -178,9 +184,9 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | `STRICT` / `RETURNS NULL ON NULL INPUT` | 9 |
 | `RETURNS VOID` | 2 |
 | `LANGUAGE plpgsql`（递归/RAISE/嵌套 EXCEPTION/SELECT INTO/DECLARE/IF） | 13 |
-| 合计 | 39（脚本语句从 47 → 101，用例从 67 → 89，执行用例 14 → 29） |
+| 合计 | 39（加上本轮修复后: 脚本语句 47 → 108，用例 67 → 89，执行用例 14 → 33） |
 
-## 七、剩余缺陷（都已实测复现）
+## 七、缺陷清单（N1、N7~N11 已修复，其余待修）
 
 **这一轮新发现的：**
 
@@ -194,6 +200,9 @@ select * from sv2();
 实测每行是 `aced0005737200116a6176612e6c616e672e496e7465676572...`（序列化后的 Integer 1）。
 PG 里 `setof void` 每行是空值。标量 `RETURNS VOID` 已经修好，这条没有跟着修。
 用例 `function_sql.setof_void`。
+
+**已修复**：`RETURNS SETOF VOID` 的返回列现在按 `NULL` 处理，每一行都是空值（见 `PgFunctionDefectTest.testSetofVoid`）；
+用例 `function_sql.setof_void` 仍 skip，因为函数体依赖 `generate_series()`（另外 PG 实际是 0 行，和本分支约定的“每行 NULL”不同）。
 
 ### N2. 有 `OUT`/`INOUT` 参数的 PL/pgSQL 函数不能裸 `RETURN;`，也不能自然结束
 
@@ -259,26 +268,43 @@ $$ <<outerblock>> DECLARE param1 int := 1; BEGIN RAISE NOTICE '%', outerblock.pa
 `updateCount=0`、`getResultSet()=null`（`executeQuery("CALL ptest2()")` 能拿到一行 5）。
 用例 `procedure.body_select`、`procedure.collation`。
 
+**已修复**：`CallProcedure.isQuery()` 改为按过程体里是否有查询语句判断，过程体是 SELECT 时 `execute()` 返回 true
+并且 `getResultSet()` 能拿到行；只有更新语句的过程仍然返回更新计数。`procedure.body_select` 已开始执行并通过，
+`procedure.collation` 仍因 Lealone 没有 collation 概念 skip。
+
 ### N8. 过程体里嵌套 `CALL` 参数绑定冲突
 
 `create procedure ptest3(y text) as 'call ptest1(?); call ptest1(?)'; call ptest3('b');`
 → `90012 Parameter "#1" is not set`。用例 `procedure.nested_call`。
+
+**已修复**：过程体的每条语句各自从第 0 个实参开始绑定，不再共用一个全局参数下标；
+`procedure.nested_call` 已开始执行并通过。
 
 ### N9. 函数体返回多列时静默取第一列
 
 `create function f_multi(a int) returns int as 'select 1, 2, 3'; select f_multi(1);` → 1；
 PG 报 42804。用例 `function_sql.bad_body_columns`。
 
+**已修复**：建函数时校验函数体结果列数（报 22018）；标量函数调用时也不再静默取第一列。
+`function_sql.bad_body_columns` 已开始执行并通过（函数体末尾的分号按 Lealone 规则去掉）。
+
 ### N10. 建函数时不校验函数体
 
 `create function f_bad(a int) returns int as 'select ''not an integer'''` 建函数成功，
 第一次调用才报 22018；PG 建函数即报 42804。用例 `function_sql.bad_body_return_type`。
+
+**已修复**：建函数时在一个嵌套 session 里 prepare 一次函数体（不执行），语法错误、列/表不存在、
+常量返回值类型不匹配都在 CREATE 时报出（数据库启动回放 `sys(meta)` 时跳过校验，和 PG 的
+`check_function_bodies=off` 一致）。`function_sql.bad_body_return_type` 已开始执行并通过。
 
 ### N11. 函数体是 `WITH ... SELECT` 时参数绑定错乱
 
 `create function f_with(a int) returns int as 'WITH x AS (SELECT a * 2 AS v) SELECT v FROM x'; select f_with(5);`
 → `90012 Parameter "#1" is not set`。PG 返回 10。（PG 这两个文件里没有 WITH 函数体的用例，
 所以还没登记成用例。）
+
+**已修复**：`parseWith()` 会把每个 CTE 体里新增的参数传给 `TableView`，执行视图查询时按编号绑定；
+多个 CTE 共用参数时，编译后没被引用的占位参数按 NULL 处理。见 `PgFunctionDefectTest.testWithParameter`。
 
 ### N12. 内存库（`persistent=false`）下返回 VARCHAR 的函数一调用就 NPE
 
