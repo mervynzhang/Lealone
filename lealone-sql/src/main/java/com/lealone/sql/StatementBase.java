@@ -525,10 +525,18 @@ public abstract class StatementBase implements PreparedSQLStatement, ParsedSQLSt
             // 如果在存储引擎层面没有顺利结束，需要执行其他语句
             if (session.getScheduler() != null && !yieldable.isStopped())
                 session.getScheduler().executeNextStatement();
+            // 等待其他事务释放锁时不能在调度线程上睡眠，否则同一个调度线程里的其他session
+            // (包括持有锁的那个)都没有机会执行，等待时间至少会多出一个睡眠周期
+            int spinCount = 0;
             while (session.getStatus() == SessionStatus.WAITING) {
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException e) {
+                if (session.getScheduler() != null && spinCount++ < 100)
+                    session.getScheduler().executeNextStatement();
+                else {
+                    try {
+                        Thread.sleep(1);
+                    } catch (InterruptedException e) {
+                    }
+                    spinCount = 0;
                 }
             }
         }
