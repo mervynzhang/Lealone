@@ -5151,8 +5151,8 @@ public class SQLParserBase implements SQLParser {
                 }
                 String parameterName;
                 Column column;
-                // OUT/INOUT参数可以只写类型不写名字(名字只用于在函数体里引用)
-                if (mode != SqlFunction.PARAM_IN && isDataTypeName(currentToken)) {
+                // OUT/INOUT/VARIADIC参数可以只写类型不写名字(名字只用于在函数体里引用)
+                if ((mode != SqlFunction.PARAM_IN || isVariadic) && isDataTypeName(currentToken)) {
                     parameterName = "$" + parameterIndex;
                     column = parseColumnWithType(null);
                 } else {

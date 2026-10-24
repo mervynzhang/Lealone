@@ -191,6 +191,12 @@ public class PgFunctionParamTest extends SqlTestBase {
         executeQuery("SELECT p_var_first(7, 8, 9)");
         assertEquals(7, getIntValue(1));
 
+        // VARIADIC参数也可以省略名字(函数体里没法引用它, 但语法要能接受)
+        executeUpdate(
+                "CREATE OR REPLACE FUNCTION p_var_unnamed(VARIADIC INT[]) RETURNS INT AS $$ SELECT 1 $$");
+        executeQuery("SELECT p_var_unnamed(1, 2, 3)");
+        assertEquals(1, getIntValue(1));
+
         // VARIADIC必须是最后一个参数
         executeUpdateThanAssertErrorCode(
                 "CREATE FUNCTION p_var_bad(VARIADIC nums INT[], b INT) RETURNS INT AS $$ SELECT 1 $$",

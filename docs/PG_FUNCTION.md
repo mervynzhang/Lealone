@@ -26,7 +26,7 @@ DROP FUNCTION [IF EXISTS] [schema.]name[(type, ...)];
 - `LANGUAGE` 子句与易变性关键字（`IMMUTABLE`/`STABLE`/`VOLATILE`）都是可选的，且顺序任意，但都必须写在
   `AS` 之前。
 - 参数模式：`IN`（默认）、`OUT`、`INOUT`、`VARIADIC`；数组类型可以写 `type[]` 或 `type ARRAY`。
-- `OUT`/`INOUT` 参数可以只写类型不写名字（内部用 `$1`、`$2`... 作为名字）。
+- `OUT`/`INOUT`/`VARIADIC` 参数可以只写类型不写名字（内部用 `$1`、`$2`... 作为名字）。
 - `DROP FUNCTION` 后面可选的 `(type, ...)` 会被解析后丢弃（不支持按参数类型重载，见第五节）。
 - 例：
 
