@@ -250,4 +250,22 @@ public class DdlCascadeTest extends SqlAssertTestBase {
         }
         cleanup();
     }
+
+    // CREATE INDEX建在非空表上时索引是异步回填的，构建期间不能拿它来满足排序
+    @Test
+    public void orderByAfterCreateIndexOnExistingRows() throws Exception {
+        cleanup();
+        executeUpdate("DROP TABLE IF EXISTS dc_ix");
+        executeUpdate("CREATE TABLE dc_ix(id int primary key, name varchar(10))");
+        executeUpdate("INSERT INTO dc_ix VALUES(1, 'b'), (2, 'a'), (3, 'd'), (4, 'c')");
+        executeUpdate("CREATE INDEX dc_ix_name ON dc_ix(name)");
+        try (ResultSet r = stmt.executeQuery("SELECT name FROM dc_ix ORDER BY name")) {
+            StringBuilder buff = new StringBuilder();
+            while (r.next())
+                buff.append(r.getString(1));
+            assertEquals("abcd", buff.toString());
+        }
+        executeUpdate("DROP TABLE IF EXISTS dc_ix");
+        cleanup();
+    }
 }
