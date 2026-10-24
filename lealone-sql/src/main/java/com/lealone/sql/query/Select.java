@@ -341,16 +341,19 @@ public class Select extends Query {
                     break;
                 }
             }
-            if (found < 0) {
+            if (found < 0 && !(expr instanceof ExpressionColumn)) {
                 // special case: GROUP BY a column alias
+                // 只有GROUP BY里写的不是输入列(而是别名或表达式)时才按别名匹配:
+                // 输入列必须优先于输出别名。比如
+                //   SELECT col1 AS col0, -col0 AS col1 FROM t GROUP BY col1, col0
+                // 这里的col0指的是表里的col0; 如果按别名匹配就会绑到"col1"那个输出列上,
+                // 于是两个分组项都落到同一列, 少分组、静默返回错误的行。
+                // 另外别名只取一次, 不能在循环里改写搜索键(原来第一轮之后sql就变成别名了)。
+                String exprAlias = expr.getAlias();
                 for (int j = 0; j < expSize; j++) {
                     Expression e = expressions.get(j);
-                    if (db.equalsIdentifiers(sql, e.getAlias())) {
-                        found = j;
-                        break;
-                    }
-                    sql = expr.getAlias();
-                    if (db.equalsIdentifiers(sql, e.getAlias())) {
+                    if (db.equalsIdentifiers(sql, e.getAlias())
+                            || (exprAlias != null && db.equalsIdentifiers(exprAlias, e.getAlias()))) {
                         found = j;
                         break;
                     }
