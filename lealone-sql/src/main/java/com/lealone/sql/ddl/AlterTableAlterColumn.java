@@ -279,7 +279,7 @@ public class AlterTableAlterColumn extends SchemaStatement {
             checkViewsAreValid(table);
         } catch (DbException e) {
             table.setNewColumns(table.getOldColumns());
-            throw DbException.get(ErrorCode.VIEW_IS_INVALID_2, e, getSQL(), e.getMessage());
+            throw e;
         }
         table.getDatabase().updateMeta(session, table);
         // 通知元数据改变了，原有的结果集缓存要废弃了
@@ -338,7 +338,14 @@ public class AlterTableAlterColumn extends SchemaStatement {
                 // check if the query is still valid
                 // do not execute, not even with limit 1, because that could
                 // have side effects or take a very long time
-                session.prepareStatement(sql);
+                try {
+                    session.prepareStatement(sql);
+                } catch (DbException e) {
+                    // 视图引用了被删除或被修改的列，报错信息中要用视图名和视图定义，
+                    // 不能把DDL语句本身当成视图名
+                    throw DbException.get(ErrorCode.COLUMN_IS_REFERENCED_1, e, view.getName())
+                            .addSQL(((TableView) view).getCreateSQL());
+                }
                 checkViewsAreValid(view);
             }
         }

@@ -72,6 +72,8 @@ public abstract class StatementBase implements PreparedSQLStatement, ParsedSQLSt
     private int rowScanCount;
     private boolean canReuse;
     private int fetchSize = SysProperties.SERVER_RESULT_SET_FETCH_SIZE;
+    // 元数据改变之后重新编译出来的语句
+    private StatementBase delegate;
 
     /**
      * Create a new object.
@@ -184,6 +186,28 @@ public abstract class StatementBase implements PreparedSQLStatement, ParsedSQLSt
                 || db.getSettings().recompileAlways;
     }
 
+    @Override
+    public StatementBase recompileIfRequired() {
+        if (delegate != null) {
+            delegate = delegate.recompileIfRequired();
+            return delegate;
+        }
+        if (!needRecompile()) {
+            return this;
+        }
+        // 不能用session.prepareStatement，因为它可能从查询缓存中拿出一个已经关闭的语句，
+        // 编译计划还是旧的
+        StatementBase stmt = (StatementBase) session.prepareStatementLocal(sql);
+        if (fetchSize != SysProperties.SERVER_RESULT_SET_FETCH_SIZE) {
+            stmt.setFetchSize(fetchSize);
+        }
+        // prepareAlways的语句每次执行都要重新编译，不需要保留
+        if (!prepareAlways) {
+            delegate = stmt;
+        }
+        return stmt;
+    }
+
     /**
      * Get the meta data modification id of the database when this statement was
      * compiled.
@@ -210,7 +234,7 @@ public abstract class StatementBase implements PreparedSQLStatement, ParsedSQLSt
      */
     @Override
     public ArrayList<Parameter> getParameters() {
-        return parameters;
+        return delegate == null ? parameters : delegate.getParameters();
     }
 
     /**
@@ -545,6 +569,16 @@ public abstract class StatementBase implements PreparedSQLStatement, ParsedSQLSt
 
     @Override
     public Future<Result> executeQuery(int maxRows, boolean scrollable, Value[] parameterValues) {
+        StatementBase stmt = recompileIfRequired();
+        if (stmt != this) {
+            // 用重新编译后的语句执行，不需要再判断一次
+            return stmt.executeQueryInternal(maxRows, scrollable, parameterValues);
+        }
+        return executeQueryInternal(maxRows, scrollable, parameterValues);
+    }
+
+    private Future<Result> executeQueryInternal(int maxRows, boolean scrollable,
+            Value[] parameterValues) {
         AsyncCallback<Result> ac = session.createCallback();
         YieldableBase<Result> yieldable = createYieldableQuery(maxRows, scrollable, ar -> {
             if (ar.isSucceeded()) {
@@ -592,6 +626,15 @@ public abstract class StatementBase implements PreparedSQLStatement, ParsedSQLSt
 
     @Override
     public Future<Integer> executeUpdate(Value[] parameterValues) {
+        StatementBase stmt = recompileIfRequired();
+        if (stmt != this) {
+            // 用重新编译后的语句执行，不需要再判断一次
+            return stmt.executeUpdateInternal(parameterValues);
+        }
+        return executeUpdateInternal(parameterValues);
+    }
+
+    private Future<Integer> executeUpdateInternal(Value[] parameterValues) {
         AsyncCallback<Integer> ac = session.createCallback();
         YieldableBase<Integer> yieldable = createYieldableUpdate(ar -> {
             if (ar.isSucceeded()) {
