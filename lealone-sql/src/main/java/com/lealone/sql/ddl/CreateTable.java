@@ -239,7 +239,8 @@ public class CreateTable extends SchemaStatement {
             }
         } catch (DbException e) {
             db.checkPowerOff();
-            schema.remove(session, table, lock);
+            // add时已经用lock注册过回滚handler，remove再用同一个lock会回滚两次，把上一条DDL创建的对象也回滚掉
+            schema.remove(session, table, null);
             throw e;
         }
 
