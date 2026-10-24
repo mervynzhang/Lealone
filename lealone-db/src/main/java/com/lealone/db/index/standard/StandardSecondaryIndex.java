@@ -15,7 +15,6 @@ import com.lealone.db.index.Cursor;
 import com.lealone.db.index.Index;
 import com.lealone.db.index.IndexColumn;
 import com.lealone.db.index.IndexOperator;
-import com.lealone.db.index.IndexOperator.IndexOperation;
 import com.lealone.db.index.IndexType;
 import com.lealone.db.lock.Lockable;
 import com.lealone.db.result.SortOrder;
@@ -157,14 +156,7 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         }
         TransactionMap<IndexKey, IndexKey> map = getTransactionMap(session);
         Lockable lockable = map.getLockableValue(key);
-        if (lockable == null) {
-            // 旧索引项的add是异步页操作，可能还没生效；延后重试一次删除，避免它残留成孤儿索引项
-            if (!IndexOperator.isRetryOperation()
-                    && IndexOperator.getCurrentOperation() != null) {
-                IndexOperation rio = IndexOperator.createRIO(row.getKey(), oldColumns);
-                rio.setTransaction(IndexOperator.getCurrentOperation().getTransaction());
-                IndexOperator.addIndexOperation(session, table, this, rio);
-            }
+        if (lockable == null) { // 旧索引项已经不存在，不能让remove失败挡住后面的add
             onComplete(handler);
             return;
         }
