@@ -27,7 +27,6 @@ function_sql.leakproof	create_function_sql.sql:88-119	16	LEAKPROOF 属性和pg_p
 function_sql.sql_body_polymorphic	create_function_sql.sql:197-205	2	Lealone 无 anyarray/anyelement 多态类型
 function_sql.pg_get_functiondef_sqlbody	create_function_sql.sql:214-228	13	Lealone 无 SQL 标准函数体(RETURN表达式), pg_get_functiondef 本身已支持
 function_sql.sql_body_tempseq	create_function_sql.sql:244-253	3	Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD
-function_sql.information_schema	create_function_sql.sql:256-323	19	Lealone 没有 information_schema.routines 等视图
 function_sql.or_replace_window	create_function_sql.sql:337-339	3	Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转
 function_sql.setof_inline	create_function_sql.sql:353-376	10	BEGIN ATOMIC和EXPLAIN(COSTS OFF)已支持, 但setof函数内联与select列表里的setof展开仍不支持
 function_sql.anyarray_setof	create_function_sql.sql:434-447	2	Lealone 无 anyarray/anyelement 多态类型

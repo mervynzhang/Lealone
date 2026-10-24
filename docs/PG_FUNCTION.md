@@ -425,6 +425,23 @@ Lealone 提供只读的内置元数据表 `INFORMATION_SCHEMA.PG_PROC`（不是 
 只读伪表，数据库启动时自动创建，不参与 `SCRIPT`/备份（和 `INFORMATION_SCHEMA` 其它表一样），
 所以不需要额外的持久化处理，重启后行由元数据重建。
 
+另外还提供三张 SQL 标准的只读视图（同一套 `InfoMetaTable` 机制，自动创建、不进 SCRIPT/备份）：
+
+| 视图 | 内容 |
+| --- | --- |
+| `INFORMATION_SCHEMA.PARAMETERS` | 每个函数/过程的每个参数一行，包含 `SPECIFIC_NAME`、`ORDINAL_POSITION`（1开始，含OUT）、`PARAMETER_MODE`(IN/OUT/INOUT)、`PARAMETER_NAME`、`DATA_TYPE`、`PARAMETER_DEFAULT` 等列 |
+| `INFORMATION_SCHEMA.ROUTINES` | 每个函数/过程一行，包含 `ROUTINE_NAME`、`ROUTINE_TYPE`(FUNCTION/PROCEDURE)、`SPECIFIC_NAME`(名字_id，用来区分重载)、`DATA_TYPE`、`IS_DETERMINISTIC`(YES/NO)、`SECURITY_TYPE`(DEFINER/INVOKER)、`EXTERNAL_LANGUAGE` 等列 |
+| `INFORMATION_SCHEMA.ROUTINE_ROUTINE_USAGE` | 列齐全（`SPECIFIC_NAME`/`ROUTINE_NAME` 等），但**依赖关系还没有填充，查询返回空表** |
+
+这三张视图只列 `SqlFunction`/`SqlProcedure`（`CREATE ALIAS`/`CREATE AGGREGATE` 不在里面）；
+`SPECIFIC_NAME` 的格式是 `名字_id`，同名重载靠它区分，PARAMETERS 和 ROUTINES 可以按
+`SPECIFIC_SCHEMA + SPECIFIC_NAME` 关联。
+
+已知缺口：DEFAULT 参数由另一条线实现，现在 `PARAMETER_DEFAULT` 一律是 NULL；
+`ROUTINE_ROUTINE_USAGE` 需要分析方法体/默认值里的引用，暂时没有填充；
+`ROUTINE_SEQUENCE_USAGE`/`ROUTINE_COLUMN_USAGE`/`ROUTINE_TABLE_USAGE` 没有做。
+`information_schema` 的 PG 用例已经用这些视图部分适配执行，见 `docs/PG_REGRESS.md` 第六节。
+
 内置函数 `pg_get_functiondef(函数名)` 返回该函数的 `getCreateSQL()` 文本（`CREATE FUNCTION ...`，
 不是 PG 的 `CREATE OR REPLACE FUNCTION`，也没有 schema 前缀）。它只接受函数名，没有 regproc/oid
 参数；同名有多个重载时报 90152，找不到报 90077。该函数标记为非确定性函数，避免在 prepare 阶段
