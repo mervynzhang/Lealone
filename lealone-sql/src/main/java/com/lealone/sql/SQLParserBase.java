@@ -1768,6 +1768,7 @@ public class SQLParserBase implements SQLParser {
     protected TableFilter readTableFilter() {
         Table table;
         String alias = null;
+        String[] columnAliases;
         if (readIf("(")) {
             if (isSelect()) {
                 Query query = parseSelectUnion();
@@ -1780,8 +1781,13 @@ public class SQLParserBase implements SQLParser {
                 } else {
                     s = session;
                 }
-                alias = session.getNextSystemIdentifier(sqlCommand);
-                table = TableView.createTempView(s, session.getUser(), alias, query, currentSelect);
+                String viewName = session.getNextSystemIdentifier(sqlCommand);
+                // 派生表的别名和列别名列表要在创建临时视图之前解析
+                alias = readFromAlias(viewName);
+                columnAliases = readDerivedColumnAliases();
+                table = TableView.createTempView(s, session.getUser(), viewName, query, currentSelect,
+                        columnAliases);
+                return new TableFilter(session, table, alias, rightsChecked, currentSelect);
             } else {
                 TableFilter top;
                 top = readTableFilter();
@@ -1791,10 +1797,23 @@ public class SQLParserBase implements SQLParser {
                 if (alias != null) {
                     top.setAlias(alias);
                 }
+                columnAliases = readDerivedColumnAliases();
+                if (columnAliases != null) { // 如 (VALUES(1, 2), (3, 4)) t(a, b)
+                    if (!(top.getTable() instanceof FunctionTable)) {
+                        throw getSyntaxError();
+                    }
+                    ((FunctionTable) top.getTable()).setColumnAliases(columnAliases);
+                }
                 return top;
             }
         } else if (readIf("VALUES")) {
             table = parseValuesTable().getTable();
+            alias = readFromAlias(alias);
+            columnAliases = readDerivedColumnAliases();
+            if (columnAliases != null) {
+                ((FunctionTable) table).setColumnAliases(columnAliases);
+            }
+            return new TableFilter(session, table, alias, rightsChecked, currentSelect);
         } else {
             String tableName = readIdentifierWithSchema(null);
             Schema schema = getSchema();
@@ -1857,6 +1876,15 @@ public class SQLParserBase implements SQLParser {
             }
         }
         return alias;
+    }
+
+    // 派生表支持列别名列表，如 (SELECT 1, 2) t(a, b)
+    protected String[] readDerivedColumnAliases() {
+        if (!isToken("(")) {
+            return null;
+        }
+        read("(");
+        return parseColumnList(); // 括号由parseColumnList一起处理掉
     }
 
     protected void parseJoinTableFilter(TableFilter top, final Select command) {
