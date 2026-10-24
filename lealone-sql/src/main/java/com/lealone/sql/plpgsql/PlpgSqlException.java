@@ -40,8 +40,9 @@ public class PlpgSqlException extends RuntimeException {
         return new PlpgSqlException("P0003", "query returned more than one row");
     }
 
+    // PostgreSQL给NOT NULL变量赋NULL时用的是22004(null_value_not_allowed)
     public static PlpgSqlException notNullViolation(String variableName) {
-        return new PlpgSqlException("23502", "null value in variable " + variableName
+        return new PlpgSqlException("22004", "null value in variable " + variableName
                 + " violates not-null constraint");
     }
 }

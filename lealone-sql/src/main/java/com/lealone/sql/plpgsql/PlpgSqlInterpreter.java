@@ -190,6 +190,7 @@ public class PlpgSqlInterpreter {
         }
     }
 
+    // 注意：这里没有实现PostgreSQL的隐式子事务回滚，handler执行前不会撤销块的DML修改
     private boolean handleException(Block block, RuntimeException e) {
         if (block.handlers.isEmpty())
             return false;
@@ -373,12 +374,15 @@ public class PlpgSqlInterpreter {
 
     private void executeFor(For node) {
         // 循环上下界和步长只在进入循环时求值一次，此时还看不到循环变量
-        int start = sqlExecutor.evalExpression(node.startExpression, scope).getInt();
-        int end = sqlExecutor.evalExpression(node.endExpression, scope).getInt();
-        int step = node.stepExpression == null ? 1
-                : Math.abs(sqlExecutor.evalExpression(node.stepExpression, scope).getInt());
-        if (step == 0)
-            throw PlpgSqlException.raise("22023", "FOR loop step cannot be zero");
+        int start = evalForBound(node.startExpression);
+        int end = evalForBound(node.endExpression);
+        int step = 1;
+        if (node.stepExpression != null) {
+            step = evalForBound(node.stepExpression);
+            if (step <= 0)
+                throw PlpgSqlException.raise("22023",
+                        "FOR loop BY value must be greater than zero");
+        }
 
         PlpgSqlScope loopScope = new PlpgSqlScope(scope);
         PlpgSqlScope oldScope = scope;
@@ -389,9 +393,10 @@ public class PlpgSqlInterpreter {
             variable.setType(Value.INT);
             loopScope.declare(variable);
             // REVERSE表示从第一个表达式开始，每次减去步长，所以通常写成REVERSE n..1
-            int delta = node.reverse ? -step : step;
-            for (int i = start; delta > 0 ? i <= end : i >= end; i += delta) {
-                variable.setValue(ValueInt.get(i));
+            // 用long做迭代变量，避免到达Integer.MAX_VALUE附近时溢出死循环
+            long delta = node.reverse ? -step : step;
+            for (long i = start; delta > 0 ? i <= end : i >= end; i += delta) {
+                variable.setValue(ValueInt.get((int) i));
                 try {
                     executeStatements(node.statements);
                 } catch (ContinueSignal signal) {
@@ -407,6 +412,13 @@ public class PlpgSqlInterpreter {
         } finally {
             scope = oldScope;
         }
+    }
+
+    private int evalForBound(String expression) {
+        Value value = sqlExecutor.evalExpression(expression, scope);
+        if (value == null || value == ValueNull.INSTANCE)
+            throw PlpgSqlException.raise("22004", "FOR loop bound cannot be NULL");
+        return value.getInt();
     }
 
     private static boolean matchesLoopLabel(String loopLabel, String signalLabel) {
@@ -431,7 +443,7 @@ public class PlpgSqlInterpreter {
         if (node.level == null) {
             // RAISE; 在EXCEPTION handler里重新抛出当前异常
             if (currentException == null)
-                throw PlpgSqlException.raise("P0001", "RAISE without active exception");
+                throw PlpgSqlException.raise("0Z002", "RAISE without active exception");
             throw currentException;
         }
         String message = formatMessage(node);

@@ -131,6 +131,7 @@ public class PlpgSqlSqlExecutor {
 
     /**
      * 把声明类型解析成Value类型常量，支持tab.col%TYPE。
+     * 注意：只保留基础类型，不保留VARCHAR(n)/NUMERIC(p,s)的长度和精度。
      */
     public int resolveType(String typeName) {
         if (typeName == null)
@@ -193,9 +194,18 @@ public class PlpgSqlSqlExecutor {
             return null;
         int length = sql.length();
         int start = skipWhitespaceAndComments(sql, 0);
-        if (!wordAt(sql, start, "SELECT"))
+        int afterSelect;
+        if (wordAt(sql, start, "SELECT")) {
+            afterSelect = start + 6;
+        } else if (wordAt(sql, start, "WITH")) {
+            // WITH ... SELECT ... INTO：跳过CTE后找顶层的SELECT
+            int selectPos = findTopLevelKeyword(sql, start + 4, "SELECT");
+            if (selectPos < 0)
+                return null;
+            afterSelect = selectPos + 6;
+        } else {
             return null;
-        int afterSelect = start + 6;
+        }
         if (afterSelect < length && isIdentifierPart(sql.charAt(afterSelect)))
             return null;
 
@@ -277,6 +287,39 @@ public class PlpgSqlSqlExecutor {
         // 把INTO以及目标列表从查询里去掉，保留前后的SQL文本
         String query = (sql.substring(0, intoStart) + " " + sql.substring(targetEnd)).trim();
         return new SelectInto(query, strict, targets.toArray(new String[0]));
+    }
+
+    // 查找括号深度为0的关键字，跳过字符串和注释
+    private static int findTopLevelKeyword(String sql, int from, String keyword) {
+        int length = sql.length();
+        int depth = 0;
+        int pos = from;
+        while (pos < length) {
+            char c = sql.charAt(pos);
+            if (c == '\'') {
+                pos = skipSingleQuoted(sql, pos);
+            } else if (c == '"') {
+                pos = skipDoubleQuoted(sql, pos);
+            } else if (c == '$') {
+                int next = skipDollarQuoted(sql, pos);
+                pos = next > pos ? next : pos + 1;
+            } else if (c == '-' && pos + 1 < length && sql.charAt(pos + 1) == '-') {
+                pos = skipLineComment(sql, pos);
+            } else if (c == '/' && pos + 1 < length && sql.charAt(pos + 1) == '*') {
+                pos = skipBlockComment(sql, pos);
+            } else if (c == '(') {
+                depth++;
+                pos++;
+            } else if (c == ')') {
+                depth--;
+                pos++;
+            } else {
+                if (depth == 0 && wordAt(sql, pos, keyword))
+                    return pos;
+                pos++;
+            }
+        }
+        return -1;
     }
 
     public static class SelectInto {

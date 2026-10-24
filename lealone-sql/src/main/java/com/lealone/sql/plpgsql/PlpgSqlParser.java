@@ -88,9 +88,11 @@ public class PlpgSqlParser {
         }
         expectKeyword("END");
         if (current().type == TokenType.IDENTIFIER) {
-            // END后面可以跟同名标签
+            // END后面只能跟和开头相同的标签，没有标签的块不能带结束标签
             String endLabel = current().value;
-            if (label != null && !label.equalsIgnoreCase(endLabel))
+            if (label == null)
+                throw syntaxError(current(), "end label specified for unlabeled block");
+            if (!label.equalsIgnoreCase(endLabel))
                 throw syntaxError(current(), "end label " + endLabel + " does not match " + label);
             next();
         }

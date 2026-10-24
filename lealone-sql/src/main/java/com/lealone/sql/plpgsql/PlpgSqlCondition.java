@@ -39,6 +39,9 @@ public final class PlpgSqlCondition {
         addEngineState("42000", "42601"); // 语法错误
         addEngineState("42001", "42601");
         addEngineState("HYT00", "55P03"); // 锁超时: lock_not_available
+        addEngineState("HYC00", "0A000"); // 特性不支持: feature_not_supported
+        addEngineState("HY000", "XX000"); // 通用错误: internal_error
+        addEngineState("21S02", "21000"); // 列数不匹配: cardinality_violation
     }
 
     static {
@@ -128,7 +131,7 @@ public final class PlpgSqlCondition {
                     allValid = false;
             }
             if (allValid)
-                return toCanonicalSqlState(c);
+                return c.toUpperCase();
         }
         String sqlState = toSqlState(c);
         return sqlState != null ? sqlState : c.toLowerCase();
@@ -147,8 +150,16 @@ public final class PlpgSqlCondition {
             if (canonicalState == null)
                 continue;
             String normalized = normalize(condition);
-            if (normalized != null
-                    && toCanonicalSqlState(normalized).equalsIgnoreCase(canonicalState))
+            if (normalized == null)
+                continue;
+            // PostgreSQL的条件名也可以是类名，比如syntax_error_or_access_rule_violation(42000)
+            // 应该匹配42xxx下的所有SQLSTATE，要先用未做别名转换的类码比较
+            if (normalized.length() == 5 && normalized.endsWith("000")
+                    && canonicalState.length() >= 2
+                    && normalized.regionMatches(true, 0, canonicalState, 0, 2))
+                return true;
+            String conditionState = toCanonicalSqlState(normalized);
+            if (conditionState.equalsIgnoreCase(canonicalState))
                 return true;
         }
         return false;
@@ -167,19 +178,24 @@ public final class PlpgSqlCondition {
      * 从捕获的异常里取SQLSTATE，取不到时返回null。
      */
     public static String getSqlState(Throwable t) {
-        if (t == null)
-            return null;
-        if (t instanceof PlpgSqlException)
-            return ((PlpgSqlException) t).getSqlState();
-        if (t instanceof DbException) {
-            try {
-                return ((DbException) t).getSQLException().getSQLState();
-            } catch (Throwable e) {
-                return null;
+        // 沿着cause链查找，异常可能被包装了好几层
+        Throwable cause = t;
+        while (cause != null) {
+            if (cause instanceof PlpgSqlException)
+                return ((PlpgSqlException) cause).getSqlState();
+            if (cause instanceof java.sql.SQLException)
+                return ((java.sql.SQLException) cause).getSQLState();
+            if (cause instanceof DbException) {
+                try {
+                    java.sql.SQLException e = ((DbException) cause).getSQLException();
+                    if (e != null && e.getSQLState() != null)
+                        return e.getSQLState();
+                } catch (Throwable e) {
+                    // 不是SQLException包装，继续看下一层
+                }
             }
+            cause = cause.getCause();
         }
-        if (t instanceof java.sql.SQLException)
-            return ((java.sql.SQLException) t).getSQLState();
         return null;
     }
 }
