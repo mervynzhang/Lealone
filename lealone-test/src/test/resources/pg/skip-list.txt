@@ -45,10 +45,8 @@ function_sql.empty_body_call	create_function_sql.sql:484-488	4	Lealone 无 anyel
 procedure.call_random	create_procedure.sql:2-2	1	Lealone 的 CALL 不区分函数与过程
 procedure.psql_meta	create_procedure.sql:14-21	1	Lealone 客户端没有 psql 元命令, 也没有 pg_get_functiondef()
 procedure.utility_body	create_procedure.sql:46-50	2	Lealone 过程体不能执行 DDL
-procedure.inout_params	create_procedure.sql:79-102	6	CREATE PROCEDURE 只接受 IN 参数(42102), OUT/INOUT 在 CREATE FUNCTION 里已支持
 procedure.named_default	create_procedure.sql:107-121	7	Lealone 不支持 DEFAULT 参数与命名实参
 procedure.polymorphic	create_procedure.sql:126-159	11	Lealone 无 anyarray/anyelement 多态类型
-procedure.out_params	create_procedure.sql:185-212	12	CREATE PROCEDURE 只接受 IN 参数(42102); OUT/INOUT/VARIADIC 在 CREATE FUNCTION 里已支持
 procedure.call_function	create_procedure.sql:236-237	2	Lealone 的 CALL 不区分函数与过程
 procedure.alter_and_bad_def	create_procedure.sql:239-249	8	Lealone 不支持 ALTER PROCEDURE/FUNCTION, 过程也不接受 WINDOW/STRICT/VARIADIC/DEFAULT
 procedure.privileges	create_procedure.sql:258-267	10	Lealone 无过程级 EXECUTE 权限与 SET ROLE 语义
@@ -57,7 +55,6 @@ plpgsql.trigger_room	plpgsql.sql:130-140	2	Lealone 无 CREATE TRIGGER 与触发�
 plpgsql.trigger_raise	plpgsql.sql:162-172	2	Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger)
 plpgsql.polymorphic	plpgsql.sql:1565-1568	1	Lealone 无 anyelement/anyarray 多态参数类型
 plpgsql.cursor	plpgsql.sql:1859-1900	6	PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100
-plpgsql.out_params_exception	plpgsql.sql:3609-3638	6	RETURNS RECORD 复合返回类型不支持, 且 leaker_1 用 (f(x)).field 取复合返回值的字段
-rangefuncs.setof_composite	rangefuncs.sql:1-8	5	Lealone 无 SETOF <表行类型>, 也不支持 $1 位置参数
 rangefuncs.with_ordinality_unnest	rangefuncs.sql:13-17	5	没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持)
-plpgsql.setof_composite_record	plpgsql.sql:1487-1512	4	RETURNS SETOF <表行类型> 不支持(只支持标量 setof 与 RETURNS TABLE)
+plpgsql.setof_composite_record	plpgsql.sql:1487-1512	4	这段用 plpgsql 的 FOR ... IN 查询(50100 PL/pgSQL: FOR ... IN query)遍历表, 该语法还不支持; RETURNS SETOF <表行类型> 本身已可用
+procedure.out_params_named	create_procedure.sql:199-212	8	不支持命名实参(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150)

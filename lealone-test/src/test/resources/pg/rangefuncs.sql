@@ -16,12 +16,23 @@
 
 -- @case rangefuncs.setof_composite
 -- @pg rangefuncs.sql:1-8
--- 缺失: Lealone 无 SETOF <复合类型/表行类型>, 也不支持 $1 位置参数;
---       这样的函数能建, 但调用时报 21002
+-- 适配: PG 用无名参数 + $1, Lealone 要求命名参数, 这里改成 p; 返回类型是表的行类型(SETOF rngfunc2)
 create table rngfunc2(rngfuncid int, f2 int);
-create function rngfunct(int) returns setof rngfunc2 as 'SELECT * FROM rngfunc2 WHERE rngfuncid = $1 ORDER BY f2;' language sql;
+> update count: 0
+
+insert into rngfunc2 values(1, 10), (1, 20), (2, 30);
+> update count: 3
+
+create function rngfunct(p int) returns setof rngfunc2 as
+    'SELECT * FROM rngfunc2 WHERE rngfuncid = p ORDER BY f2' language sql;
+> update count: 0
+
 select * from rngfunct(1);
--- PG 期望: rngfunc2 里 rngfuncid=1 的行
+> RNGFUNCID F2
+> --------- --
+> 1         10
+> 1         20
+> rows: 2
 
 -- @case rangefuncs.with_ordinality
 -- @pg rangefuncs.sql:9-12
