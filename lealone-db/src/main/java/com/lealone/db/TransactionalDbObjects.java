@@ -137,6 +137,10 @@ public class TransactionalDbObjects {
     }
 
     public void commit() {
+        // 同一个事务里的多条DDL共用一份快照，但只要提交一次，
+        // 重复提交会把旧快照的version改写成0，破坏多版本
+        if (version <= 0)
+            return;
         if (old != null) {
             old.version = version;
             old.parentVersion = parentVersion;
@@ -147,6 +151,10 @@ public class TransactionalDbObjects {
     }
 
     public void rollback() {
+        // 同一个事务里的多条DDL共用一个回滚handler对应的快照，只能回滚一次，
+        // 重复回滚会把上一个已提交事务的快照也弹出来，导致对象丢失
+        if (version <= 0)
+            return;
         if (old != null) {
             dbObjects = old.dbObjects;
             old = old.old;

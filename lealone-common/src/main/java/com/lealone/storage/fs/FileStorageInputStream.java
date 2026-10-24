@@ -137,7 +137,11 @@ public class FileStorageInputStream extends InputStream {
         fileStorage.readFully(page.getBytes(), 0, Constants.FILE_BLOCK_SIZE);
         page.reset();
         remainingInBuffer = page.getInt();
-        if (remainingInBuffer < 0) {
+        // 块长度必须落在文件范围内，否则是文件损坏或者加密文件的密码不对(块头是解出来的垃圾数据)，
+        // 不能按这个垃圾长度去分配内存，那样会抛OutOfMemoryError，整个数据库都会被强行关闭
+        long available = fileStorage.length() - fileStorage.getFilePointer()
+                + Constants.FILE_BLOCK_SIZE;
+        if (remainingInBuffer < 0 || remainingInBuffer > available) {
             close();
             return;
         }

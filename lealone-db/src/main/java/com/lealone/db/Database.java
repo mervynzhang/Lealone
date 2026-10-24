@@ -80,6 +80,7 @@ import com.lealone.storage.StorageEngine;
 import com.lealone.storage.StorageSetting;
 import com.lealone.storage.fs.FileStorage;
 import com.lealone.storage.fs.FileUtils;
+import com.lealone.storage.lob.LobLocalStorage;
 import com.lealone.storage.lob.LobStorage;
 import com.lealone.transaction.TransactionEngine;
 import com.lealone.transaction.TransactionEngine.GcTask;
@@ -216,6 +217,10 @@ public class Database extends DbObjectBase implements DataHandler {
             this.parameters = new CaseInsensitiveMap<>();
         }
         persistent = dbSettings.persistent;
+        if (!persistent) {
+            // 内存库没有持久化的LobStorage，Lob以内存内联的方式创建(见getMaxLengthInplaceLob)
+            lobStorage = new LobLocalStorage(this, null);
+        }
         closeDelay = dbSettings.dbCloseDelay; // 默认是-1不关闭
         compareMode = CompareMode.getInstance(null, 0, false);
         if (dbSettings.mode != null) {
@@ -877,7 +882,7 @@ public class Database extends DbObjectBase implements DataHandler {
                     dbObjects.commit();
                 } else {
                     clearObjectId(obj.getId());
-                    dbObjects.rollback();
+                    rollbackDbObjects(dbObjects);
                 }
             });
         }
@@ -917,7 +922,7 @@ public class Database extends DbObjectBase implements DataHandler {
                     dbObjects.commit();
                     removeInternal(obj);
                 } else {
-                    dbObjects.rollback();
+                    rollbackDbObjects(dbObjects);
                 }
             });
         }
@@ -926,6 +931,12 @@ public class Database extends DbObjectBase implements DataHandler {
     private void removeInternal(DbObject obj) {
         clearObjectId(obj.getId());
         obj.invalidate();
+    }
+
+    // DDL回滚之后元数据又变回去了，要让缓存中的prepared statement重新编译
+    private void rollbackDbObjects(TransactionalDbObjects dbObjects) {
+        dbObjects.rollback();
+        getNextModificationMetaId();
     }
 
     /**
@@ -960,7 +971,7 @@ public class Database extends DbObjectBase implements DataHandler {
                 dbObjects.commit();
             } else {
                 obj.rename(oldName);
-                dbObjects.rollback();
+                rollbackDbObjects(dbObjects);
             }
         });
 
@@ -1975,7 +1986,7 @@ public class Database extends DbObjectBase implements DataHandler {
     public synchronized void drop() {
         state = State.CLOSED;
         LealoneDatabase.getInstance().removeClosedDatabase(getName());
-        if (lobStorage != null) {
+        if (lobStorage instanceof GcTask) {
             getTransactionEngine().removeGcTask((GcTask) lobStorage);
         }
         for (Storage storage : getStorages()) {

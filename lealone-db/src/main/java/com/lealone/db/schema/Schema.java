@@ -247,7 +247,7 @@ public class Schema extends DbObjectBase {
                     dbObjects.commit();
                 } else {
                     database.clearObjectId(obj.getId());
-                    dbObjects.rollback();
+                    rollbackDbObjects(dbObjects);
                 }
                 freeUniqueName(obj.getName());
             });
@@ -282,7 +282,7 @@ public class Schema extends DbObjectBase {
                     dbObjects.commit();
                     obj.onUpdateComplete();
                 } else {
-                    dbObjects.rollback();
+                    rollbackDbObjects(dbObjects);
                 }
             });
         }
@@ -322,11 +322,17 @@ public class Schema extends DbObjectBase {
                         dbObjects.commit();
                         removeInternal(obj);
                     } else {
-                        dbObjects.rollback();
+                        rollbackDbObjects(dbObjects);
                     }
                 });
             }
         }
+    }
+
+    // DDL回滚之后元数据又变回去了，要让缓存中的prepared statement重新编译
+    private void rollbackDbObjects(TransactionalDbObjects dbObjects) {
+        dbObjects.rollback();
+        database.getNextModificationMetaId();
     }
 
     private void removeInternal(SchemaObject obj) {
@@ -393,7 +399,7 @@ public class Schema extends DbObjectBase {
                 dbObjects.commit();
             } else {
                 obj.rename(oldName);
-                dbObjects.rollback();
+                rollbackDbObjects(dbObjects);
             }
             freeUniqueName(oldName);
             freeUniqueName(newName);
