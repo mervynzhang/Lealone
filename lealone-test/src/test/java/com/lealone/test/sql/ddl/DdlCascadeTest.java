@@ -9,7 +9,6 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.db.api.ErrorCode;
@@ -252,9 +251,7 @@ public class DdlCascadeTest extends SqlAssertTestBase {
         cleanup();
     }
 
-    // CREATE INDEX建在非空表上时没有回填已有行，优化器却已按index sorted跳过排序，
-    // 导致ORDER BY返回插入顺序；关闭重开库后才恢复正常。这是本仓库既有缺陷，不是本次改动引入。
-    @Ignore("BUG: CREATE INDEX does not backfill existing rows, ORDER BY returns insertion order until reopen")
+    // CREATE INDEX建在非空表上时索引是异步回填的，构建期间不能拿它来满足排序
     @Test
     public void orderByAfterCreateIndexOnExistingRows() throws Exception {
         cleanup();
