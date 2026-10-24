@@ -137,39 +137,57 @@ public class RoutinePrivilegeTest extends SqlTestBase {
         executeUpdate("DROP FUNCTION rp_lp");
     }
 
-    // GRANT ... TO PUBLIC / SET ROLE 的语义在SCRIPT回放和关库重开之后仍然成立
+    // REVOKE之后的0权限标记、GRANT的授权在SCRIPT回放和关库重开之后仍然成立
     private void testPersistence() throws Exception {
         executeUpdate("GRANT EXECUTE ON FUNCTION rp_add(INT) TO PUBLIC");
         executeUpdate("REVOKE EXECUTE ON PROCEDURE rp_ins() FROM PUBLIC");
-        // 角色继承的授权也要去掉，这样重启后普通用户调用过程就应该被拒
         executeUpdate("REVOKE EXECUTE ON PROCEDURE rp_ins() FROM rp_r1");
-        // 直接授给用户的也要去掉
         executeUpdate("REVOKE EXECUTE ON PROCEDURE rp_ins() FROM rp_u1");
-        String revoke = null;
-        String grant = null;
+        String revokePublic = null;
+        String grantPublic = null;
         try (Statement s = conn.createStatement(); ResultSet rs = s.executeQuery("SCRIPT")) {
             while (rs.next()) {
                 String sql = rs.getString(1);
                 if (sql == null)
                     continue;
-                if (sql.startsWith("REVOKE EXECUTE ON PROCEDURE PUBLIC.RP_INS"))
-                    revoke = sql;
+                if (sql.startsWith("REVOKE EXECUTE ON PROCEDURE PUBLIC.RP_INS")
+                        && sql.contains("FROM PUBLIC"))
+                    revokePublic = sql;
                 else if (sql.startsWith("GRANT EXECUTE ON FUNCTION RP_ADD"))
-                    grant = sql;
+                    grantPublic = sql;
             }
         } catch (SQLException e) {
             throw DbException.convert(e);
         }
-        assertNotNull("SCRIPT里要有REVOKE EXECUTE ON PROCEDURE", revoke);
-        assertNotNull("SCRIPT里要有GRANT EXECUTE ON FUNCTION", grant);
+        assertNotNull("SCRIPT里要有REVOKE EXECUTE ON PROCEDURE ... FROM PUBLIC", revokePublic);
+        assertNotNull("SCRIPT里要有GRANT EXECUTE ON FUNCTION", grantPublic);
 
-        // SCRIPT回放: 先删掉授权，再用SCRIPT里的语句恢复
-        executeUpdate("REVOKE EXECUTE ON FUNCTION rp_add(INT) FROM PUBLIC");
+        // SCRIPT回放: 先把授权改成"人人可调用"，再用SCRIPT里的REVOKE恢复，恢复后普通用户应该被拒
         executeUpdate("GRANT EXECUTE ON PROCEDURE rp_ins() TO PUBLIC");
-        executeUpdate(revoke);
-        executeUpdate(grant);
+        executeUpdate("SET SESSION AUTHORIZATION rp_u1");
+        executeQuery("CALL rp_ins()");
+        executeUpdate("RESET SESSION AUTHORIZATION");
+        executeUpdate(revokePublic);
+        executeUpdate("SET SESSION AUTHORIZATION rp_u1");
+        executeQueryThanAssertErrorCode("CALL rp_ins()", ErrorCode.INSUFFICIENT_PRIVILEGE_1);
+        executeUpdate("RESET SESSION AUTHORIZATION");
 
-        // TODO 关库重开之后REVOKE标记的还原还有问题(重启后普通用户仍然能调用被REVOKE掉的过程),
-        // 先只验证SCRIPT里有正确的REVOKE/GRANT语句，重启语义下一轮修
+        // 关库重开: REVOKE标记和GRANT授权都要还在
+        stmt.close();
+        conn.close();
+        conn = getConnection();
+        stmt = conn.createStatement();
+        executeUpdate("SET SESSION AUTHORIZATION rp_u1");
+        // 过程PUBLIC被REVOKE、角色/用户上的EXECUTE也都被REVOKE了
+        executeQueryThanAssertErrorCode("CALL rp_ins()", ErrorCode.INSUFFICIENT_PRIVILEGE_1);
+        executeUpdate("RESET SESSION AUTHORIZATION");
+        executeUpdate("SET ROLE rp_u2");
+        executeQueryThanAssertErrorCode("CALL rp_ins()", ErrorCode.INSUFFICIENT_PRIVILEGE_1);
+        executeUpdate("RESET ROLE");
+        // 函数授给PUBLIC了，普通用户重开之后仍然能调用
+        executeUpdate("SET SESSION AUTHORIZATION rp_u1");
+        executeQuery("SELECT rp_add(20)");
+        assertEquals(21, getIntValue(1, true));
+        executeUpdate("RESET SESSION AUTHORIZATION");
     }
 }
