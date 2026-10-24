@@ -15,7 +15,7 @@ public class SingleThreadAsyncCallback<T> extends AsyncCallback<T> {
     private AsyncResultHandler<T> completeHandler;
     private AsyncHandler<T> successHandler;
     private AsyncHandler<Throwable> failureHandler;
-    private AsyncResult<T> asyncResult;
+    private volatile AsyncResult<T> asyncResult;
 
     @Override
     protected T await(long timeoutMillis) {
@@ -27,9 +27,28 @@ public class SingleThreadAsyncCallback<T> extends AsyncCallback<T> {
             Scheduler scheduler = ((SchedulerThread) t).getScheduler();
             scheduler.await(this, timeoutMillis);
             return getResult(asyncResult);
-        } else {
-            throw DbException.getInternalError();
         }
+        // 非调度线程(比如JDBC客户端线程)不能用调度器等待，直接阻塞等待结果。
+        // 原来这里直接抛内部错误，服务端稍慢一点同步JDBC调用就会失败。
+        synchronized (this) {
+            long deadline = timeoutMillis > 0 ? System.currentTimeMillis() + timeoutMillis : 0;
+            while (asyncResult == null) {
+                try {
+                    if (deadline == 0) {
+                        wait();
+                    } else {
+                        long remaining = deadline - System.currentTimeMillis();
+                        if (remaining <= 0)
+                            break;
+                        wait(remaining);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        return asyncResult != null ? getResult(asyncResult) : null;
     }
 
     @Override
@@ -71,7 +90,10 @@ public class SingleThreadAsyncCallback<T> extends AsyncCallback<T> {
 
     @Override
     public void setAsyncResult(AsyncResult<T> asyncResult) {
-        this.asyncResult = asyncResult;
+        synchronized (this) {
+            this.asyncResult = asyncResult;
+            notifyAll();
+        }
         if (completeHandler != null)
             completeHandler.handle(asyncResult);
 
