@@ -5,9 +5,10 @@
 `lealone-test/src/test/resources/pg/skip-list.txt` 一起，既是测试套件的说明书，也是
 "Lealone 离 PG 还有多远"的度量尺。
 
-- 当前基线：`feature/stored-routines`（`d1de03e3b`，复合类型 `CREATE TYPE`/`RETURNS comp`/`SETOF <表行类型>`、
+- 当前基线：`feature/stored-routines`（`4c75ebe46`，复合类型 `CREATE TYPE`/`RETURNS comp`/`SETOF <表行类型>`、
   `%ROWTYPE` 数组、存储过程 OUT/INOUT 参数与按参数类型重载、`LANGUAGE plpgsql` 过程体、`RETURNS VOID` + 普通 DML、
-  `BEGIN ATOMIC`/`CASE ... END` 多语句体、DML `RETURNING`、`WITH ORDINALITY`、标量函数进 FROM、多 OUT record）
+  `BEGIN ATOMIC`/`CASE ... END` 多语句体、DML `RETURNING`、`WITH ORDINALITY`、标量函数进 FROM、多 OUT record；
+  `wip/r5d` 工作线又补了无名参数/`$1` 位置参数、DEFAULT 参数值、命名实参）
 - 上一轮基线：`5a25375b5`（96 用例 / 56 执行 / 40 skip / 207 语句，r3b 之后又解锁了一批，见第六节）
 - 对照的 PG 源码：本地 `postgres` 20devel 的 `src/test/regress/sql/`
 - 只加测试代码和资源，**没有改任何产品代码**；发现的缺陷都记在第七节，不在本工作线修
@@ -68,15 +69,15 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 25, skip 15)  脚本语句 102(通过 102, 失败 0)  被skip用例占  49 条
-[pgregress]   create_procedure.sql     用例 24(执行 14, skip 10)  脚本语句  63(通过  63, 失败 0)  被skip用例占  37 条
-[pgregress]   plpgsql.sql              用例 23(执行 18, skip  5)  脚本语句  56(通过  56, 失败 0)  被skip用例占  12 条
+[pgregress]   create_function_sql.sql  用例 40(执行 30, skip 10)  脚本语句 125(通过 125, 失败 0)  被skip用例占  32 条
+[pgregress]   create_procedure.sql     用例 25(执行 18, skip  7)  脚本语句  86(通过  86, 失败 0)  被skip用例占  21 条
+[pgregress]   plpgsql.sql              用例 23(执行 19, skip  4)  脚本语句  60(通过  60, 失败 0)  被skip用例占   8 条
 [pgregress]   rangefuncs.sql           用例 10(执行 10, skip  0)  脚本语句  40(通过  40, 失败 0)  被skip用例占   0 条
-[pgregress] 合计: 用例 97 (执行 67, skip 30), 脚本语句 261 (通过 261, 失败 0), 耗时 569ms
-[pgregress] skip 清单: 30 条用例, 点名跳过的 PG 语句 155 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中  85 条在 skip 清单里
-[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  55 条在 skip 清单里
-[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 15 条)
+[pgregress] 合计: 用例 98 (执行 77, skip 21), 脚本语句 311 (通过 311, 失败 0), 耗时 638ms
+[pgregress] skip 清单: 21 条用例, 点名跳过的 PG 语句 112 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中  63 条在 skip 清单里
+[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  38 条在 skip 清单里
+[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 11 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 0 条)
 ```
 
@@ -103,24 +104,33 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN | 1 | 10 | function_sql.setof_inline |
 | Lealone 函数体只允许单条查询(不支持 DDL) | 1 | 8 | function_sql.ddl_in_body |
 | Lealone 无 CREATE OPERATOR CLASS/分区操作符类 | 1 | 6 | function_sql.partition_ops |
-| Lealone 不支持 $1/$2 位置参数 | 1 | 1 | function_sql.bad_body_positional |
 | Lealone 无 anyelement/anyarray 多态类型 | 1 | 4 | function_sql.empty_body_call |
 | Lealone 的 CALL 不区分函数与过程 | 2 | 3 | procedure.call_random, procedure.call_function |
 | Lealone 客户端没有 psql 元命令, 也没有 pg_get_functiondef() | 1 | 1 | procedure.psql_meta |
 | Lealone 过程体不能执行 DDL | 1 | 2 | procedure.utility_body |
-| Lealone 不支持 DEFAULT 参数与命名实参 | 1 | 7 | procedure.named_default |
-| Lealone 不支持 ALTER PROCEDURE/FUNCTION, 过程也不接受 WINDOW/STRICT/VARIADIC/DEFAULT | 1 | 8 | procedure.alter_and_bad_def |
+| Lealone 不支持 ALTER PROCEDURE/FUNCTION, 过程也不接受 WINDOW/STRICT/VARIADIC | 1 | 8 | procedure.alter_and_bad_def |
 | Lealone 无过程级 EXECUTE 权限与 SET ROLE 语义 | 1 | 10 | procedure.privileges |
 | Lealone 不支持 ALTER ROUTINE/DROP ROUTINE | 1 | 5 | procedure.routine_syntax |
 | Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger) | 2 | 4 | plpgsql.trigger_room, plpgsql.trigger_raise |
 | Lealone 无 anyelement/anyarray 多态参数类型 | 1 | 1 | plpgsql.polymorphic |
 | PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100 | 1 | 6 | plpgsql.cursor |
 | 这段用 plpgsql 的 FOR ... IN 查询(50100 PL/pgSQL: FOR ... IN query)遍历表, 该语法还不支持; RETURNS SETOF <表行类型> 本身已可用 | 1 | 4 | plpgsql.setof_composite_record |
-| 不支持命名实参(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150) | 1 | 8 | procedure.out_params_named |
+| 不支持命名 OUT 参数占位(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150) | 1 | 8 | procedure.out_params_named |
 
 
 
 ## 六、这一轮刷新：解锁了什么
+
+### 本轮（`wip/r5d`）：无名参数/`$1` 位置参数、DEFAULT 参数值、命名实参
+
+| 用例 | 之前 | 现在 | 靠什么能力 |
+| --- | --- | --- | --- |
+| `function_sql.a2_array_arg` | skip（无名参数 + `$1`） | 执行 2 条语句 | 无名参数 + `$1[1]::int` |
+| `function_sql.bad_body_positional` | skip（`$2` 引用不存在的位置参数） | 执行 1 条语句 | `$n` 越界在 CREATE 阶段报 42000 |
+| `procedure.named_default` | skip（DEFAULT + `b => 'Hello'`） | 执行 8 条语句 | DEFAULT 参数值 + 命名实参（过程体改成 plpgsql，避免影响后面用例依赖的 `cp_test`） |
+
+统计变化：skip 24 → 21，执行 74 → 77，脚本语句 311（通过 311，失败 0）。另外 `procedure.out_params_named` 的
+skip 原因缩小为"命名 OUT 参数占位 + 过程 VARIADIC"（命名**入参**已经支持）。
 
 基线从 `5a25375b5` 到 `d1de03e3b`，复合类型、过程 OUT/INOUT、过程重载、`LANGUAGE plpgsql` 过程体、
 `RETURNS VOID` + DML、`BEGIN ATOMIC`、DML `RETURNING`、`WITH ORDINALITY`、标量函数进 FROM 都落地了。
@@ -140,24 +150,28 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 
 ## 七、剩余缺口与缺陷（都已实测复现）
 
-### N1. 过程的 OUT 实参会被求值
+### N1. 过程的 OUT 实参会被求值（已解决）
 
 ```sql
 create procedure ptest9(out a int) as $$ INSERT INTO cp_test_out VALUES (1,'a'); SELECT 1; $$;
-call ptest9(1/0);   -- Lealone: 22012 Division by zero; PG: 正常返回(OUT 实参不求值)
+call ptest9(1/0);   -- 现在和 PG 一样: OUT 位置只占位不求值, 返回 1
 ```
 
-PG 文档明确写了 OUT 位置的表达式不会被求值。用例 `procedure.out_params`（这一句按 Lealone 实际行为断言 22012）。
+以前 OUT 位置的实参也会被求值(报 22012)，现在按 PG 语义只占位不求值，
+用例 `procedure.out_params` 断言 `call ptest9(1/0)` 正常返回。
 
-### N2. 无名参数的报错很误导
+### N2. 无名参数/`$1` 位置参数（已解决）
 
 ```sql
-create function functest_A_2(text[]) returns int as 'SELECT $1[1]::int';  -- 42102 Table ")" not found
+create function functest_A_2(text[]) returns int as 'SELECT $1[1]::int';
+select functest_A_2(('1','2','3'));   -- 1
+create function test1(int) returns int as 'select $2';   -- 42000 "there is no parameter $2"
 ```
 
-PG 允许无名参数（用 `$1` 引用）。Lealone 报的不是"不支持位置参数"，而是 `42102 Table ")" not found`，
-`CREATE PROCEDURE p(int)`、`create function f(text) returns setof text ...` 也会撞到同样的解析错误。
-用例 `function_sql.a2_array_arg`、`function_sql.bad_body_positional`（原因已按实际报错更新）。
+以前 Lealone 要求参数必须带名字，`CREATE FUNCTION f(int)` 会报误导性的 `42102 Table ")" not found`。
+现在任何模式的参数都可以只写类型，函数体里用 `$1`/`$2` 按位置引用入参（`$1[1]::int` 也支持），
+引用不存在的位置参数在 CREATE 阶段报 `42000`（消息里带 `there is no parameter $N`）。
+`CREATE PROCEDURE p(int)` 也可以。用例 `function_sql.a2_array_arg`、`function_sql.bad_body_positional` 已解锁。
 
 ### N3. `EXPLAIN (COSTS OFF)` 不支持
 
@@ -236,13 +250,12 @@ DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`paramete
 * **函数体/过程体里做 DDL**：`function_sql.ddl_in_body`、`procedure.utility_body`（`50100 函数体只能是查询或带 RETURNING 的 DML`）。
 * **SQL 标准函数体**：`RETURN 表达式` / `BEGIN ATOMIC` 之外的三条（`sql_body_return`、`sql_body_view`、`sql_body_tempseq`），
   `CREATE FUNCTION ... LANGUAGE sql RETURN expr` 仍报 42001。
-* **参数默认值/命名实参/过程 VARIADIC**：`procedure.named_default`、`procedure.out_params_named`（DEFAULT 报 42001，
-  过程 VARIADIC 报 `50100 VARIADIC parameter in CREATE PROCEDURE`）。
+* **过程的 VARIADIC / 命名 OUT 参数占位**：`procedure.out_params_named`（过程 VARIADIC 报
+  `50100 VARIADIC parameter in CREATE PROCEDURE`，`CALL p(a => null)` 里的 OUT 参数名还不认）。
 * **plpgsql 的 `FOR ... IN <query>`**：`plpgsql.setof_composite_record`（50100）。
   注意 `RETURNS SETOF <表行类型>` 本身已经可用（`rangefuncs.setof_composite`、`%ROWTYPE` 数组已验证）。
 * **游标/触发器**：`plpgsql.cursor`、`plpgsql.trigger_*`。
-* **`unnest()`/`generate_series()`/`ARRAY[...]` 字面量/`$1` 位置参数**：`rangefuncs.with_ordinality_unnest`、
-  `function_sql.a2_array_arg`、`function_sql.bad_body_positional`。
+* **`unnest()`/`generate_series()`/`ARRAY[...]` 字面量**：`rangefuncs.with_ordinality_unnest`（`$1` 位置参数已支持）。
 * **目录与 DDL 属性**：`pg_get_functiondef_sqlbody`（依赖 SQL 标准函数体）、`ALTER FUNCTION` 的属性组合 +
   `SET search_path`（`or_replace_window`）、`CREATE OPERATOR CLASS`（1）。
   `information_schema.pg_proc`、`PARAMETERS`、`ROUTINES`、`ROUTINE_ROUTINE_USAGE`（空表）和
@@ -276,8 +289,8 @@ DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`paramete
 
 改的是语法不是语义，脚本里逐条注明：
 
-1. **参数必须命名**：PG 允许无名参数 `f(text, date)` 和 `$1/$2` 位置引用，Lealone 要求命名，
-   函数体里用参数名。
+1. **参数命名**：PG 允许无名参数 `f(text, date)` 和 `$1/$2` 位置引用，Lealone 现在也支持；
+   转换版里保留命名参数是为了让函数体按名字引用更可读（两种写法并存，回归里两种都覆盖）。
 2. **PL/pgSQL 函数体必须写在一行**：脚本解析器按"行末是 `;`"切语句，多行块体会被切断。
    写成 `AS $$ DECLARE ...; BEGIN ...; END; $$;` 一行即可（见 `pg/README.md`）。
 3. **布尔/空值显示**：PG `t/f`，Lealone `TRUE/FALSE`；PG 的一行空值在这里是 `null`。

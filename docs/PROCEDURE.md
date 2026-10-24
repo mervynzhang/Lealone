@@ -6,15 +6,17 @@
 ## 一、语法
 
 ```sql
-CREATE PROCEDURE [IF NOT EXISTS] [schema.]name([IN|OUT|INOUT] p1 INT, ...)
+CREATE PROCEDURE [IF NOT EXISTS] [schema.]name([IN|OUT|INOUT] [p1 INT [DEFAULT 常量]], ...)
     [LANGUAGE SQL]
     AS 'SQL1; SQL2; ...';                -- 经典写法: 用分号分隔的语句串
 
-CREATE PROCEDURE [IF NOT EXISTS] [schema.]name([IN|OUT|INOUT] p1 INT, ...)
+CREATE PROCEDURE [IF NOT EXISTS] [schema.]name([IN|OUT|INOUT] [p1 INT [DEFAULT 常量]], ...)
     [LANGUAGE SQL]
     BEGIN ATOMIC SQL1; SQL2; END;        -- SQL标准的函数体, 可以有多条语句
 
-CALL name(实参...);
+CALL name(实参...);                      -- 实参可以省略带默认值的入参
+CALL name(名字 => 实参, ...);            -- 命名实参
+CALL name(10, b => 'Hello');
 DROP PROCEDURE [IF EXISTS] [schema.]name;
 ```
 
@@ -56,6 +58,11 @@ CALL p2();  -- 返回一行 (30)
   列类型是参数的声明类型；值来自过程体**最后一条查询**的第一行（按列位置对应 `OUT`/`INOUT` 参数）。
   实参可以只给入参（`IN`/`INOUT`），也可以像 PostgreSQL 那样给 `OUT` 参数写 `NULL` 占位。
 - **过程体语言**：只支持 `LANGUAGE SQL`（默认值，写不写都一样）。
+- **DEFAULT参数值**：入参可以写 `DEFAULT <常量表达式>`（和函数一样只支持常量），CALL 时省略的实参
+  用默认值补齐；有默认值的入参必须集中在末尾。默认值写进 DDL，SCRIPT/重启能回放。
+- **命名实参**：`CALL p(b => 'Hello', a => 10)`，也接受 `:=`；位置实参必须写在命名实参前面。
+  命名实参按参数名重排后再走原来的"按位置绑定"。**命名 OUT 参数占位不支持**（`CALL p(a => null)` 里的 `a`
+  如果是 OUT 参数会报函数不存在），OUT 参数只能按位置写 `NULL` 占位。
 - **不是函数**：过程不能出现在表达式里，`SELECT sp_ins(1, 2)` 报 `FUNCTION_NOT_FOUND_1`。
 - **持久化**：过程体随 schema 元数据一起持久化，重开库后仍可用。
 
@@ -125,7 +132,7 @@ call p('x');            -- varchar 版本还在
 4. **参数绑定按语句独立**：过程体里每条语句的第 i 个 `?` 对应第 i 个实参，多条语句不共享参数下标
    （嵌套 `CALL` 已支持，见第三节）。
 5. **不支持**：`RENAME PROCEDURE`、`INFORMATION_SCHEMA` 里的过程元数据视图、`VARIADIC` 参数、
-   `DEFAULT` 参数值、命名实参（`p(b => 1)`）、`CREATE OR REPLACE PROCEDURE`。
+   命名 OUT 参数占位（`CALL p(a => null)`）、`CREATE OR REPLACE PROCEDURE`。
 6. **未验证**：集群 / 复制模式下过程的行为；`statement` 级复制的确定性校验。
 7. 过程体按字面切分后逐条 `prepareStatement`，每条语句都会走一次会话级语句缓存。
 8. **PL/pgSQL过程体不支持**：`CREATE PROCEDURE ... LANGUAGE plpgsql` 在**建过程时**就报

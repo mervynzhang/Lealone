@@ -58,7 +58,13 @@ DROP FUNCTION [IF EXISTS] [schema.]name[(type, ...)];
 - `LANGUAGE` 子句与易变性关键字（`IMMUTABLE`/`STABLE`/`VOLATILE`）都是可选的，且顺序任意，但都必须写在
   `AS` 之前。
 - 参数模式：`IN`（默认）、`OUT`、`INOUT`、`VARIADIC`；数组类型可以写 `type[]` 或 `type ARRAY`。
-- `OUT`/`INOUT`/`VARIADIC` 参数可以只写类型不写名字（内部用 `$1`、`$2`... 作为名字）。
+- 参数可以只写类型不写名字（任何模式都可以，如 `CREATE FUNCTION f(INT, TEXT)`），
+  函数体里用 `$1`/`$2` 按位置引用入参；`$n` 指的是第 n 个**入参**（IN/INOUT，OUT 不参与编号），
+  `$1[1]::int` 这种写法也支持。引用不存在的位置参数（如只有 1 个入参却写 `$2`）在 CREATE 阶段报错。
+- 入参可以带 `DEFAULT <常量表达式>`：省略的实参用默认值补齐；和 PostgreSQL 一样，有默认值的入参
+  必须集中在末尾（否则报语法错），`OUT`/`VARIADIC` 参数不能有默认值。
+- 调用时可以用命名实参：`SELECT f(b => 2, a => 1)`（`: =` 也接受），位置实参必须写在命名实参前面，
+  同一个参数不能给两次；命名实参和默认值可以混用（`f(a => 1)` 里省略的 `b` 用默认值）。
 - `DROP FUNCTION` 后面可选的 `(type, ...)` 用来定位具体是哪个重载（见第五节）；不写时要求这个名字只有一个重载。
 - 例：
 
@@ -212,6 +218,17 @@ SELECT var_count(1, 2, 3);  -- 3
     这条语句能被自己的 parser 原样回放，重启后从 sys(meta) 表回放即可继续使用（已实测）。
 18. **函数体里的表名按调用方当前的 schema 解析**（嵌套连接在 schema 不是 `PUBLIC` 时会先 `USE` 一下调用方的 schema）。
     函数名本身仍按 Lealone 既有规则解析：未限定名只查 session 当前 schema。
+19. **`DEFAULT` 参数值**：只支持**常量表达式**（数字/字符串/布尔/NULL/常量运算），CREATE 时就按参数声明的
+    类型转换好存下来，转换失败报 `DATA_CONVERSION_ERROR_1`；非常量（如 `DEFAULT RANDOM()`）报
+    `FEATURE_NOT_SUPPORTED_1`。默认值写进 `getCreateSQL()`（`... b INT DEFAULT 10 ...`），
+    SCRIPT/重启能原样回放。数组参数暂不支持默认值。
+    **重载消解**：有默认值时实参个数是一个区间（`[必须提供的入参个数, 入参总数]`），
+    匹配程度相同时优先选**不需要用默认值补齐**的那个重载（`f(int)` 与 `f(int,int DEFAULT 10)` 调用 `f(1)`
+    选前者）；实参个数超出区间才算不匹配（`FUNCTION_NOT_FOUND_1`）。
+20. **命名实参**：解析成 `(名字, 表达式)` 列表，消解重载时按每个候选函数的参数名重排成位置实参
+    （按候选分别打分，名字对不上/重复/位置实参写在命名实参后面的候选直接不匹配），
+    选中之后把实参按声明顺序重排，缺失的入参用默认值补成 `ValueExpression` 再执行。
+    `getSQL()` 里保留 `B => 2` 这种写法，所以 `CREATE VIEW` 的视图定义回放时位置不会错。
 
 2.8 **函数属性**（`CREATE FUNCTION` 与 `ALTER FUNCTION` 共用一套解析和持久化）:
 
