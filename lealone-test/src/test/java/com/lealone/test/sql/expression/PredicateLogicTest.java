@@ -25,6 +25,20 @@ public class PredicateLogicTest extends SqlAssertTestBase {
             assertQueryEquals(expected, "SELECT " + expr);
     }
 
+    // 行值 IN 也必须是三值逻辑: 含 NULL 的行值无法判定, 结果是 UNKNOWN 而不是 FALSE
+    @Test
+    public void rowValueInUsesThreeValuedLogic() {
+        assertQueryNull("SELECT (1, NULL) IN ((1, 2), (3, 4))");
+        assertQueryNull("SELECT (1, 2) IN ((1, NULL), (3, 4))");
+        assertQueryNull("SELECT (NULL, NULL) IN ((1, 2))");
+        assertQueryNull("SELECT (1, NULL) NOT IN ((1, 2), (3, 4))");
+        assertQueryTrue("SELECT (1, 2) IN ((1, 2), (3, 4))");
+        // 含 NULL 的行值即使两边完全一样也无法判定, 标准/PostgreSQL 都是 UNKNOWN
+        assertQueryNull("SELECT (1, NULL) IN ((1, NULL))");
+        assertQueryFalse("SELECT (1, 2) IN ((1, 3), (3, 4))");
+        assertQueryFalse("SELECT (1, 2) NOT IN ((1, 2), (3, 4))");
+    }
+
     @Test
     public void andTruthTable() {
         Boolean[][] table = { //
