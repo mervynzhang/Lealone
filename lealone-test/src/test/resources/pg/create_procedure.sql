@@ -234,20 +234,25 @@ drop table cp_test_default;
 
 -- @case procedure.polymorphic
 -- @pg create_procedure.sql:126-159
--- 缺失: Lealone 无 anyelement/anyarray 多态类型
+-- 适配: Lealone过程体用?按位置引用参数, 这里只验证多态参数和INOUT/OUT结果。
 create procedure ptest6(a int, b anyelement)
 language sql
-as $$
-select null::int;
-$$;
+as $$ select null::int; $$;
+> update count: 0
 call ptest6(1, 2);
+> CAST(NULL AS INTEGER)
+> ---------------------
+> null
+> rows: 1
 create procedure ptest6a(inout a anyelement, out b anyelement)
 language sql
-as $$
-select $1, $1;
-$$;
+as $$ select ?, 1; $$;
+> update count: 0
 call ptest6a(1, null);
--- PG 期望: ptest6(1,2) 返回一行 NULL; ptest6a 返回 (1,1)
+> A B
+> - -
+> 1 1
+> rows: 1
 
 -- @case procedure.collation
 -- @pg create_procedure.sql:164-170

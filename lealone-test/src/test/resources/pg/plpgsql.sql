@@ -155,14 +155,14 @@ select * from test_table_func_row();
 
 -- @case plpgsql.polymorphic
 -- @pg plpgsql.sql:1565-1568
--- 缺失: Lealone 无 anyelement/anyarray 多态参数类型
-create function f1(x anyelement) returns anyelement as $$
-begin
-  return x + 1;
-end
-$$ language plpgsql;
+create function f1(x anyelement) returns anyelement as $$ begin return x + 1; end $$ language plpgsql;
+> update count: 0
+
 select f1(42) as int;
--- PG 期望: 43
+> INT
+> ---
+> 43
+> rows: 1
 
 -- ---------------------------------------------------------------------------
 -- OUT / INOUT 参数

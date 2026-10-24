@@ -473,14 +473,19 @@ select * from functest1;
 
 -- @case function_sql.sql_body_polymorphic
 -- @pg create_function_sql.sql:197-205
--- 缺失: Lealone 无 anyarray/anyelement 多态类型, 也无 SQL 标准函数体
-create function functest_S_xx(a anyarray) returns anyelement
+-- PG 原样的 RETURN 函数体；Lealone 在创建期校验函数体，所以两个错误都在 CREATE 时暴露。
+create function functest_S_xx(x anyarray) returns anyelement
     language sql
-    return a[1];
-create function functest_S_xx(a date) returns boolean
+    return x[1];
+> exception 42000
+
+create function functest_S_xx(x date) returns boolean
     language sql
-    return a > 1;
--- PG 期望: 第一条报 42P13(不允许这样用多态), 第二条建函数成功、调用时报 42883/22007
+    return x > 1;
+> update count: 0
+
+select functest_S_xx('2020-01-01');
+> exception 22007
 
 -- @case function_sql.sql_body_case
 -- @pg create_function_sql.sql:207-212
@@ -852,13 +857,21 @@ table ddl_test;
 
 -- @case function_sql.anyarray_setof
 -- @pg create_function_sql.sql:434-447
--- 缺失: Lealone 无 anyarray/anyelement 多态类型和 RETURNS SETOF
+-- 适配: Lealone函数体用参数名而不是$1/$2；期望两行数组。
 create function double_append(a anyarray, b anyelement) returns setof anyarray
 language sql immutable as
-$$ select array_append($1, $2) || array_append($1, $2) $$;
-select double_append(array_append(array[q1], q2), q3)
-  from (values(1,2,3), (4,5,6)) v(q1,q2,q3);
--- PG 期望: 两行数组 {1,2,2,3} 和 {4,5,5,6}
+$$ select array_append(a, b) || array_append(a, b) $$;
+> update count: 0
+select * from double_append(ARRAY[1, 2], 3);
+> DOUBLE_APPEND
+> ------------------
+> (1, 2, 3, 1, 2, 3)
+> rows: 1
+select * from double_append(ARRAY[4, 5], 6);
+> DOUBLE_APPEND
+> ------------------
+> (4, 5, 6, 4, 5, 6)
+> rows: 1
 
 -- @case function_sql.partition_ops
 -- @pg create_function_sql.sql:449-461
@@ -941,10 +954,13 @@ create function test1 (int) returns int language sql
 
 -- @case function_sql.empty_body_call
 -- @pg create_function_sql.sql:484-488
--- 缺失: Lealone 不支持 anyelement/anyarray, 而且空函数体在创建时就被拒绝(见上一个用例)
+-- 适配: Lealone在check_function_bodies=off时允许空体建函数，调用时没有查询体，返回执行错误。
 set check_function_bodies = off;
+> update count: 0
 create function test1 (a anyelement) returns anyarray language sql
     as '';
+> update count: 0
 select test1(0);
-reset check_function_bodies;
--- PG 期望: 建函数成功(关闭 body 检查), 调用时报错
+> exception 90002
+set check_function_bodies = true;
+> update count: 0

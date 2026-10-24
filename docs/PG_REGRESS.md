@@ -5,7 +5,7 @@
 `lealone-test/src/test/resources/pg/skip-list.txt` 一起，既是测试套件的说明书，也是
 "Lealone 离 PG 还有多远"的度量尺。
 
-- 当前基线：`feature/stored-routines`（`4c75ebe46`，复合类型 `CREATE TYPE`/`RETURNS comp`/`SETOF <表行类型>`、
+- 当前基线：`feature/stored-routines`（`dbf8768af`，复合类型 `CREATE TYPE`/`RETURNS comp`/`SETOF <表行类型>`、
   `%ROWTYPE` 数组、存储过程 OUT/INOUT 参数与按参数类型重载、`LANGUAGE plpgsql` 过程体、`RETURNS VOID` + 普通 DML、
   `BEGIN ATOMIC`/`CASE ... END` 多语句体、DML `RETURNING`、`WITH ORDINALITY`、标量函数进 FROM、多 OUT record；
   `wip/r5d` 工作线又补了无名参数/`$1` 位置参数、DEFAULT 参数值、命名实参）
@@ -32,7 +32,7 @@ lealone-test/src/test/java/com/lealone/test/pg/
     PgSkipList.java         skip 清单解析、清单与脚本对账、PG 语句计数
 lealone-test/src/test/resources/pg/
     README.md               脚本格式、清单格式、怎么打开被 skip 的用例
-    skip-list.txt           skip/known-fail 清单（37 条，本套件最重要的交付物之一）
+    skip-list.txt           skip/known-fail 清单（16 条，本套件最重要的交付物之一）
     create_function_sql.sql 由 PG create_function_sql.sql 转换（40 个用例）
     create_procedure.sql    由 PG create_procedure.sql 转换（24 个用例）
     plpgsql.sql             由 PG plpgsql.sql 抽样转换（23 个用例）
@@ -69,15 +69,15 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 30, skip 10)  脚本语句 125(通过 125, 失败 0)  被skip用例占  32 条
-[pgregress]   create_procedure.sql     用例 25(执行 18, skip  7)  脚本语句  86(通过  86, 失败 0)  被skip用例占  21 条
-[pgregress]   plpgsql.sql              用例 23(执行 19, skip  4)  脚本语句  60(通过  60, 失败 0)  被skip用例占   8 条
+[pgregress]   create_function_sql.sql  用例 40(执行 33, skip  7)  脚本语句 135(通过 135, 失败 0)  被skip用例占  24 条
+[pgregress]   create_procedure.sql     用例 25(执行 19, skip  6)  脚本语句  90(通过  90, 失败 0)  被skip用例占  17 条
+[pgregress]   plpgsql.sql              用例 23(执行 20, skip  3)  脚本语句  62(通过  62, 失败 0)  被skip用例占   6 条
 [pgregress]   rangefuncs.sql           用例 10(执行 10, skip  0)  脚本语句  40(通过  40, 失败 0)  被skip用例占   0 条
-[pgregress] 合计: 用例 98 (执行 77, skip 21), 脚本语句 311 (通过 311, 失败 0), 耗时 638ms
-[pgregress] skip 清单: 21 条用例, 点名跳过的 PG 语句 112 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中  63 条在 skip 清单里
-[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  38 条在 skip 清单里
-[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 11 条)
+[pgregress] 合计: 用例 98 (执行 82, skip 16), 脚本语句 327 (通过 327, 失败 0), 耗时 656ms
+[pgregress] skip 清单: 16 条用例, 点名跳过的 PG 语句 92 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中  55 条在 skip 清单里
+[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  27 条在 skip 清单里
+[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 10 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 0 条)
 ```
 
@@ -89,37 +89,33 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 30 条 / 155 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 16 条 / 92 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
 | Lealone 无 SET search_path, CREATE USER 必须带 PASSWORD | 1 | 4 | function_sql.setup |
-| 缺少 $1 位置参数与 ARRAY[...] 字面量(数组参数本身已支持) | 1 | 1 | function_sql.a2_array_arg |
 | LEAKPROOF 属性和pg_proc.proleakproof已支持, 但缺少函数级权限模型(SET SESSION AUTHORIZATION/OWNER权限)和建函数的LEAKPROOF权限校验 | 1 | 16 | function_sql.leakproof |
-| Lealone 无 SQL 标准函数体(RETURN 表达式) | 2 | 12 | function_sql.sql_body_return, function_sql.sql_body_view |
-| Lealone 无 anyarray/anyelement 多态类型 | 3 | 15 | function_sql.sql_body_polymorphic, function_sql.anyarray_setof, procedure.polymorphic |
 | Lealone 无 SQL 标准函数体(RETURN表达式), pg_get_functiondef 本身已支持 | 1 | 13 | function_sql.pg_get_functiondef_sqlbody |
 | Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD | 1 | 3 | function_sql.sql_body_tempseq |
 | Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转 | 1 | 3 | function_sql.or_replace_window |
-| Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN | 1 | 10 | function_sql.setof_inline |
-| Lealone 函数体只允许单条查询(不支持 DDL) | 1 | 8 | function_sql.ddl_in_body |
+| BEGIN ATOMIC和EXPLAIN(COSTS OFF)已支持, 但setof函数内联与select列表里的setof展开仍不支持 | 1 | 10 | function_sql.setof_inline |
 | Lealone 无 CREATE OPERATOR CLASS/分区操作符类 | 1 | 6 | function_sql.partition_ops |
-| Lealone 无 anyelement/anyarray 多态类型 | 1 | 4 | function_sql.empty_body_call |
-| Lealone 的 CALL 不区分函数与过程 | 2 | 3 | procedure.call_random, procedure.call_function |
-| Lealone 客户端没有 psql 元命令, 也没有 pg_get_functiondef() | 1 | 1 | procedure.psql_meta |
-| Lealone 过程体不能执行 DDL | 1 | 2 | procedure.utility_body |
-| Lealone 不支持 ALTER PROCEDURE/FUNCTION, 过程也不接受 WINDOW/STRICT/VARIADIC | 1 | 8 | procedure.alter_and_bad_def |
-| Lealone 无过程级 EXECUTE 权限与 SET ROLE 语义 | 1 | 10 | procedure.privileges |
-| Lealone 不支持 ALTER ROUTINE/DROP ROUTINE | 1 | 5 | procedure.routine_syntax |
-| Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger) | 2 | 4 | plpgsql.trigger_room, plpgsql.trigger_raise |
-| Lealone 无 anyelement/anyarray 多态参数类型 | 1 | 1 | plpgsql.polymorphic |
-| PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100 | 1 | 6 | plpgsql.cursor |
-| 这段用 plpgsql 的 FOR ... IN 查询(50100 PL/pgSQL: FOR ... IN query)遍历表, 该语法还不支持; RETURNS SETOF <表行类型> 本身已可用 | 1 | 4 | plpgsql.setof_composite_record |
+| Lealone 的 CALL 不区分函数与过程 | 1 | 1 | procedure.call_random |
+| Lealone客户端没有psql元命令(\df); pg_get_functiondef()本身已支持 | 1 | 1 | procedure.psql_meta |
+| Lealone 的 CALL 不区分函数与过程 | 1 | 2 | procedure.call_function |
+| GRANT/REVOKE EXECUTE ON PROCEDURE 的解析已支持, 但 Lealone 无 SET ROLE/PUBLIC 角色, 过程权限也不参与调用检查 | 1 | 10 | procedure.privileges |
+| Lealone 不支持 ALTER ROUTINE/DROP ROUTINE(ALTER PROCEDURE/DROP PROCEDURE 已支持) | 1 | 5 | procedure.routine_syntax |
+| 只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节 | 1 | 2 | plpgsql.trigger_room |
+| 只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节 | 1 | 2 | plpgsql.trigger_raise |
+| PL/pgSQL 游标(DECLARE CURSOR/OPEN/FETCH/CLOSE)与 refcursor 门户都不支持, 评估见docs第十二节 | 1 | 6 | plpgsql.cursor |
 | 不支持命名 OUT 参数占位(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150) | 1 | 8 | procedure.out_params_named |
 
-
-
 ## 六、这一轮刷新：解锁了什么
+
+r5 rebase 到 `dbf8768af` 后复用主干的无名参数/`$n`、`RETURN expr`、多语句函数体和 `FOR ... IN <query>`，
+仅保留多态/数组改动；解锁 `function_sql.sql_body_polymorphic`、`function_sql.anyarray_setof`、
+`function_sql.empty_body_call`、`procedure.polymorphic`、`plpgsql.polymorphic`、`plpgsql.setof_composite_record`。
+`sql_body_polymorphic` 已恢复 PG 原样的 `RETURN x[1]` / `RETURN x > 1` DDL。
 
 ### 本轮（`wip/r5d`）：无名参数/`$1` 位置参数、DEFAULT 参数值、命名实参
 
@@ -244,18 +240,13 @@ DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`paramete
 
 ### 仍然不支持的（清单里都有用例）
 
-* **多态类型**：`anyelement`/`anyarray` 参数与返回（6 条用例：`function_sql.sql_body_polymorphic`、
-  `function_sql.anyarray_setof`、`function_sql.empty_body_call`、`procedure.polymorphic`、`plpgsql.polymorphic` 等），
-  报 `42102 Table "ANYELEMENT" not found`。
+* **多态类型**：`anyelement`/`anyarray`/`anynonarray` 已支持声明、调用和返回；`anyenum` 仍只有伪类型建模，没有枚举域约束。
 * **函数体/过程体里做 DDL**：`function_sql.ddl_in_body`、`procedure.utility_body`（`50100 函数体只能是查询或带 RETURNING 的 DML`）。
-* **SQL 标准函数体**：`RETURN 表达式` / `BEGIN ATOMIC` 之外的三条（`sql_body_return`、`sql_body_view`、`sql_body_tempseq`），
-  `CREATE FUNCTION ... LANGUAGE sql RETURN expr` 仍报 42001。
+* **SQL 标准函数体**：`RETURN 表达式`、`BEGIN ATOMIC` 和多语句体已支持；`sql_body_tempseq` 仍依赖 TEMP SEQUENCE/DISCARD。
 * **过程的 VARIADIC / 命名 OUT 参数占位**：`procedure.out_params_named`（过程 VARIADIC 报
   `50100 VARIADIC parameter in CREATE PROCEDURE`，`CALL p(a => null)` 里的 OUT 参数名还不认）。
-* **plpgsql 的 `FOR ... IN <query>`**：`plpgsql.setof_composite_record`（50100）。
-  注意 `RETURNS SETOF <表行类型>` 本身已经可用（`rangefuncs.setof_composite`、`%ROWTYPE` 数组已验证）。
 * **游标/触发器**：`plpgsql.cursor`、`plpgsql.trigger_*`。
-* **`unnest()`/`generate_series()`/`ARRAY[...]` 字面量**：`rangefuncs.with_ordinality_unnest`（`$1` 位置参数已支持）。
+* **数组能力**：`ARRAY[...]`、`array_append`、`array_length`、数组 `||` 已支持；完整 PG 数组运算符/函数仍未覆盖。
 * **目录与 DDL 属性**：`pg_get_functiondef_sqlbody`（依赖 SQL 标准函数体）、`ALTER FUNCTION` 的属性组合 +
   `SET search_path`（`or_replace_window`）、`CREATE OPERATOR CLASS`（1）。
   `information_schema.pg_proc`、`PARAMETERS`、`ROUTINES`、`ROUTINE_ROUTINE_USAGE`（空表）和
