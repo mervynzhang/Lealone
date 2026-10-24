@@ -5142,9 +5142,9 @@ public class SQLParserBase implements SQLParser {
                 read(")");
             }
         }
-        // LANGUAGE子句可以写在AS之前也可以写在之后，过程和函数一样只支持SQL
+        // LANGUAGE子句可以写在AS之前也可以写在之后，过程和函数一样只支持SQL/PLPGSQL
         while (readIf("LANGUAGE")) {
-            checkProcedureLanguage(readStringOrIdentifier());
+            command.setLanguage(readProcedureLanguage());
         }
         // 标准SQL的函数体写成BEGIN ATOMIC ... END，里面可以有多条语句
         if (readIf("BEGIN")) {
@@ -5156,7 +5156,7 @@ public class SQLParserBase implements SQLParser {
             command.setBody(readString());
         }
         while (readIf("LANGUAGE")) {
-            checkProcedureLanguage(readStringOrIdentifier());
+            command.setLanguage(readProcedureLanguage());
         }
         return command;
     }
@@ -5192,14 +5192,10 @@ public class SQLParserBase implements SQLParser {
         command.addParameter(column, mode);
     }
 
-    private static void checkProcedureLanguage(String language) {
-        // 过程和函数不同，过程体的SQL串由调用方按yieldable链异步执行，
-        // PL/pgSQL过程体需要同步解释执行，不属于本次支持范围
-        if (!"SQL".equalsIgnoreCase(language)) {
-            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                    "CREATE PROCEDURE ... LANGUAGE " + language
-                            + ", only LANGUAGE SQL is supported");
-        }
+    private String readProcedureLanguage() {
+        String language = readStringOrIdentifier();
+        checkFunctionLanguage(language);
+        return language;
     }
 
     // 读取BEGIN ATOMIC和END之间的多条SQL语句，用分号拼成一个过程体/函数体

@@ -26,6 +26,8 @@ public class SqlProcedure extends SchemaObjectBase {
     public static final int PARAM_INOUT = 2;
 
     private final String body;
+    // 过程体语言: null/SQL表示SQL串, plpgsql表示由PL/pgSQL解释器执行
+    private final String language;
     // 过程体是BEGIN ATOMIC ... END这种SQL标准函数体(可以有多条语句)
     private final boolean atomicBody;
     private final Column[] parameters;
@@ -36,10 +38,11 @@ public class SqlProcedure extends SchemaObjectBase {
     // 过程体的解析结果，由sql模块负责填充和读取
     private volatile Object compiledBody;
 
-    public SqlProcedure(Schema schema, int id, String name, String body, boolean atomicBody,
-            Column[] parameters, int[] parameterModes) {
+    public SqlProcedure(Schema schema, int id, String name, String body, String language,
+            boolean atomicBody, Column[] parameters, int[] parameterModes) {
         super(schema, id, name);
         this.body = body;
+        this.language = language;
         this.atomicBody = atomicBody;
         this.parameters = parameters;
         this.parameterModes = parameterModes;
@@ -70,6 +73,15 @@ public class SqlProcedure extends SchemaObjectBase {
 
     public String getBody() {
         return body;
+    }
+
+    public String getLanguage() {
+        return language;
+    }
+
+    // 过程体是PL/pgSQL，由PL/pgSQL解释器执行(和plpgsql函数同一套)
+    public boolean isPlpgSql() {
+        return "PLPGSQL".equalsIgnoreCase(language);
     }
 
     // BEGIN ATOMIC ... END形式的函数体，过程体里可以有多条SQL语句，最后一条查询的结果就是返回值
@@ -133,6 +145,10 @@ public class SqlProcedure extends SchemaObjectBase {
             buff.append(parameters[i].getCreateSQL(false));
         }
         buff.append(')');
+        // 只有plpgsql要显式写出LANGUAGE, SQL是默认值
+        if (isPlpgSql()) {
+            buff.append(" LANGUAGE ").append(language);
+        }
         if (atomicBody) {
             // 每条语句都要有分号(和PostgreSQL一样)，否则回放时END会被当成上一个语句的别名
             buff.append(" BEGIN ATOMIC ");

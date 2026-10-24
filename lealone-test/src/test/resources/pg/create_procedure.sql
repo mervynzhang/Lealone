@@ -339,3 +339,39 @@ select count(*) c from cp_test;
 > -
 > 0
 > rows: 1
+
+-- ---------------------------------------------------------------------------
+-- PL/pgSQL过程体 + OUT/INOUT参数
+-- ---------------------------------------------------------------------------
+
+-- @case procedure.plpgsql_body
+-- @pg create_procedure.sql:79-102
+-- 适配: PG 的 INOUT 用例用 language sql + 参数名引用, Lealone 的过程体用 ? 引用参数;
+--       这里用 PG 原样的 language plpgsql 写法验证 OUT/INOUT, 过程体写成一行避免被脚本按分号切断
+create procedure ptest4d(in x int, out y int, inout z text) language plpgsql
+as $$ begin y := x * 2; z := z || '!'; end $$;
+> update count: 0
+
+call ptest4d(3, 'a');
+> Y Z
+> - --
+> 6 a!
+> rows: 1
+
+-- OUT参数写NULL占位是PostgreSQL的标准写法
+call ptest4d(4, null, 'b');
+> Y Z
+> - --
+> 8 b!
+> rows: 1
+
+-- plpgsql过程体里可以写循环和变量声明
+create procedure ptest4e(in n int, out s int) language plpgsql
+as $$ declare i int := 0; begin s := 0; while i < n loop i := i + 1; s := s + i; end loop; end $$;
+> update count: 0
+
+call ptest4e(4);
+> S
+> --
+> 10
+> rows: 1

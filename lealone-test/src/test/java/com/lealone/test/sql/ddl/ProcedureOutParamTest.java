@@ -121,7 +121,7 @@ public class ProcedureOutParamTest extends SqlTestBase {
                 ErrorCode.FEATURE_NOT_SUPPORTED_1);
     }
 
-    // LANGUAGE子句: SQL可以用，PL/pgSQL的过程体不支持
+    // LANGUAGE子句: SQL可以用, PL/pgSQL也可以(见ProcedurePlpgsqlTest), 其它语言不支持
     private void testLanguage() throws Exception {
         executeUpdate("DROP PROCEDURE IF EXISTS pou_lang");
         executeUpdate("CREATE PROCEDURE pou_lang(OUT a INT) LANGUAGE SQL AS 'SELECT 42'");
@@ -129,9 +129,8 @@ public class ProcedureOutParamTest extends SqlTestBase {
         assertEquals(42, getIntValue(1, true));
         executeUpdate("DROP PROCEDURE pou_lang");
 
-        executeUpdateThanAssertErrorCode(
-                "CREATE PROCEDURE bad4(IN x INT) LANGUAGE plpgsql "
-                        + "AS $$ BEGIN INSERT INTO pou_t VALUES(x, 'p'); END $$",
+        // PL/pgSQL过程体见ProcedurePlpgsqlTest, 这里只验证不认识的语言仍然报不支持
+        executeUpdateThanAssertErrorCode("CREATE PROCEDURE pou_bad_lang() LANGUAGE c AS 'select 1'",
                 ErrorCode.FEATURE_NOT_SUPPORTED_1);
     }
 
