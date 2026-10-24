@@ -16,6 +16,12 @@ import com.lealone.sql.SQLStatement;
  * @author zhh
  */
 public class TransactionStatement extends ManipulationStatement {
+    private boolean checkpointSync;
+
+    public void setCheckpointSync(boolean checkpointSync) {
+        this.checkpointSync = checkpointSync;
+    }
+
 
     private final int type;
     private String savepointName;
@@ -77,7 +83,7 @@ public class TransactionStatement extends ManipulationStatement {
             break;
         case SQLStatement.CHECKPOINT:
             session.getUser().checkAdmin();
-            session.getDatabase().checkpoint();
+            session.getDatabase().checkpoint(checkpointSync);
             break;
         // 以下三个是跟2PC相关的语句，已经废弃
         case SQLStatement.PREPARE_COMMIT:
