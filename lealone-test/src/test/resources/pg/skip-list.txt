@@ -1,0 +1,50 @@
+# PG 回归用例的 skip 清单 -- 这是交付物的一部分, 不是临时白名单。
+#
+# 每一条记录一个当前跑不了的 PG 用例, 用例本身还留在 pg/*.sql 里(带 -- @case 和期望输出),
+# 只是不执行; 清单和脚本会对账: 清单里的 id 在脚本里找不到用例时测试直接失败,
+# 所以不能靠删用例来变绿。把某条从清单里删掉, 对应用例就会开始执行并被要求通过。
+#
+# 列(制表符分隔, 和 slt/allowlist.txt 一致):
+#   case-id <TAB> PG源文件:起始行-结束行 <TAB> 该范围内的PG语句数 <TAB> 原因
+#
+# 原因分两类: 以 "缺陷:" 开头的是 Lealone 的真实缺陷(见 docs/PG_REGRESS.md 第六节),
+# 其余是能力缺失(未实现的功能)。
+#
+# 参与统计的 PG 原文件总语句数(用同一个计数器数整个文件, 见下面的命令重新统计):
+#   converted  = 逐用例转换, 文件里的语句要么执行、要么在下面点名 skip
+#   skip-all   = 整个文件都不适用, 下面只点名了几个代表性用例
+# @pg-total create_function_sql.sql 179 converted
+#
+# 重新统计 PG 语句数: mvn -o -pl lealone-test test -Dtest=PgRegressTest \
+#   -Dpg.srcdir=/path/to/postgres/src/test/regress/sql
+
+function_sql.setup	create_function_sql.sql:9-14	4	Lealone 无 SET search_path, CREATE USER 必须带 PASSWORD
+function_sql.a2_array_arg	create_function_sql.sql:25-26	1	Lealone 无 text[] 数组参数与下标
+function_sql.pg_proc	create_function_sql.sql:29-36	4	Lealone 没有 pg_proc/regproc 系统目录
+function_sql.volatility_catalog	create_function_sql.sql:49-61	4	Lealone 没有 pg_proc.provolatile 与 ALTER FUNCTION
+function_sql.security_definer	create_function_sql.sql:66-83	8	Lealone 不支持 SECURITY DEFINER/INVOKER
+function_sql.leakproof	create_function_sql.sql:88-119	16	Lealone 不支持 LEAKPROOF 属性
+function_sql.strict	create_function_sql.sql:124-145	9	Lealone 不支持 STRICT/CALLED ON NULL INPUT
+function_sql.pg_get_functiondef	create_function_sql.sql:150-153	4	Lealone 没有 pg_get_functiondef()
+function_sql.sql_body_return	create_function_sql.sql:159-170	6	Lealone 无 SQL 标准函数体(RETURN 表达式)
+function_sql.sql_body_atomic	create_function_sql.sql:171-195	9	Lealone 无 BEGIN ATOMIC 多语句函数体
+function_sql.sql_body_polymorphic	create_function_sql.sql:197-205	2	Lealone 无 anyarray/anyelement 多态类型
+function_sql.sql_body_case	create_function_sql.sql:207-212	2	Lealone 无 BEGIN ATOMIC 多语句函数体
+function_sql.pg_get_functiondef_sqlbody	create_function_sql.sql:214-228	13	Lealone 没有 pg_get_functiondef()
+function_sql.sql_body_view	create_function_sql.sql:232-242	6	Lealone 无 SQL 标准函数体(RETURN 表达式)
+function_sql.sql_body_tempseq	create_function_sql.sql:244-253	3	Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD
+function_sql.information_schema	create_function_sql.sql:256-323	19	Lealone 没有 information_schema.routines 等视图
+function_sql.overload	create_function_sql.sql:326-331	4	Lealone 不支持按参数类型重载
+function_sql.or_replace_window	create_function_sql.sql:337-339	3	Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转
+function_sql.setof	create_function_sql.sql:344-348	2	Lealone 无 RETURNS SETOF/RETURNS TABLE
+function_sql.setof_inline	create_function_sql.sql:353-376	10	Lealone 无 RETURNS SETOF/RETURNS TABLE
+function_sql.void_return	create_function_sql.sql:381-390	5	缺陷: RETURNS VOID 把 Java 序列化字节返回给客户端
+function_sql.void_insert	create_function_sql.sql:392-402	6	Lealone 函数体只允许单条查询(不支持 INSERT)
+function_sql.setof_void	create_function_sql.sql:404-406	2	Lealone 无 RETURNS SETOF/RETURNS TABLE
+function_sql.ddl_in_body	create_function_sql.sql:409-431	8	Lealone 函数体只允许单条查询(不支持 DDL)
+function_sql.anyarray_setof	create_function_sql.sql:434-447	2	Lealone 无 anyarray/anyelement 多态类型
+function_sql.partition_ops	create_function_sql.sql:449-461	6	Lealone 无 CREATE OPERATOR CLASS/分区操作符类
+function_sql.bad_body_return_type	create_function_sql.sql:465-466	1	缺陷: 建函数时不校验函数体, 错误推迟到调用时
+function_sql.bad_body_columns	create_function_sql.sql:471-472	1	缺陷: 函数体返回多列时静默取第一列
+function_sql.bad_body_positional	create_function_sql.sql:474-475	1	Lealone 不支持 $1/$2 位置参数
+function_sql.empty_body_call	create_function_sql.sql:484-488	4	Lealone 无 anyarray/anyelement 多态类型
