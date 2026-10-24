@@ -5217,9 +5217,16 @@ public class SQLParserBase implements SQLParser {
 
         if (readIf("RETURNS")) {
             if (readIf("SETOF")) {
-                Column returnColumn = parseColumnWithType(null);
-                command.setSetofReturnType(returnColumn.getOriginalSQL(), returnColumn.getType(),
-                        returnColumn.getPrecision(), returnColumn.getScale());
+                if (readIf("VOID")) {
+                    // VOID不是普通数据类型，setof void的每一行都是NULL
+                    DataType dataType = DataType.getDataType(Value.NULL);
+                    command.setSetofReturnType("VOID", Value.NULL, dataType.defaultPrecision,
+                            dataType.defaultScale);
+                } else {
+                    Column returnColumn = parseColumnWithType(null);
+                    command.setSetofReturnType(returnColumn.getOriginalSQL(), returnColumn.getType(),
+                            returnColumn.getPrecision(), returnColumn.getScale());
+                }
             } else if (readIf("TABLE")) {
                 read("(");
                 ArrayList<String> columnNames = Utils.newSmallArrayList();
