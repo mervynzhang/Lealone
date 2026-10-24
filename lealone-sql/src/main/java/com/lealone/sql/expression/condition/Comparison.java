@@ -14,10 +14,12 @@ import com.lealone.db.Database;
 import com.lealone.db.SysProperties;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueNull;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.ExpressionColumn;
+import com.lealone.sql.expression.ExpressionList;
 import com.lealone.sql.expression.Parameter;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.visitor.ExpressionVisitor;
@@ -236,10 +238,10 @@ public class Comparison extends Condition {
             boolean result;
             switch (compareType) {
             case IS_NULL:
-                result = l == ValueNull.INSTANCE;
+                result = isNull(l);
                 break;
             case IS_NOT_NULL:
-                result = !(l == ValueNull.INSTANCE);
+                result = !isNull(l);
                 break;
             default:
                 throw DbException.getInternalError("type=" + compareType);
@@ -261,8 +263,78 @@ public class Comparison extends Condition {
         int dataType = Value.getHigherOrder(left.getType(), right.getType());
         l = l.convertTo(dataType);
         r = r.convertTo(dataType);
+        if (isRowValue() && l instanceof ValueArray && r instanceof ValueArray) {
+            return compareRowValue((ValueArray) l, (ValueArray) r, compareType);
+        }
         boolean result = compareNotNull(database, l, r, compareType);
         return ValueBoolean.get(result);
+    }
+
+    private boolean isRowValue() {
+        return left instanceof ExpressionList || right instanceof ExpressionList;
+    }
+
+    /**
+     * 行值比较采用三值逻辑：某个字段无法判定时返回 NULL 而不是 TRUE/FALSE，
+     * 例如 (1, NULL) = (1, NULL) 和 (NULL, 2) IN ((1, 2)) 的结果都是 UNKNOWN。
+     */
+    private Value compareRowValue(ValueArray l, ValueArray r, int compareType) {
+        return compareRowValue(database, l, r, compareType);
+    }
+
+    /**
+     * 行值比较的三值逻辑实现，供行值 IN 列表复用(IN 不能只看 compareNotNull，
+     * 否则 (1, NULL) IN ((1, 2)) 会得到 FALSE，而标准要求 UNKNOWN)。
+     */
+    static Value compareRowValue(Database database, ValueArray l, ValueArray r, int compareType) {
+        Value[] list1 = l.getList();
+        Value[] list2 = r.getList();
+        if (list1.length != list2.length) {
+            return ValueBoolean.get(compareNotNull(database, l, r, compareType));
+        }
+        int type = compareType & ~NULL_SAFE;
+        boolean unknown = false;
+        for (int i = 0; i < list1.length; i++) {
+            Value v1 = list1[i];
+            Value v2 = list2[i];
+            if ((compareType & NULL_SAFE) != 0) {
+                // IS [NOT] DISTINCT FROM 把 NULL 当成普通值来比较
+                if (!database.areEqual(v1, v2)) {
+                    return ValueBoolean.get(type == NOT_EQUAL);
+                }
+            } else if (v1 == ValueNull.INSTANCE || v2 == ValueNull.INSTANCE) {
+                if (type != EQUAL && type != NOT_EQUAL) {
+                    // 排序比较由第一个能区分大小的字段决定，遇到 NULL 就无法判定
+                    return ValueNull.INSTANCE;
+                }
+                unknown = true;
+            } else if (database.compare(v1, v2) != 0) {
+                return ValueBoolean.get(compareNotNull(database, v1, v2, type));
+            }
+        }
+        if (unknown) {
+            return ValueNull.INSTANCE;
+        }
+        // 所有字段都相等
+        return ValueBoolean.get(type == EQUAL || type == BIGGER_EQUAL || type == SMALLER_EQUAL);
+    }
+
+    /**
+     * 判断值是否 IS NULL。行值构造器 (a, b) 在所有字段都是 NULL 时才整体视为 NULL。
+     */
+    private boolean isNull(Value v) {
+        if (v == ValueNull.INSTANCE) {
+            return true;
+        }
+        if (!(left instanceof ExpressionList) || !(v instanceof ValueArray)) {
+            return false;
+        }
+        for (Value e : ((ValueArray) v).getList()) {
+            if (e != ValueNull.INSTANCE) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

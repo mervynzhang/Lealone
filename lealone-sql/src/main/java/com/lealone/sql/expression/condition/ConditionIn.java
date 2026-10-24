@@ -11,6 +11,7 @@ import com.lealone.common.util.StatementBuilder;
 import com.lealone.db.Database;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueNull;
 import com.lealone.sql.expression.Expression;
@@ -65,10 +66,21 @@ public class ConditionIn extends Condition {
         }
         boolean result = false;
         boolean hasNull = false;
+        // 行值(row value)的相等比较要走三值逻辑: (1,NULL) IN ((1,2),(3,4)) 必须是 UNKNOWN 而不是 FALSE
+        boolean rowValue = l instanceof ValueArray;
         for (Expression e : valueList) {
             Value r = e.getValue(session);
             if (r == ValueNull.INSTANCE) {
                 hasNull = true;
+            } else if (rowValue && r instanceof ValueArray) {
+                Value cmp = Comparison.compareRowValue(database, (ValueArray) l, (ValueArray) r,
+                        Comparison.EQUAL);
+                if (cmp == ValueNull.INSTANCE)
+                    hasNull = true; // 无法判定: 结果依赖其它元素, 先记下来
+                else if (cmp.getBoolean()) {
+                    result = true;
+                    break;
+                }
             } else {
                 r = r.convertTo(l.getType());
                 result = Comparison.compareNotNull(database, l, r, Comparison.EQUAL);
