@@ -10,7 +10,13 @@ import com.lealone.transaction.Transaction;
  * 所以重复回滚属于编程错误，应该像原来那样抛 "Transaction is closed"，
  * 而不是静默当空操作——静默会掩盖调用方的逻辑错误。
  * <p>
- * 这个用例同时锁定"即使重复回滚，也不会有副作用"这个前提：
+ * 历史说明：当初加静默守卫那次提交(137de5658)的理由在**当时**并非无稽之谈——
+ * 那时 removeTransaction 还不是幂等的(无条件下减计数、无条件清 bit 槽位)，
+ * 而 rollback 的 finally 在 checkNotClosed 抛异常后仍会执行，确实会重复递减、
+ * 还可能清掉已被新事务复用的槽位。第二天 2793b7322 把 removeTransaction 改成幂等，
+ * 才从根本上消除这个危害；此后守卫就成了冗余，并且把编程错误静默掉，所以回退了。
+ * <p>
+ * 这个用例锁定"即使重复回滚，也不会有副作用"这个前提：
  * removeTransaction 两个实现都做了幂等检查（槽位 tid 不匹配 / map remove 返回 null），
  * unlock 在第一次回滚时就把 locks 置 null，所以第二次的 finally 是空操作，
  * 不会重复递减事务计数，也不会解掉其他事务的锁。
