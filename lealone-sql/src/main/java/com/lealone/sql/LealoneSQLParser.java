@@ -140,6 +140,43 @@ public class LealoneSQLParser extends SQLParserBase {
         return statements.toArray(new String[0]);
     }
 
+    /**
+     * 只按分号把多条SQL语句切开，不做语义解析。
+     * 函数体/过程体里的表可能是函数体自己刚建出来的(比如函数体里先CREATE TABLE再INSERT)，
+     * 这时用splitStatements会因为表还不存在而报错，所以这种场景要用原文切分。
+     */
+    public static String[] splitStatementsRaw(ServerSession session, String body) {
+        ArrayList<String> statements = new ArrayList<>();
+        if (body == null || body.trim().isEmpty())
+            return statements.toArray(new String[0]);
+        LealoneSQLParser parser = new LealoneSQLParser(session);
+        parser.initialize(body);
+        parser.read();
+        int depth = 0; // BEGIN ... END / CASE ... END 的嵌套层数
+        int start = 0;
+        while (parser.currentTokenType != END) {
+            String token = parser.currentToken;
+            if (depth == 0 && parser.currentTokenType == KEYWORD && ";".equals(token)) {
+                addStatement(statements, body.substring(start, parser.lastParseIndex));
+                start = parser.parseIndex;
+            } else if ("BEGIN".equalsIgnoreCase(token) || "CASE".equalsIgnoreCase(token)) {
+                depth++;
+            } else if ("END".equalsIgnoreCase(token) && depth > 0) {
+                depth--;
+            }
+            parser.read();
+        }
+        addStatement(statements, body.substring(start));
+        return statements.toArray(new String[0]);
+    }
+
+    private static void addStatement(ArrayList<String> statements, String sql) {
+        String s = sql.trim();
+        if (!s.isEmpty() && !";".equals(s)) {
+            statements.add(s);
+        }
+    }
+
     private static String skipStatementSeparator(String sql) {
         int i = 0;
         for (int len = sql.length(); i < len; i++) {

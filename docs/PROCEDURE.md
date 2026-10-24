@@ -176,6 +176,10 @@ call p('x');            -- varchar 版本还在
   里的语句并拼成过程体/函数体；函数体按语句分别做参数名替换（`SqlFunctionBodyParser.parseAtomicBody`），
   执行时 `SqlFunction.executeAtomicBody()` 顺序执行、最后一条查询的结果作为返回值；
   过程体直接复用原来的语句串执行路径。`LealoneSQLParser.splitStatements()` 是两者共用的拆分工具。
+- **过程体里做 DDL**：`BEGIN ATOMIC ... END` 过程体里可以执行 `CREATE TABLE`/`ALTER TABLE`/`DROP TABLE`
+  这类 DDL，按顺序执行；建过程时逐条 prepare 校验语法，引用的表可能还没建出来（过程体自己建的），
+  这种 `TABLE_OR_VIEW_NOT_FOUND` 推迟到 `CALL` 时校验。过程体改成**按原文切分**（`splitStatementsRaw`），
+  这样切语句时不会因为表还不存在而失败；DDL 在嵌套会话的同一个事务里执行。
 - **SCRIPT**：`GenScript` 之前没有遍历 `DbObjectType.PROCEDURE`，`SCRIPT`/备份会丢过程定义，已补上。
 - **按参数类型重载**：`Schema.getDbObjectKey()` 对 `SqlProcedure` 返回 `名字(入参类型id...)`，
   `Schema.findProcedures()` 按名字取候选集合；`CallProcedure` 在 `prepare()` 里用

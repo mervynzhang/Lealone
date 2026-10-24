@@ -358,7 +358,9 @@ public class PgRegressRunner {
                 i = skipQuoted(text, i, '"');
             } else if (c == '$') {
                 int next = skipDollarQuoted(text, i);
-                i = next > i ? next : i + 1;
+                if (next < 0)
+                    return -1;
+                i = next;
             } else if (c == '-' && i + 1 < len && text.charAt(i + 1) == '-') {
                 i = skipLineComment(text, i);
             } else if (c == '/' && i + 1 < len && text.charAt(i + 1) == '*') {
@@ -375,6 +377,13 @@ public class PgRegressRunner {
                         i = j + "atomic".length();
                         continue;
                     }
+                    // 不带ATOMIC的BEGIN ... END也是SQL标准块体;
+                    // begin;/begin transaction是事务语句，不能当成块体
+                    if (isBodyBegin(text, j)) {
+                        depth++;
+                        i = j;
+                        continue;
+                    }
                 } else if (word.equalsIgnoreCase("case")) {
                     depth++;
                 } else if (word.equalsIgnoreCase("end") && depth > 0) {
@@ -384,8 +393,24 @@ public class PgRegressRunner {
             } else {
                 i++;
             }
+            // 字符串/注释/$$还没闭合时整段都还在语句里，不能切分
+            if (i < 0)
+                return -1;
         }
         return depth;
+    }
+
+    private static boolean isBodyBegin(String text, int index) {
+        if (index >= text.length())
+            return false;
+        if (text.charAt(index) == ';')
+            return false;
+        return !startsWithIgnoreCase(text, index, "transaction")
+                && !startsWithIgnoreCase(text, index, "work")
+                && !startsWithIgnoreCase(text, index, "isolation")
+                && !startsWithIgnoreCase(text, index, "read")
+                && !startsWithIgnoreCase(text, index, "not")
+                && !startsWithIgnoreCase(text, index, "deferrable");
     }
 
     private static int skipQuoted(String text, int start, char quote) {
@@ -402,20 +427,20 @@ public class PgRegressRunner {
             }
             i++;
         }
-        return len;
+        return -1;
     }
 
     // 跳过$$...$$或者$tag$...$tag$，不是这种形式时返回-1
     private static int skipDollarQuoted(String text, int start) {
         int len = text.length();
         int i = start + 1;
-        while (i < len && (isWordPart(text.charAt(i)) || text.charAt(i) == '$'))
+        while (i < len && (Character.isLetterOrDigit(text.charAt(i)) || text.charAt(i) == '_'))
             i++;
         if (i >= len || text.charAt(i) != '$')
             return -1;
         String tag = text.substring(start, i + 1);
         int end = text.indexOf(tag, i + 1);
-        return end < 0 ? len : end + tag.length();
+        return end < 0 ? -1 : end + tag.length();
     }
 
     private static int skipLineComment(String text, int start) {
@@ -425,7 +450,7 @@ public class PgRegressRunner {
 
     private static int skipBlockComment(String text, int start) {
         int end = text.indexOf("*/", start + 2);
-        return end < 0 ? text.length() : end + 2;
+        return end < 0 ? -1 : end + 2;
     }
 
     private static int skipSpaces(String text, int start) {

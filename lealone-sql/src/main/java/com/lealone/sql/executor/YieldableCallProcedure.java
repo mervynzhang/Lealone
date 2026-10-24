@@ -353,7 +353,7 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
 
     // 过程体是一个用分号分隔的SQL语句串，空过程体(比如空的BEGIN ATOMIC块)没有语句
     private String[] splitBody(String body) {
-        return LealoneSQLParser.splitStatements(session, body);
+        return LealoneSQLParser.splitStatementsRaw(session, body);
     }
 
     // 事务语句会打断ServerSession对executingStatements的计数，过程体里不允许出现

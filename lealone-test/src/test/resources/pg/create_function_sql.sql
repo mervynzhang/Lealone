@@ -362,17 +362,58 @@ select pg_get_functiondef('functest_F_2');
 
 -- @case function_sql.sql_body_return
 -- @pg create_function_sql.sql:159-170
--- 缺失: Lealone 无 SQL 标准函数体(RETURN <表达式>)和 BEGIN ATOMIC 体
+-- 适配: 补上调用断言; S_2 的 text[] 参数用 int[] 代替(PG 的 ARRAY['1','2'] 字面量 Lealone 还不支持,
+--       这里只验证 RETURN a[1] 这种数组元素表达式能建出来)
 create function functest_S_1(a text, b date) returns boolean
     language sql
-    return a = 'abcd' and b > '2001-01-01';
+    return a = 'abcd' and b > date '2001-01-01';
+> update count: 0
+
+create function functest_S_2(a int[]) returns int
+    return a[1];
+> update count: 0
+
 create function functest_S_3() returns boolean
     return false;
+> update count: 0
+
+-- BEGIN 块体里允许空语句(;;)，RETURN <表达式>就是返回值
 create function functest_S_3a() returns boolean
     begin atomic
         ;;return false;;
     end;
--- PG 期望: 3 个函数创建成功, select functest_S_1(...) 返回 t
+> update count: 0
+
+-- 不带ATOMIC的标准块体写法
+create function functest_S_3b() returns boolean
+    begin
+        return false;
+    end;
+> update count: 0
+
+select functest_S_1('abcd', date '2001-02-01') r;
+> R
+> ----
+> TRUE
+> rows: 1
+
+select functest_S_3() r;
+> R
+> -----
+> FALSE
+> rows: 1
+
+select functest_S_3a() r;
+> R
+> -----
+> FALSE
+> rows: 1
+
+select functest_S_3b() r;
+> R
+> -----
+> FALSE
+> rows: 1
 
 -- @case function_sql.sql_body_atomic
 -- @pg create_function_sql.sql:171-195
@@ -468,14 +509,28 @@ select pg_get_functiondef('functest_S_15'::regproc);
 
 -- @case function_sql.sql_body_view
 -- @pg create_function_sql.sql:232-242
--- 缺失: Lealone 无 SQL 标准函数体(RETURN (SELECT ...))
+-- 适配: 补上结果断言(RETURN 的表达式是子查询, 函数体里引用了视图)
 create table functest3 (a int);
+> update count: 0
+
 insert into functest3 values (1), (2);
+> update count: 2
+
 create view functestv3 as select * from functest3;
+> update count: 0
+
 create function functest_S_14() returns bigint
     return (select count(*) from functestv3);
-select functest_S_14();
--- PG 期望: 2
+> update count: 0
+
+select functest_S_14() r;
+> R
+> -
+> 2
+> rows: 1
+
+drop table functest3 cascade;
+> update count: 0
 
 -- @case function_sql.sql_body_tempseq
 -- @pg create_function_sql.sql:244-253
@@ -719,16 +774,44 @@ select * from voidtest5(3);
 
 -- @case function_sql.ddl_in_body
 -- @pg create_function_sql.sql:409-431
--- 缺失: Lealone 函数体只允许一条查询, 不允许在函数体里执行 DDL/DML
-set check_function_bodies to off;
+-- 适配: Lealone 没有 check_function_bodies 开关, 函数体里有DDL时建函数只校验语法,
+--       引用不到的表(比如函数体自己刚建出来的)推迟到调用时校验; 补上结果断言
 create function create_and_insert() returns void language sql as $$
   create table ddl_test (f1 int);
   insert into ddl_test values (1.2);
 $$;
-select create_and_insert();
+> update count: 0
+
+select create_and_insert() r;
+> R
+> ----
+> null
+> rows: 1
+
 table ddl_test;
-reset check_function_bodies;
--- PG 期望: 函数体里的 DDL 生效, ddl_test 有 1 行 1.2
+> F1
+> --
+> 1
+> rows: 1
+
+create function alter_and_insert() returns void language sql as $$
+  alter table ddl_test alter column f1 type numeric;
+  insert into ddl_test values (1.2);
+$$;
+> update count: 0
+
+select alter_and_insert() r;
+> R
+> ----
+> null
+> rows: 1
+
+table ddl_test;
+> F1
+> ---
+> 1
+> 1.2
+> rows: 2
 
 -- @case function_sql.anyarray_setof
 -- @pg create_function_sql.sql:434-447

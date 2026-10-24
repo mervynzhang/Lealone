@@ -102,13 +102,22 @@ delete from cp_test where b = 'b';
 
 -- @case procedure.utility_body
 -- @pg create_procedure.sql:46-50
--- 缺失: Lealone 的过程体里不能执行大部分 DDL(文档里标注为暂不支持)
+-- 适配: PG 11 对过程体里的 utility 语句报 0A000, Lealone 支持过程体里执行 DDL,
+--       所以这里把断言改成"建过程成功 + CALL 后表真的建出来了"
 create procedure ptestx()
 language sql
 begin atomic
   create table x (a int);
 end;
--- PG 期望: 报 0A000, 过程体里不能执行 utility 语句
+> update count: 0
+
+call ptestx();
+> update count: 0
+
+table x;
+> A
+> -
+> rows: 0
 
 -- @case procedure.body_select
 -- @pg create_procedure.sql:53-59

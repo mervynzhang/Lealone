@@ -30,7 +30,13 @@ CREATE [OR REPLACE] FUNCTION [IF NOT EXISTS] [schema.]name(
     [COST n] [ROWS n]
     [SET configuration_parameter { TO | = } value] ...
     [OWNER TO user]                    -- Lealone扩展, 见2.8节
-    AS $$ body $$;
+    AS $$ body $$                       -- 经典写法: 函数体是一段SQL(可以有多条语句)
+
+-- SQL标准的函数体有三种写法(不需要引号，直接跟在属性后面)
+CREATE FUNCTION f(a INT) RETURNS INT RETURN a + 1;
+CREATE FUNCTION f(a INT) RETURNS INT RETURN QUERY SELECT a;
+CREATE FUNCTION f(a INT) RETURNS INT BEGIN RETURN a + 1; END;          -- 标准块体
+CREATE FUNCTION f(a INT) RETURNS INT BEGIN ATOMIC RETURN a + 1; END;   -- 带ATOMIC的块体
 
 ALTER FUNCTION [IF EXISTS] [schema.]name[(type, ...)] 动作;
     -- 动作可以是(每次一句):
@@ -46,7 +52,8 @@ COMMENT ON FUNCTION [schema.]name[(type, ...)] IS 'text';
 DROP FUNCTION [IF EXISTS] [schema.]name[(type, ...)];
 ```
 
-- 函数体既能用美元引用 `AS $$ ... $$`，也能用单引号 `AS '...'`。
+- 函数体既能用美元引用 `AS $$ ... $$`，也能用单引号 `AS '...'`，还可以不写 `AS` 直接用
+  SQL标准的 `RETURN <表达式>` / `BEGIN [ATOMIC] ... END`（见下面第二节第 1、1.1 条）。
 - `LANGUAGE SQL` 可选，写其它语言（如 `plpgsql`）直接报 `FEATURE_NOT_SUPPORTED`。
 - `LANGUAGE` 子句与易变性关键字（`IMMUTABLE`/`STABLE`/`VOLATILE`）都是可选的，且顺序任意，但都必须写在
   `AS` 之前。
@@ -78,16 +85,36 @@ SELECT var_count(1, 2, 3);  -- 3
 
 ## 二、语义
 
-1. **函数体是单条查询，或带 `RETURNING` 的 DML**：
+1. **函数体是一条查询、带 `RETURNING` 的 DML，或者 DDL/utility 语句**：
    `SELECT` / `VALUES` / `TABLE` / `WITH ... SELECT` / `(SELECT ...)`，
-   以及 `INSERT` / `UPDATE` / `DELETE` / `MERGE ... RETURNING ...`（见 `RETURNING.md`）。
-   创建时就校验第一条 token 是上面这些关键字，并且函数体里出现 `;` 或 `?` 会直接拒绝
-   （防止一次执行多条语句、以及用户写的 `?` 和参数名替换出来的 `?` 混在一起）。
-   不带 `RETURNING` 的 DML 函数体会在建函数时报 `FEATURE_NOT_SUPPORTED`。
+   `INSERT` / `UPDATE` / `DELETE` / `MERGE ... RETURNING ...`（见 `RETURNING.md`），
+   以及 `CREATE` / `ALTER` / `DROP` / `TRUNCATE` / `SET` / `CALL` 这类语句（函数体里做 DDL，见第 1.2 条）。
+   建函数时就校验：单语句函数体的第一条 token 必须是上面这些关键字之一，函数体里出现 `;` 或 `?`
+   会直接拒绝（防止一次执行多条语句、以及用户写的 `?` 和参数名替换出来的 `?` 混在一起）。
+   不带 `RETURNING` 的 DML 函数体在建函数时报 `FEATURE_NOT_SUPPORTED`，除非是 `RETURNS VOID`。
    建函数时还会在一个嵌套 session 里 prepare 一次函数体（**不执行**）：语法错误、列/表不存在、
    常量返回值类型不匹配都在 `CREATE` 时报出；只有 setof/table/多个 OUT 参数的结果列形状留到调用时校验。
-   数据库启动回放 `sys(meta)` 时会跳过这个校验（此时函数体引用的表可能还没建出来），
-   等价于 PG 的 `check_function_bodies=off`。
+   函数体里有 DDL 时，函数体引用的表可能是它自己刚建出来的，这种"表不存在"(42102)会推迟到调用时校验
+   （相当于 PG 的 `check_function_bodies=off`，Lealone 没有这个开关，是按函数体里有没有 DDL 自动判断的）。
+   数据库启动回放 `sys(meta)` 时会跳过这个校验（此时函数体引用的表可能还没建出来）。
+
+   1.1 **SQL标准的函数体（不带 `AS`）**：
+   - `RETURN <表达式>`：整个函数体，等价于 `AS 'SELECT <表达式>'`。表达式里可以用参数名、子查询。
+   - `RETURN QUERY <查询>`：查询本身就是函数体，适合 `RETURNS TABLE` / `RETURNS SETOF`。
+   - `BEGIN [ATOMIC] ... END`：标准块体（`ATOMIC` 可省略），里面可以有多条语句，也允许空语句 `;;`；
+     最后一条语句就是返回值，所以 `RETURN <表达式>` / `RETURN QUERY <查询>` 可以写在块体里，
+     也可以直接写查询（等价于 `BEGIN ATOMIC SELECT ...; END`）。
+   - SCRIPT 里 `RETURN <表达式>` 会被规范化成 `AS 'SELECT <表达式>'`，块体形式还是 `BEGIN ATOMIC ...; END`，
+     回放结果完全等价。
+
+   1.2 **函数体里做 DDL**：`AS $$ ... $$` 里可以写多条语句，按顺序执行，最后一条查询的结果就是返回值
+   （`RETURNS VOID` 时最后一条可以是 DDL/DML，返回值是 `NULL`）。`BEGIN ATOMIC` 块体同理。
+   DDL 在**嵌套连接**（`createNestedConnection`）上执行，所以函数体里的 DDL 和调用方的语句在同一个事务里，
+   调用方回滚时 DDL 一起回滚。注意：
+   - `CREATE TABLE`/`DROP TABLE` 这类语句本身没有问题，但**同一个函数被调用两次**时，
+     第二次再执行 `CREATE TABLE` 会报"表已存在"，这是调用方的责任（PG 也一样）。
+   - 函数体里的 DDL 没有 DDL 级别的校验（Lealone 的 DDL 在 prepare 阶段就能算出结果，不会留到执行时才炸），
+     但**引用不到的表**推迟到调用时校验。
 2. **标量函数**：取结果集**第一行第一列**作为返回值；结果集没有行时返回 `NULL`。
 3. **`RETURNS SETOF type`**：函数返回多行，每行只有一列，值的类型是声明的 `type`。
    列名和 PostgreSQL 一样是**函数名**（未加引号的标识符在 Lealone 里默认转成大写）。
@@ -205,6 +232,21 @@ SELECT var_count(1, 2, 3);  -- 3
 `FEATURE_NOT_SUPPORTED`。`ALTER FUNCTION ... SET SCHEMA` 没有实现（要移动对象），也报不支持。
 
 ## 三、实现要点
+
+- **函数体解析**（`SQLParserBase`）：
+  - 语法入口 `parseCreateSqlFunction()`（约 5400 行），函数体分三种：`RETURN` 形式走 `parseReturnBody()`、
+    块体走 `parseAtomicBody()`、`AS` 形式走 `readString()`。
+  - `parseReturnBody()`：`RETURN <表达式>` 直接拼成 `SELECT <表达式>`；`RETURN QUERY <查询>` 只取查询原文。
+  - `parseAtomicBody()`：**只按原文切分**（`;` 分隔，`BEGIN ... END`/`CASE ... END` 记嵌套层数），
+    不做语义解析——这样函数体/过程体里的表可以是函数体自己刚建出来的；
+    `RETURN <表达式>` / `RETURN QUERY <查询>` 在这里被改写成 `SELECT <表达式>` / 查询本身。
+  - 多条语句的 `AS $$ ... $$` 函数体走 `LealoneSQLParser.splitStatementsRaw()` 切分，然后按 `BEGIN ATOMIC`
+    同样的语句列表执行（`SqlFunction.setAtomicBody()`）。
+- **建函数时校验**（`CreateSqlFunction.validateSqlBody()`）：语句列表逐条 `prepareStatement()`（不执行），
+  函数体里有 DDL 时容忍 42102（表还没建出来）；最后一条是查询才有结果列校验。
+- **建过程时校验**（`CreateProcedure.validateBody()`）：过程体语句逐条 prepare，容忍 42102，其它错误直接报。
+- **执行**（`SqlFunction.executeFunction()`/`executeAtomicBody()`）：语句列表在嵌套 JDBC 连接上顺序执行，
+  最后一条按需 `executeQuery()` 取返回值。
 
 - `SqlFunction`（`lealone-db/.../db/schema/SqlFunction.java`）继承 `FunctionAlias`，
   覆盖 `findJavaMethod`/`getJavaMethods` 返回自定义的 `JavaMethod` 子类，`getValue` 里通过
@@ -392,6 +434,12 @@ PG 回归里原来查 `pg_proc`/`pg_get_functiondef` 的 5 个用例已经改成
 见 `docs/PG_REGRESS.md`。
 
 ## 七、已知限制 / 额外发现但没修的问题
+
+- **`CREATE TEMP SEQUENCE` + `DISCARD TEMP` 不支持**：PG 回归用例 `function_sql.sql_body_tempseq`
+  依赖这两个语句（以及"DISCARD TEMP 连带删除依赖临时对象建立起来的函数"），本轮只支持
+  `RETURN nextval('...')` 这种函数体写法本身，临时序列/临时对象依赖还是缺口，用例继续 skip。
+- **函数体里执行多条语句必须是 DDL/DML 混合或最后一条是查询**：`RETURNS INT` 的函数体以 DDL 结尾
+  （没有查询、也没有 `RETURN`）仍然报 `FEATURE_NOT_SUPPORTED`。
 
 1. 函数体的 SQL 语法/列名/常量返回类型现在建函数时就校验（数据库启动回放时跳过），
    但 setof/table 的结果列形状仍是调用时校验；函数体里也不能写 `;` 和 `?`。

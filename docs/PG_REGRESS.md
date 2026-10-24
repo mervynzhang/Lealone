@@ -300,3 +300,24 @@ proisstrict/prosecdef/proleakproof/prosrc）和内置函数 `pg_get_functiondef(
    * 游标 → `plpgsql.cursor` 1 条；`WITH ORDINALITY` → `rangefuncs.with_ordinality` 1 条。
 4. **补齐 PG 覆盖面**：`plpgsql.sql` 按段登记（尤其是游标、`RETURN QUERY EXECUTE`、`CASE` 语句）；
    `rangefuncs.sql` 里 `WITH ORDINALITY` 落地后再补；`portals.sql` 如果以后支持游标再纳入。
+
+## 八、这一轮刷新：SQL标准函数体 + 函数体/过程体里做DDL
+
+解锁 4 个用例（`sql_body_view`、`sql_body_return` 依赖 `RETURN <表达式>`/`BEGIN ... END`，
+`ddl_in_body`、`procedure.utility_body` 依赖函数体/过程体里的 DDL），执行用例 60 → 64，
+脚本语句 227 → 251，skip 清单 37 → 33 条：
+
+| 用例 | 之前 | 现在 | 靠什么能力 |
+| --- | --- | --- | --- |
+| `function_sql.sql_body_return` | skip（无 SQL 标准函数体） | 执行 16 条语句 | `RETURN <表达式>`、`RETURN QUERY`、`BEGIN [ATOMIC] ... END`、块内空语句 `;;` |
+| `function_sql.sql_body_view` | skip（无 SQL 标准函数体） | 执行 7 条语句 | `RETURN (SELECT ...)` 子查询表达式 + 函数体里引用视图 |
+| `function_sql.ddl_in_body` | skip（函数体只允许单条查询） | 执行 15 条语句 | `AS $$ ... $$` 多语句函数体 + 函数体里的 `CREATE TABLE`/`ALTER TABLE` |
+| `procedure.utility_body` | skip（过程体里不能执行 DDL） | 执行 3 条语句 | 过程体的 `BEGIN ATOMIC` 里执行 `CREATE TABLE`（PG 11 这里报 0A000，Lealone 支持，断言改成建成功） |
+
+脚本切分器（`PgRegressRunner`）这一轮又补了两处：
+`BEGIN ... END`（不带 `ATOMIC`）也算一个块的开始，但 `begin;`/`begin transaction` 不算；
+字符串、`$$...$$`、块注释**没闭合**时整段还在语句里，不能按行尾分号切分
+（`ddl_in_body` 的多行 `$$ ... $$` 函数体需要这个）。
+
+仍然 skip 的相邻缺口：`function_sql.sql_body_tempseq`（`CREATE TEMP SEQUENCE` + `DISCARD TEMP`
+以及"临时对象被删时连带删除依赖它的函数"）。

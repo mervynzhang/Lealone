@@ -28,6 +28,9 @@ public class StoredProcedureTest extends SqlTestBase {
         executeUpdate("DROP PROCEDURE IF EXISTS sp_query");
         executeUpdate("DROP PROCEDURE IF EXISTS sp_bad");
         executeUpdate("DROP PROCEDURE IF EXISTS sp_txn");
+        executeUpdate("DROP PROCEDURE IF EXISTS sp_ddl");
+        executeUpdate("DROP PROCEDURE IF EXISTS sp_ddl_bad");
+        executeUpdate("DROP TABLE IF EXISTS sp_ddl_t");
         executeUpdate("DROP TABLE IF EXISTS sp_t");
         executeUpdate("CREATE TABLE sp_t(id int primary key, v int)");
     }
@@ -39,6 +42,7 @@ public class StoredProcedureTest extends SqlTestBase {
         testParameter();
         testQueryBody();
         testAtomicity();
+        testDdlInBody();
         testRejectUnsupported();
         testDrop();
         init();
@@ -80,6 +84,25 @@ public class StoredProcedureTest extends SqlTestBase {
         executeQueryThanAssertErrorCode("CALL sp_bad()", com.lealone.db.api.ErrorCode.DUPLICATE_KEY_1);
         sql = "SELECT COUNT(*) FROM sp_t WHERE id = 9";
         assertEquals(0, getIntValue(1, true));
+    }
+
+    // 过程体里可以执行DDL，建过程时就校验语法，引用不到的表推迟到CALL时校验
+    private void testDdlInBody() throws Exception {
+        executeUpdate("CREATE PROCEDURE sp_ddl() BEGIN ATOMIC "
+                + "CREATE TABLE sp_ddl_t(id INT); INSERT INTO sp_ddl_t VALUES(1); END");
+        executeUpdate("CALL sp_ddl()");
+        executeQuery("SELECT count(*) FROM sp_ddl_t");
+        assertEquals(1, getIntValue(1, true));
+        // 过程体里的语法错误在建过程时就报出来
+        executeUpdateThanAssertErrorCode("CREATE PROCEDURE sp_ddl_bad() BEGIN ATOMIC SELEC 1; END",
+                com.lealone.db.api.ErrorCode.SYNTAX_ERROR_2);
+        // 表已经建过时CALL才报错
+        try {
+            executeUpdate("CALL sp_ddl()");
+            fail();
+        } catch (Exception e) {
+            assertErrorCode(e, com.lealone.db.api.ErrorCode.TABLE_OR_VIEW_ALREADY_EXISTS_1);
+        }
     }
 
     private void testRejectUnsupported() throws Exception {
