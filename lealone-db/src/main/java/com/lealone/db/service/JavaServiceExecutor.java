@@ -103,7 +103,10 @@ public class JavaServiceExecutor extends ServiceExecutorBase {
             Object ret = method.invoke(implementClassObject, args);
             if (ret == null)
                 return Future.succeededFuture(ValueNull.INSTANCE);
-            return (Future<?>) ret;
+            // 服务方法可以直接返回结果，不要求一定返回Future
+            if (ret instanceof Future)
+                return (Future<?>) ret;
+            return Future.succeededFuture(ret);
         } catch (Exception e) {
             throw DbException.convert(e);
         }
@@ -115,7 +118,8 @@ public class JavaServiceExecutor extends ServiceExecutorBase {
         Method method = objectMethodMap.get(methodName);
         Object[] args = getServiceMethodArgs(methodName, methodArgs);
         try {
-            return (Future<?>) method.invoke(implementClassObject, args);
+            Object ret = method.invoke(implementClassObject, args);
+            return ret instanceof Future ? (Future<?>) ret : Future.succeededFuture(ret);
         } catch (Exception e) {
             throw DbException.convert(e);
         }
@@ -127,7 +131,8 @@ public class JavaServiceExecutor extends ServiceExecutorBase {
         Method method = objectMethodMap.get(methodName);
         Object[] args = getServiceMethodArgs(methodName, json);
         try {
-            return (Future<?>) method.invoke(implementClassObject, args);
+            Object ret = method.invoke(implementClassObject, args);
+            return ret instanceof Future ? (Future<?>) ret : Future.succeededFuture(ret);
         } catch (Exception e) {
             throw DbException.convert(e);
         }
