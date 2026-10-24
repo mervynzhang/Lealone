@@ -123,6 +123,21 @@ call p('x');            -- varchar 版本还在
 | 关闭重开库后 `CALL` 同一过程 | 仍可用 |
 | 手动事务里 `CALL`，提交前从调用方查询 | **看不到**过程写入（0 行）；提交后可见（1 行） |
 
+### 过程的 EXECUTE 权限（和 PG 的差异）
+
+- `GRANT/REVOKE EXECUTE ON PROCEDURE ... TO/FROM PUBLIC|用户|角色` 都支持，授权落在 `RIGHT` 对象上，
+  `SCRIPT` 里输出 `GRANT EXECUTE ON PROCEDURE 名字(签名) TO ...` / `REVOKE ... FROM ...`，回放和关库重开都生效。
+- **兼容规则（重要差异）**：对象**从未被 GRANT/REVOKE 过**时，**任何人都可以调用**；
+  一旦有任何授权记录（哪怕只是一条 `REVOKE ... FROM PUBLIC`），就严格按 PG 语义检查：
+  超级用户/属主总是可以，`PUBLIC` 的 EXECUTE 位对所有人生效，具体用户/角色按角色继承算，否则报 `42501`。
+  PostgreSQL 是"建对象时自动 GRANT EXECUTE TO PUBLIC"，Lealone **不做**这个自动授权，
+  目的是不动既有库的 SCRIPT 和授权数据。
+- `REVOKE EXECUTE ... FROM PUBLIC` 之后如果一条授权记录都不剩，会保留一条**0 权限的标记**（`Right`），
+  这样"显式 REVOKE"和"从没授权过"才区分得开；这条标记在 `SCRIPT` 里也是 `REVOKE EXECUTE ... FROM PUBLIC`。
+- `SET ROLE r` / `SET ROLE NONE` / `RESET ROLE`：切到角色后按**当前角色**算 EXECUTE 权限，
+  普通用户只能切到自己所属的角色（或自己），否则 `42501`。
+  **边界**：`SET ROLE` 只影响函数/过程的 EXECUTE 检查，**不影响表/服务/序列的权限**（那些仍按当前用户算）。
+
 ## 四、已知限制
 
 1. **不是完整的 PL**：没有 `BEGIN ... END` 块、变量声明、`IF`/`WHILE`、游标、异常处理。过程体只能是扁平的 SQL 语句串。

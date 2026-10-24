@@ -71,7 +71,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 [pgregress]   create_procedure.sql     用例 25(执行 19, skip  6)  脚本语句  90(通过  90, 失败 0)  被skip用例占  17 条
 [pgregress]   plpgsql.sql              用例 23(执行 21, skip  2)  脚本语句  81(通过  81, 失败 0)  被skip用例占   4 条
 [pgregress]   rangefuncs.sql           用例 10(执行 10, skip  0)  脚本语句  40(通过  40, 失败 0)  被skip用例占   0 条
-[pgregress] 合计: 用例 98 (执行 83, skip 15), 脚本语句 346 (通过 346, 失败 0), 耗时 725ms
+[pgregress] 合计: 用例 98 (执行 85, skip 13), 脚本语句 369 (通过 369, 失败 0), 耗时 708ms
 [pgregress] skip 清单: 15 条用例, 点名跳过的 PG 语句 86 条
 [pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中  55 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  27 条在 skip 清单里
@@ -344,3 +344,22 @@ DEFAULT 参数还在 w-params 那条线里，脚本先不写 DEFAULT，`paramete
    * 游标 → `plpgsql.cursor` 1 条；`WITH ORDINALITY` → `rangefuncs.with_ordinality` 1 条。
 4. **补齐 PG 覆盖面**：`plpgsql.sql` 按段登记（尤其是游标、`RETURN QUERY EXECUTE`、`CASE` 语句）；
    `rangefuncs.sql` 里 `WITH ORDINALITY` 落地后再补；`portals.sql` 如果以后支持游标再纳入。
+
+## 九、这一轮刷新：函数级权限模型（PUBLIC / SET ROLE / EXECUTE / LEAKPROOF）
+
+解锁 2 个用例，执行用例 83 → 85，脚本语句 346 → 369，skip 清单 15 → 13 条：
+
+| 用例 | 之前 | 现在 | 靠什么能力 |
+| --- | --- | --- | --- |
+| `function_sql.leakproof` | skip（无 pg_proc.proleakproof / regproc） | 执行 14 条语句 | `INFORMATION_SCHEMA.PG_PROC.PROLEAKPROOF` + `CREATE/ALTER FUNCTION ... LEAKPROOF` + 非 admin 报 90040 |
+| `procedure.privileges` | skip（无 REVOKE ON PROCEDURE / SET ROLE） | 执行 9 条语句 | `GRANT/REVOKE EXECUTE ON PROCEDURE ... TO/FROM PUBLIC|用户` + `SET ROLE`/`RESET ROLE` + CALL 的 EXECUTE 检查（42501） |
+
+两个用例的适配说明都写在脚本注释里：
+`pg_proc`/`regproc` 换成 `INFORMATION_SCHEMA.PG_PROC`（我们的布尔列输出是 `TRUE`/`FALSE`，PG 是 `t`/`f`）；
+PG 的 `CREATE USER` 都补了 `PASSWORD`（Lealone 强制）；`procedure.privileges` 里放行那次 `CALL` 的参数
+用 `'priv'` 以便最后清理，不影响后面的用例行数。
+
+**权限语义的两条明确差异（已同步到 `docs/PROCEDURE.md`）**：
+1. 对象从未被 GRANT/REVOKE 过时**人人可调用**（PG 是建对象即自动 `GRANT EXECUTE TO PUBLIC`）；
+   一旦有任何授权记录就严格按 PG 语义检查。Lealone 不做自动授权，避免动既有库的 SCRIPT。
+2. `SET ROLE` 只影响函数/过程的 EXECUTE 检查，**不影响表/服务/序列权限**（那些仍按当前用户算）。
