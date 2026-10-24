@@ -381,20 +381,6 @@ public final class SltRunner {
         return sb.toString();
     }
 
-    // 期望值是一行一个值(SLT 里每行值之间用空格分隔, 但这里每个值单独一行存放),
-    // 按 sort 方式排序后返回新的列表
-    private static List<String> sortExpected(List<String> expected, String mode) {
-        if (mode.equals("valuesort")) {
-            List<String> all = new ArrayList<>(expected);
-            all.sort(String::compareTo);
-            return all;
-        }
-        // rowsort: 一个值一行, 按值排序即可(单列场景两类排序等价)
-        List<String> all = new ArrayList<>(expected);
-        all.sort(String::compareTo);
-        return all;
-    }
-
     private static void sortRows(List<String[]> rows, String mode) {
         if (mode.equals("rowsort")) {
             rows.sort((a, b) -> {
@@ -669,11 +655,6 @@ public final class SltRunner {
                                 rows.add(row);
                             }
                             sortRows(rows, r.sort);
-                            // rowsort/valuesort 的规范是"两侧都按同样方式排序后再比较";
-                            // 只排实际结果会让"期望值不是升序"的用例误判(而且 sort=... 的语义也没落实)
-                            List<String> expectedSorted = r.expected;
-                            if (r.sort.equals("rowsort") || r.sort.equals("valuesort"))
-                                expectedSorted = sortExpected(r.expected, r.sort);
                             for (String[] row : rows)
                                 flat.addAll(Arrays.asList(row));
                             String hash = null;
@@ -708,24 +689,24 @@ public final class SltRunner {
                                             "type=" + r.arg + " sort=" + r.sort);
                                     fHash++;
                                 }
-                            } else if (expectedSorted.isEmpty()) {
+                            } else if (r.expected.isEmpty()) {
                                 if (!flat.isEmpty()) {
                                     f = failure(relFile, r, "row_count", "0 rows",
                                             (flat.size() + " values: " + join3(flat)),
                                             "expected empty result");
                                     fRow++;
                                 }
-                            } else if (expectedSorted.size() != flat.size()) {
+                            } else if (r.expected.size() != flat.size()) {
                                 f = failure(relFile, r, "row_count",
-                                        expectedSorted.size() + " values: " + join3(expectedSorted),
+                                        r.expected.size() + " values: " + join3(r.expected),
                                         flat.size() + " values: " + join3(flat),
                                         "type=" + r.arg + " sort=" + r.sort);
                                 fRow++;
                             } else {
                                 for (int i = 0; i < flat.size(); i++) {
-                                    if (!expectedSorted.get(i).equals(flat.get(i))) {
+                                    if (!r.expected.get(i).equals(flat.get(i))) {
                                         f = failure(relFile, r, "value",
-                                                "[" + i + "] " + expectedSorted.get(i),
+                                                "[" + i + "] " + r.expected.get(i),
                                                 "[" + i + "] " + flat.get(i) + "  (all: "
                                                         + join3(flat) + ")",
                                                 "type=" + r.arg + " sort=" + r.sort
