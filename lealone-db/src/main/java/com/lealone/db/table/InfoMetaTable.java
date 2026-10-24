@@ -499,7 +499,7 @@ public class InfoMetaTable extends MetaTable {
                             // IS_NULLABLE
                             c.isNullable() ? "YES" : "NO",
                             // DATA_TYPE
-                            "" + DataType.convertTypeToSQLType(c.getType()),
+                            getMetaSqlType(c.getType()),
                             // CHARACTER_MAXIMUM_LENGTH
                             "" + c.getPrecisionAsInt(),
                             // CHARACTER_OCTET_LENGTH
@@ -515,7 +515,7 @@ public class InfoMetaTable extends MetaTable {
                             // COLLATION_NAME
                             collation,
                             // TYPE_NAME
-                            identifier(DataType.getDataType(c.getType()).name),
+                            identifier(getMetaTypeName(c.getType())),
                             // NULLABLE
                             "" + (c.isNullable() ? DatabaseMetaData.columnNullable
                                     : DatabaseMetaData.columnNoNulls),
