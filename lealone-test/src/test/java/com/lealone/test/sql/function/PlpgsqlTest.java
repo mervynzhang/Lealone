@@ -560,14 +560,46 @@ public class PlpgsqlTest extends SqlTestBase {
         executeQuery("SELECT plp_rec_field_set()");
         assertEquals("changed", getStringValue(1));
 
-        // 没有行时record未赋值，取字段报55000
+        // 没有行时%ROWTYPE是一行NULL，字段读取得到NULL
         executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_norow(p INT) RETURNS VARCHAR LANGUAGE plpgsql AS $$"
                 + " DECLARE r plp_rec_t%ROWTYPE;" //
                 + " BEGIN" //
                 + "   SELECT * INTO r FROM plp_rec_t WHERE id = p;" //
-                + "   RETURN r.name;" //
+                + "   RETURN COALESCE(r.name, 'NULL');" //
                 + " END; $$");
-        assertSqlState("55000", "SELECT plp_rec_norow(99)");
+        executeQuery("SELECT plp_rec_norow(99)");
+        assertEquals("NULL", getStringValue(1));
+
+        // 从未赋值的plain record取字段才是55000
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_unassigned() RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r record;" //
+                + " BEGIN RETURN r.name; END; $$");
+        assertSqlState("55000", "SELECT plp_rec_unassigned()");
+
+        // %ROWTYPE声明后字段就是NULL
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_rowtype_null() RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_rec_t%ROWTYPE;" //
+                + " BEGIN RETURN COALESCE(r.name, 'NULL'); END; $$");
+        executeQuery("SELECT plp_rec_rowtype_null()");
+        assertEquals("NULL", getStringValue(1));
+
+        // plain record可以按新查询重新绑定行结构
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_rebind() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r record;" //
+                + " BEGIN" //
+                + "   SELECT id, name INTO r FROM plp_rec_t WHERE id = 1;" //
+                + "   SELECT id, name, CAST(42 AS INT) AS extra INTO r FROM plp_rec_t WHERE id = 1;" //
+                + "   RETURN r.extra;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_rebind()");
+        assertEquals(42, getIntValue(1));
+
+        // %ROWTYPE数组暂不支持，但要报干净的不支持错误
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_array() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE r plp_rec_t%ROWTYPE[];" //
+                + " BEGIN RETURN 1; END; $$");
+        executeQueryThanAssertErrorCode("SELECT plp_rec_array()",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
 
         // record当标量用要给出明确的不支持错误，不能漏内部CAST语法错
         executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_scalar(p INT) RETURNS INT LANGUAGE plpgsql AS $$"
@@ -763,6 +795,81 @@ public class PlpgsqlTest extends SqlTestBase {
         executeUpdate(setofSql);
         assertEquals("[1, 2]",
                 queryIntList("SELECT * FROM plp_setof_rt() ORDER BY 1").toString());
+    }
+
+    // 标签和表名/别名同名时，label.column要回落到SQL解析
+    @Test
+    public void testLabelFallsBackToSql() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_label_alias_t");
+        executeUpdate("CREATE TABLE plp_label_alias_t(id INT)");
+        executeUpdate("INSERT INTO plp_label_alias_t VALUES(7)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_label_alias() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " <<plp_label_alias_t>>" //
+                + " DECLARE x INT;" //
+                + " BEGIN" //
+                + "   SELECT plp_label_alias_t.id INTO x FROM plp_label_alias_t;" //
+                + "   RETURN x;" //
+                + " END; $$");
+        executeQuery("SELECT plp_label_alias()");
+        assertEquals(7, getIntValue(1));
+    }
+
+    // RETURN QUERY和FOR循环也要按PG语义更新FOUND
+    @Test
+    public void testFoundAfterReturnQueryAndFor() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_found_q_t");
+        executeUpdate("CREATE TABLE plp_found_q_t(a INT)");
+        executeUpdate("INSERT INTO plp_found_q_t VALUES(1)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_found_return_query(p INT) RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   RETURN QUERY SELECT a FROM plp_found_q_t WHERE a = p;" //
+                + "   IF FOUND THEN RETURN NEXT 99; END IF;" //
+                + "   RETURN NEXT 1;" //
+                + " END; $$");
+        assertEquals("[1, 1, 99]",
+                queryIntList("SELECT * FROM plp_found_return_query(1) ORDER BY 1").toString());
+        assertEquals("[1]",
+                queryIntList("SELECT * FROM plp_found_return_query(2) ORDER BY 1").toString());
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_found_for(n INT) RETURNS BOOLEAN LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   FOR i IN 1..n LOOP" //
+                + "     PERFORM * FROM plp_found_q_t WHERE a = 9999;" //
+                + "   END LOOP;" //
+                + "   RETURN FOUND;" //
+                + " END; $$");
+        executeQuery("SELECT plp_found_for(1)");
+        assertTrue(getBooleanValue(1));
+        executeQuery("SELECT plp_found_for(0)");
+        assertFalse(getBooleanValue(1));
+    }
+
+    // ROW_COUNT是最近一条SQL命令的值，utility语句为0，INTO只算第一行
+    @Test
+    public void testRowCountRecentStatement() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_rc_t2");
+        executeUpdate("CREATE TABLE plp_rc_t2(a INT)");
+        executeUpdate("INSERT INTO plp_rc_t2 VALUES(1), (2), (3)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rc_utility() RETURNS BIGINT LANGUAGE plpgsql AS $$"
+                + " DECLARE n BIGINT;" //
+                + " BEGIN" //
+                + "   INSERT INTO plp_rc_t2 VALUES(4);" //
+                + "   CREATE TABLE IF NOT EXISTS plp_rc_tmp(a INT);" //
+                + "   GET DIAGNOSTICS n = ROW_COUNT;" //
+                + "   RETURN n;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rc_utility()");
+        assertEquals(0, getLongValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rc_into() RETURNS BIGINT LANGUAGE plpgsql AS $$"
+                + " DECLARE x INT; n BIGINT;" //
+                + " BEGIN" //
+                + "   SELECT a INTO x FROM plp_rc_t2;" //
+                + "   GET DIAGNOSTICS n = ROW_COUNT;" //
+                + "   RETURN n;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rc_into()");
+        assertEquals(1, getLongValue(1));
     }
 
     // GET DIAGNOSTICS ... = ROW_COUNT
