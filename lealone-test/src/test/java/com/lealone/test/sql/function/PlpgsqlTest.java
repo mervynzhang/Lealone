@@ -12,6 +12,7 @@ import java.sql.Statement;
 import org.junit.Test;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.db.api.ErrorCode;
 import com.lealone.test.sql.SqlTestBase;
 
 /**
@@ -338,6 +339,49 @@ public class PlpgsqlTest extends SqlTestBase {
         assertSqlState("22005", "SELECT plp_const_into()");
     }
 
+    // FOR循环的边界/步长校验、WITH ... SELECT INTO、无handler时RAISE;、无标签块带结束标签
+    @Test
+    public void testMoreParserAndRuntimeChecks() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_for_neg() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " BEGIN FOR i IN 1..3 BY -1 LOOP NULL; END LOOP; RETURN 1; END; $$");
+        assertSqlState("22023", "SELECT plp_for_neg()");
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_for_null() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " BEGIN FOR i IN 1..NULL LOOP NULL; END LOOP; RETURN 1; END; $$");
+        assertSqlState("22004", "SELECT plp_for_null()");
+
+        // 上界接近Integer.MAX_VALUE时不能溢出死循环
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_for_big() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE s INT := 0;" //
+                + " BEGIN" //
+                + "   FOR i IN 2147483646..2147483647 LOOP" //
+                + "     s := s + (i - 2147483646);" //
+                + "   END LOOP;" //
+                + "   RETURN s;" //
+                + " END; $$");
+        executeQuery("SELECT plp_for_big()");
+        assertEquals(1, getIntValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_with_into() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE x INT := 0;" //
+                + " BEGIN" //
+                + "   WITH q AS (SELECT 7 AS a) SELECT a INTO x FROM q;" //
+                + "   RETURN x;" //
+                + " END; $$");
+        executeQuery("SELECT plp_with_into()");
+        assertEquals(7, getIntValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_raise_noexc() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RAISE; END; $$");
+        assertSqlState("0Z002", "SELECT plp_raise_noexc()");
+
+        // 没有标签的块不能写END label
+        executeUpdateThanAssertErrorCode(
+                "CREATE FUNCTION plp_bad_endlabel() RETURNS INT LANGUAGE plpgsql AS $$"
+                        + " BEGIN BEGIN NULL; END foo; RETURN 1; END; $$",
+                ErrorCode.SYNTAX_ERROR_2);
+    }
+
     // RETURNS VOID：可以省略RETURN，RETURN;合法，RETURN expr非法
     @Test
     public void testReturnsVoid() throws Exception {
@@ -380,6 +424,18 @@ public class PlpgsqlTest extends SqlTestBase {
                 + " $$");
         executeQuery("SELECT plp_alias_cast(1)");
         assertEquals(2, getIntValue(1));
+
+        // PostgreSQL的条件名也可以是SQLSTATE类名，42xxx都能匹配
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_alias_class(a INT) RETURNS INT LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   SELECT v FROM plp_not_exist_table2;" //
+                + "   RETURN 0;" //
+                + " EXCEPTION WHEN syntax_error_or_access_rule_violation THEN" //
+                + "   RETURN 3;" //
+                + " END;" //
+                + " $$");
+        executeQuery("SELECT plp_alias_class(1)");
+        assertEquals(3, getIntValue(1));
     }
 
     // PERFORM丢弃查询结果
