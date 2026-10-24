@@ -82,7 +82,7 @@ public class JdbcStatement extends JdbcWrapper implements Statement {
     }
 
     private JdbcFuture<ResultSet> executeQueryInternal(String sql, boolean async) {
-        return conn.executeJdbcTask(async, this, ac -> {
+        return executeTask(async, ac -> {
             int id = getNextTraceId(TraceObjectType.RESULT_SET);
             if (isDebugEnabled()) {
                 debugCodeAssign(TraceObjectType.RESULT_SET, id,
@@ -225,7 +225,7 @@ public class JdbcStatement extends JdbcWrapper implements Statement {
     }
 
     private JdbcFuture<Integer> executeUpdateInternal(String sql, boolean async) {
-        return conn.executeJdbcTask(async, this, ac -> {
+        return executeTask(async, ac -> {
             SQLCommand command = createSQLCommand(sql, false);
             command.executeUpdate().onComplete(ar -> {
                 setExecutingStatement(null);
@@ -321,7 +321,11 @@ public class JdbcStatement extends JdbcWrapper implements Statement {
     }
 
     private boolean executeInternal(String sql) throws SQLException {
-        return executeInternal(sql, false).get().booleanValue();
+        try {
+            return executeInternal(sql, false).get().booleanValue();
+        } catch (Exception e) {
+            throw DbException.toSQLException(e); // 同步路径必须抛SQLException
+        }
     }
 
     public Future<Boolean> executeAsync(String sql) {
@@ -1011,6 +1015,15 @@ public class JdbcStatement extends JdbcWrapper implements Statement {
             throw DbException.get(ErrorCode.OBJECT_CLOSED);
         }
         conn.checkClosed();
+    }
+
+    // 语句关闭后conn会变成null，这里先判断再解引用，避免抛NPE
+    <T> JdbcFuture<T> executeTask(boolean async, JdbcConnection.JdbcTask<T> task) {
+        if (conn == null) {
+            return new JdbcFuture<>(Future.failedFuture(
+                    DbException.toSQLException(DbException.get(ErrorCode.OBJECT_CLOSED))), this);
+        }
+        return conn.executeJdbcTask(async, this, task);
     }
 
     /**
