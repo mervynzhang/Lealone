@@ -9,6 +9,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
+import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.common.exceptions.DbException;
@@ -257,6 +258,33 @@ public class PgFunctionParamTest extends SqlTestBase {
                 ErrorCode.DATA_CONVERSION_ERROR_1);
         executeQuery("SELECT p_var_first('7', '8')");
         assertEquals(7, getIntValue(1));
+    }
+
+    // 按参数类型重载目前不支持: schema里的函数对象以名字做唯一键
+    @Test
+    public void testOverloadNotSupported() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION p_ov(a INT) RETURNS VARCHAR AS $$ SELECT 'int' $$");
+        executeQuery("SELECT p_ov(1)");
+        assertEquals("int", getStringValue(1));
+
+        // 同名但参数类型不同的函数不能并存
+        executeUpdateThanAssertErrorCode(
+                "CREATE FUNCTION p_ov(a VARCHAR) RETURNS VARCHAR AS $$ SELECT 'varchar' $$",
+                ErrorCode.FUNCTION_ALIAS_ALREADY_EXISTS_1);
+    }
+
+    // PostgreSQL允许 f(int) 和 f(varchar) 并存, Lealone目前做不到, 见 docs/PG_FUNCTION.md
+    @Ignore("schema对象按名字做唯一键(TransactionalDbObjects/SCRIPT回放都以getName()为key), "
+            + "同名函数会互相覆盖; 按签名存储需要改动通用对象存储层与解析/DDL/持久化多处, 超出本次范围")
+    @Test
+    public void testOverloadByParameterType() throws Exception {
+        executeUpdate(
+                "CREATE FUNCTION p_ov2(a INT) RETURNS VARCHAR AS $$ SELECT 'int' $$");
+        executeUpdate(
+                "CREATE FUNCTION p_ov2(a VARCHAR) RETURNS VARCHAR AS $$ SELECT 'varchar' $$");
+        executeQuery("SELECT p_ov2(1), p_ov2('x')");
+        assertEquals("int", getStringValue(1));
+        assertEquals("varchar", getStringValue(2));
     }
 
     // 从SCRIPT的输出里找出指定函数的CREATE FUNCTION语句
