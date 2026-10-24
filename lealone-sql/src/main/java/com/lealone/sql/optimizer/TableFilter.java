@@ -854,9 +854,12 @@ public class TableFilter extends ColumnResolverBase {
             return currentSearchRow.getPrimaryKey();
         }
         if (current == null) {
-            Value v = currentSearchRow.getValue(columnId);
-            if (v != null) {
-                return v;
+            // 二级索引是异步维护的，索引行里的值可能还是旧的，只能读主表行
+            if (cursor.isSearchRowUpToDate()) {
+                Value v = currentSearchRow.getValue(columnId);
+                if (v != null) {
+                    return v;
+                }
             }
             current = cursor.get();
             if (current == null) {
