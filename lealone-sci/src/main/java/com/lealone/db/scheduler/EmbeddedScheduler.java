@@ -18,6 +18,8 @@ import com.lealone.db.async.AsyncResult;
 import com.lealone.db.async.AsyncTask;
 import com.lealone.db.session.InternalSession;
 import com.lealone.db.session.Session;
+import com.lealone.db.session.SessionStatus;
+import com.lealone.sql.PreparedSQLStatement.YieldableCommand;
 import com.lealone.db.session.SessionInfo;
 import com.lealone.db.util.Awaiter;
 import com.lealone.sql.PreparedSQLStatement;
@@ -175,6 +177,7 @@ public class EmbeddedScheduler extends InternalSchedulerBase {
         }
 
         void runSessionTasks() {
+            checkLockTimeout();
             if (session.getYieldableCommand() != null) {
                 return;
             }
@@ -186,6 +189,18 @@ public class EmbeddedScheduler extends InternalSchedulerBase {
                         break;
                 }
             }
+        }
+
+        // 等锁的session被挂起后没人再检查它，必须由调度器定期检查，超时就把错误交给语句
+        private void checkLockTimeout() {
+            if (session.getStatus() != SessionStatus.WAITING)
+                return;
+            YieldableCommand c = session.getYieldableCommand();
+            if (c == null)
+                return;
+            Throwable e = session.getLockTimeoutError();
+            if (e != null)
+                c.getYieldable().handleException(e);
         }
 
         private void runTask(AsyncTask task) {
