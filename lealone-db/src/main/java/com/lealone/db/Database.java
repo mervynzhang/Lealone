@@ -1181,7 +1181,7 @@ public class Database extends DbObjectBase implements DataHandler {
         if (state == State.CLOSING || state == State.CLOSED) {
             return;
         }
-        if (userSessions.size() > 0) {
+        if (getUserSessionCount() > 0) {
             if (!fromShutdownHook) {
                 return;
             }
@@ -1202,7 +1202,7 @@ public class Database extends DbObjectBase implements DataHandler {
             // set it to null, to make sure it's called only once
             eventListener = null;
             e.closingDatabase();
-            if (userSessions.size() > 0) {
+            if (getUserSessionCount() > 0) {
                 // if a connection was opened, we can't close the database
                 return;
             }
@@ -1272,6 +1272,21 @@ public class Database extends DbObjectBase implements DataHandler {
             }
         }
         state = State.CLOSED;
+    }
+
+    // 只有从连接创建出来的session才算用户连接, 这种session会带上ConnectionInfo。
+    // 引擎内部任务(后台分析表、异步构建索引等)创建的session没有连接信息, 不算用户连接,
+    // 否则Database.close会因为"还有session"而静默返回: 关闭时的刷脏页和写redo都不会执行,
+    // 调用方以为数据库已经干净关闭, 重启后却丢掉最后提交的更新。
+    private int getUserSessionCount() {
+        int count = 0;
+        synchronized (userSessions) {
+            for (ServerSession s : userSessions) {
+                if (s.getConnectionInfo() != null)
+                    count++;
+            }
+        }
+        return count;
     }
 
     private synchronized void closeSystemSession() {
