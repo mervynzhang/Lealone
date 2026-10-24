@@ -7,6 +7,9 @@ package com.lealone.sql.ddl;
 
 import java.util.ArrayList;
 
+import com.lealone.db.schema.SqlFunction;
+import com.lealone.db.schema.SqlProcedure;
+
 /**
  * CREATE FUNCTION和ALTER FUNCTION里可选的函数属性。
  * 字段为null表示这次没有写这个属性，这样ALTER FUNCTION只改用户写出来的那一项。
@@ -86,6 +89,68 @@ public class FunctionAttributes {
 
     public void setOwner(String owner) {
         this.owner = owner;
+    }
+
+    /**
+     * 把这次写出来的属性应用到函数上，没写的属性保持不变。
+     */
+    public void applyTo(SqlFunction function) {
+        if (volatility != null) {
+            function.setVolatility(volatility);
+        }
+        if (strict != null) {
+            function.setStrict(strict.booleanValue());
+        }
+        if (securityDefiner != null) {
+            function.setSecurityDefiner(securityDefiner.booleanValue());
+        }
+        if (leakproof != null) {
+            function.setLeakproof(leakproof.booleanValue());
+        }
+        if (window != null) {
+            function.setWindow(window.booleanValue());
+        }
+        if (cost != null) {
+            function.setCost(cost);
+        }
+        if (rows != null) {
+            function.setRows(rows);
+        }
+        for (String[] item : configItems) {
+            function.removeConfigItem(item[0]);
+            function.addConfigItem(item[0], item[1]);
+        }
+    }
+
+    /**
+     * 把这次写出来的属性应用到过程上，没写的属性保持不变。
+     */
+    public void applyTo(SqlProcedure procedure) {
+        if (volatility != null) {
+            procedure.setVolatility(volatility);
+        }
+        if (strict != null) {
+            procedure.setStrict(strict.booleanValue());
+        }
+        if (securityDefiner != null) {
+            procedure.setSecurityDefiner(securityDefiner.booleanValue());
+        }
+        if (leakproof != null) {
+            procedure.setLeakproof(leakproof.booleanValue());
+        }
+        if (window != null) {
+            procedure.setWindow(window.booleanValue());
+        }
+        if (cost != null) {
+            procedure.setCost(cost);
+        }
+        if (rows != null) {
+            procedure.setRows(rows);
+        }
+        for (String[] item : configItems) {
+            procedure.removeConfigItem(item[0]);
+            procedure.addConfigItem(item[0], item[1]);
+        }
     }
 
     public ArrayList<String[]> getConfigItems() {

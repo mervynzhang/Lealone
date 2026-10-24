@@ -38,9 +38,8 @@ procedure.psql_meta	create_procedure.sql:14-21	1	Lealone客户端没有psql元�
 procedure.named_default	create_procedure.sql:107-121	7	Lealone 不支持 DEFAULT 参数与命名实参
 procedure.polymorphic	create_procedure.sql:126-159	11	Lealone 无 anyarray/anyelement 多态类型
 procedure.call_function	create_procedure.sql:236-237	2	Lealone 的 CALL 不区分函数与过程
-procedure.alter_and_bad_def	create_procedure.sql:239-249	8	ALTER FUNCTION 已支持但 ALTER PROCEDURE 报 42001; 过程也不接受 WINDOW/STRICT(42001)与 VARIADIC(50100)
-procedure.privileges	create_procedure.sql:258-267	10	没有过程级 EXECUTE 授权(GRANT ... ON PROCEDURE 报 42102), SET ROLE 也不支持
-procedure.routine_syntax	create_procedure.sql:272-278	5	Lealone 不支持 ALTER ROUTINE/DROP ROUTINE
+procedure.privileges	create_procedure.sql:258-267	10	GRANT/REVOKE EXECUTE ON PROCEDURE 的解析已支持, 但 Lealone 无 SET ROLE/PUBLIC 角色, 过程权限也不参与调用检查
+procedure.routine_syntax	create_procedure.sql:272-278	5	Lealone 不支持 ALTER ROUTINE/DROP ROUTINE(ALTER PROCEDURE/DROP PROCEDURE 已支持)
 plpgsql.trigger_room	plpgsql.sql:130-140	2	只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节
 plpgsql.trigger_raise	plpgsql.sql:162-172	2	只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节
 plpgsql.polymorphic	plpgsql.sql:1565-1568	1	Lealone 无 anyelement/anyarray 多态参数类型

@@ -24,6 +24,8 @@ import com.lealone.db.Constants;
 import com.lealone.db.DbObjectType;
 import com.lealone.db.SysProperties;
 import com.lealone.db.api.ErrorCode;
+import com.lealone.db.auth.Right;
+import com.lealone.db.lock.DbObjectLock;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.util.SourceCompiler;
 import com.lealone.db.value.DataType;
@@ -221,6 +223,17 @@ public class FunctionAlias extends SchemaObjectBase {
     @Override
     public String getDropSQL() {
         return "DROP ALIAS IF EXISTS " + getSQL();
+    }
+
+    @Override
+    public void removeChildrenAndResources(ServerSession session, DbObjectLock lock) {
+        // 删函数时要一起删掉引用它的授权，否则SCRIPT里会留下指向不存在函数的GRANT
+        for (Right right : database.getAllRights()) {
+            if (right.getGrantedObject() == this) {
+                database.removeDatabaseObject(session, right, lock);
+            }
+        }
+        super.removeChildrenAndResources(session, lock);
     }
 
     @Override

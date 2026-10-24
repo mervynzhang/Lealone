@@ -502,5 +502,10 @@ public interface SQLStatement extends SQLCommand {
      */
     int ALTER_FUNCTION = 153;
 
+    /**
+     * The type of an ALTER PROCEDURE statement.
+     */
+    int ALTER_PROCEDURE = 154;
+
     String INTERNAL_SAVEPOINT = "_INTERNAL_SAVEPOINT_";
 }

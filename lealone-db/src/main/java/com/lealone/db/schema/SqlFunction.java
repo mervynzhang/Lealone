@@ -851,7 +851,7 @@ public class SqlFunction extends FunctionAlias {
     }
 
     // COST/ROWS是浮点数，整数时不带小数点，读起来和PostgreSQL的DDL一致
-    private static String formatNumber(double value) {
+    static String formatNumber(double value) {
         if (value == Math.floor(value) && !Double.isInfinite(value)) {
             return Long.toString((long) value);
         }
@@ -864,8 +864,8 @@ public class SqlFunction extends FunctionAlias {
         return "DROP FUNCTION IF EXISTS " + getSQL() + '(' + getInputParameterTypesSQL() + ')';
     }
 
-    // DROP FUNCTION name(types)里的参数类型列表，空列表表示没有参数
-    private String getInputParameterTypesSQL() {
+    // DROP FUNCTION name(types)和GRANT ON FUNCTION里的参数类型列表，空列表表示没有参数
+    public String getInputParameterTypesSQL() {
         StatementBuilder buff = new StatementBuilder();
         for (int i = 0; i < inputParameterCount; i++) {
             int index = inputIndexes[i];

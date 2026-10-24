@@ -11,7 +11,10 @@ import com.lealone.db.DbObject;
 import com.lealone.db.DbObjectBase;
 import com.lealone.db.DbObjectType;
 import com.lealone.db.lock.DbObjectLock;
+import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
+import com.lealone.db.schema.SqlFunction;
+import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.service.Service;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Table;
@@ -157,6 +160,18 @@ public class Right extends DbObjectBase {
                     buff.append(" ON SERVICE ").append(grantedObject.getSQL());
                 } else if (grantedObject instanceof Table) {
                     buff.append(" ON ").append(grantedObject.getSQL());
+                } else if (grantedObject instanceof SqlProcedure) {
+                    // 过程要带上完整参数签名，回放时才能定位到指定的重载
+                    SqlProcedure procedure = (SqlProcedure) grantedObject;
+                    buff.append(" ON PROCEDURE ").append(procedure.getSQL()).append('(')
+                            .append(procedure.getParameterSignatureSQL()).append(')');
+                } else if (grantedObject instanceof FunctionAlias) {
+                    buff.append(" ON FUNCTION ").append(grantedObject.getSQL());
+                    if (grantedObject instanceof SqlFunction) {
+                        buff.append('(')
+                                .append(((SqlFunction) grantedObject).getInputParameterTypesSQL())
+                                .append(')');
+                    }
                 }
             }
         }

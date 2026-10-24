@@ -5,10 +5,14 @@
  */
 package com.lealone.db.schema;
 
-import com.lealone.common.exceptions.DbException;
+import java.util.ArrayList;
+
 import com.lealone.common.util.StatementBuilder;
 import com.lealone.common.util.StringUtils;
 import com.lealone.db.DbObjectType;
+import com.lealone.db.auth.Right;
+import com.lealone.db.lock.DbObjectLock;
+import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
 import com.lealone.db.value.DataType;
 
@@ -35,6 +39,18 @@ public class SqlProcedure extends SchemaObjectBase {
     private final int[] parameterModes;
     private final int[] inputIndexes; // 入参(IN/INOUT)在参数列表中的下标
     private final int[] outputIndexes; // OUT/INOUT参数在参数列表中的下标
+
+    // ---- PostgreSQL的过程属性，可以通过ALTER PROCEDURE修改，和函数的属性是同一套 ----
+    private String volatility = SqlFunction.VOLATILE;
+    private boolean strict;
+    private boolean securityDefiner;
+    private boolean leakproof;
+    private boolean window;
+    private Double cost;
+    private Double rows;
+    private String ownerName;
+    // 每个元素是{参数名, 值}，值可能为null(表示DEFAULT)
+    private final ArrayList<String[]> configItems = new ArrayList<>();
 
     // 过程体的解析结果，由sql模块负责填充和读取
     private volatile Object compiledBody;
@@ -129,6 +145,90 @@ public class SqlProcedure extends SchemaObjectBase {
     // 过程体的解析结果跟解析它的会话绑定，所以每个会话各存一份
     public void setCompiledBody(Object compiledBody) {
         this.compiledBody = compiledBody;
+    }
+
+    public String getVolatility() {
+        return volatility;
+    }
+
+    public void setVolatility(String volatility) {
+        this.volatility = volatility == null ? SqlFunction.VOLATILE : volatility;
+    }
+
+    public boolean isStrict() {
+        return strict;
+    }
+
+    public void setStrict(boolean strict) {
+        this.strict = strict;
+    }
+
+    public boolean isSecurityDefiner() {
+        return securityDefiner;
+    }
+
+    public void setSecurityDefiner(boolean securityDefiner) {
+        this.securityDefiner = securityDefiner;
+    }
+
+    public boolean isLeakproof() {
+        return leakproof;
+    }
+
+    public void setLeakproof(boolean leakproof) {
+        this.leakproof = leakproof;
+    }
+
+    public boolean isWindow() {
+        return window;
+    }
+
+    public void setWindow(boolean window) {
+        this.window = window;
+    }
+
+    public Double getCost() {
+        return cost;
+    }
+
+    public void setCost(Double cost) {
+        this.cost = cost;
+    }
+
+    public Double getRows() {
+        return rows;
+    }
+
+    public void setRows(Double rows) {
+        this.rows = rows;
+    }
+
+    public String getOwnerName() {
+        return ownerName;
+    }
+
+    public void setOwnerName(String ownerName) {
+        this.ownerName = ownerName;
+    }
+
+    public ArrayList<String[]> getConfigItems() {
+        return configItems;
+    }
+
+    public void addConfigItem(String name, String value) {
+        configItems.add(new String[] { name, value });
+    }
+
+    public void removeConfigItem(String name) {
+        for (int i = configItems.size() - 1; i >= 0; i--) {
+            if (configItems.get(i)[0].equalsIgnoreCase(name)) {
+                configItems.remove(i);
+            }
+        }
+    }
+
+    public void clearConfigItems() {
+        configItems.clear();
     }
 
     /**
@@ -274,15 +374,58 @@ public class SqlProcedure extends SchemaObjectBase {
         } else {
             buff.append(" AS ").append(StringUtils.quoteStringSQL(body));
         }
+        appendAttributes(buff);
         return buff.toString();
+    }
+
+    // 过程属性只写用户设置过的项，默认值不写，没有属性的过程DDL和以前完全一样
+    private void appendAttributes(StatementBuilder buff) {
+        if (!SqlFunction.VOLATILE.equalsIgnoreCase(volatility)) {
+            buff.append(' ').append(volatility);
+        }
+        if (strict) {
+            buff.append(" STRICT");
+        }
+        if (securityDefiner) {
+            buff.append(" SECURITY DEFINER");
+        }
+        if (leakproof) {
+            buff.append(" LEAKPROOF");
+        }
+        if (window) {
+            buff.append(" WINDOW");
+        }
+        if (cost != null) {
+            buff.append(" COST ").append(SqlFunction.formatNumber(cost.doubleValue()));
+        }
+        if (rows != null) {
+            buff.append(" ROWS ").append(SqlFunction.formatNumber(rows.doubleValue()));
+        }
+        for (String[] item : configItems) {
+            buff.append(" SET ").append(database.quoteIdentifier(item[0])).append(" = ");
+            if (item[1] != null) {
+                buff.append(item[1]);
+            } else {
+                buff.append("DEFAULT");
+            }
+        }
+        if (ownerName != null) {
+            buff.append(" OWNER TO ").append(database.quoteIdentifier(ownerName));
+        }
     }
 
     // 重载过程要带上完整参数签名(含IN/OUT模式)才能唯一确定要删哪个，
     // SCRIPT回放时也不会因为同名重载报歧义
     @Override
     public String getDropSQL() {
-        StatementBuilder buff = new StatementBuilder("DROP PROCEDURE IF EXISTS ");
-        buff.append(getSQL()).append('(');
+        return "DROP PROCEDURE IF EXISTS " + getSQL() + '(' + getParameterSignatureSQL() + ')';
+    }
+
+    /**
+     * 完整参数签名(含IN/OUT/INOUT模式)，用于DROP PROCEDURE和GRANT里的参数类型列表。
+     */
+    public String getParameterSignatureSQL() {
+        StatementBuilder buff = new StatementBuilder();
         for (int i = 0; i < parameters.length; i++) {
             buff.appendExceptFirst(", ");
             int mode = parameterModes[i];
@@ -295,11 +438,22 @@ public class SqlProcedure extends SchemaObjectBase {
             }
             buff.append(getParameterTypeSQL(i));
         }
-        return buff.append(')').toString();
+        return buff.toString();
+    }
+
+    @Override
+    public void removeChildrenAndResources(ServerSession session, DbObjectLock lock) {
+        // 删过程时要一起删掉引用它的授权，否则SCRIPT里会留下指向不存在过程的GRANT
+        for (Right right : database.getAllRights()) {
+            if (right.getGrantedObject() == this) {
+                database.removeDatabaseObject(session, right, lock);
+            }
+        }
+        super.removeChildrenAndResources(session, lock);
     }
 
     @Override
     public void checkRename() {
-        throw DbException.getUnsupportedException("RENAME");
+        // 支持ALTER PROCEDURE ... RENAME TO
     }
 }
