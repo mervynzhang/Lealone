@@ -329,6 +329,9 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         private final ServerSession session;
         private SearchRow searchRow;
         private Row row;
+        // 单条语句/单个游标内"rowKey -> 首次见到时缓存的行内容"，
+        // 同一rowKey后面出现的索引项都用这份缓存行校验，保证一条语句内看到的是同一份行快照
+        private HashMap<Long, Row> rowSnapshots;
 
         public StandardSecondaryIndexCursor(ServerSession session) {
             this.session = session;
@@ -390,10 +393,22 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
 
         // 主表行当前的索引列值是否还等于这条索引项保存的值
         private boolean isRowStillMatching(IndexKey indexKey) {
-            // 复用游标里缓存的这一行，避免和后续TableFilter取值时重复读一次主表
-            if (row == null)
-                row = table.getRow(session, indexKey.getKey());
-            Row row = this.row;
+            long rowKey = indexKey.getKey();
+            if (rowSnapshots == null)
+                rowSnapshots = new HashMap<>();
+            Row snapshot;
+            if (rowSnapshots.containsKey(rowKey)) {
+                // 同一rowKey在本次扫描里已经见过，沿用第一次见到时的行内容，
+                // 避免扫描期间该行被更新后，旧索引项和新索引项都通过校验而输出两次
+                snapshot = rowSnapshots.get(rowKey);
+            } else {
+                // 复用游标里缓存的这一行，避免和后续TableFilter取值时重复读一次主表
+                if (row == null)
+                    row = table.getRow(session, rowKey);
+                snapshot = row;
+                rowSnapshots.put(rowKey, snapshot);
+            }
+            Row row = snapshot;
             if (row == null)
                 return false;
             IndexKey currentKey = convertToKey(row);
@@ -426,17 +441,18 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
 
         @Override
         protected SearchRow nextSearchRow() {
-            SearchRow searchRow;
-            if (tmCursor.next()) {
+            while (tmCursor.next()) {
                 IndexKey current = getIndexKey(tmCursor);
-                searchRow = createSearchRow(current);
-                if (searchRow != null && last != null && compareRows(searchRow, last) > 0) {
-                    searchRow = null;
-                }
-            } else {
-                searchRow = null;
+                if (current == null)
+                    continue; // 不匹配的索引项要跳过，不能直接结束扫描(会漏行)
+                SearchRow searchRow = createSearchRow(current);
+                if (searchRow == null)
+                    continue;
+                if (last != null && compareRows(searchRow, last) > 0)
+                    return null;
+                return searchRow;
             }
-            return searchRow;
+            return null;
         }
     }
 
