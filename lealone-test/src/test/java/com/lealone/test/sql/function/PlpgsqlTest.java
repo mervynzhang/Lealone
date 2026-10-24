@@ -258,6 +258,66 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals(15, getIntValue(1));
     }
 
+    // 大结果集游标：OPEN不复制行，顺序方向流式读，回退方向走LocalResult的落盘缓冲
+    @Test
+    public void testCursorStreaming() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_cur_big");
+        executeUpdate("CREATE TABLE plp_cur_big(a INT)");
+        // 超过maxMemoryRows(默认10万)让结果落到临时文件
+        executeUpdate("INSERT INTO plp_cur_big SELECT X FROM SYSTEM_RANGE(1, 150000)");
+
+        executeUpdate(
+                "CREATE OR REPLACE FUNCTION plp_cur_big_sum(firstN INT) RETURNS INT LANGUAGE plpgsql AS $$"
+                        + " DECLARE c CURSOR FOR SELECT a FROM plp_cur_big ORDER BY a;" //
+                        + "   r RECORD; n INT := 0; i INT;" //
+                        + " BEGIN" //
+                        + "   OPEN c;" //
+                        + "   FOR i IN 1 .. firstN LOOP" //
+                        + "     FETCH c INTO r;" //
+                        + "     n := n + r.a;" //
+                        + "   END LOOP;" //
+                        + "   CLOSE c;" //
+                        + "   RETURN n;" //
+                        + " END; $$");
+        executeQuery("SELECT plp_cur_big_sum(3)");
+        assertEquals(6, getIntValue(1));
+
+        // FETCH ALL只对剩余行计数，不把整个结果集搬进内存
+        executeUpdate(
+                "CREATE OR REPLACE FUNCTION plp_cur_big_count() RETURNS INT LANGUAGE plpgsql AS $$"
+                        + " DECLARE c CURSOR FOR SELECT a FROM plp_cur_big ORDER BY a;" //
+                        + "   r RECORD; n INT;" //
+                        + " BEGIN" //
+                        + "   OPEN c;" //
+                        + "   FETCH c INTO r;" //
+                        + "   FETCH ALL FROM c INTO r;" //
+                        + "   GET DIAGNOSTICS n = ROW_COUNT;" //
+                        + "   CLOSE c;" //
+                        + "   RETURN n;" //
+                        + " END; $$");
+        executeQuery("SELECT plp_cur_big_count()");
+        assertEquals(149999, getIntValue(1));
+
+        // 回退方向：ABSOLUTE/PRIOR/BACKWARD/FIRST/LAST，落盘结果也要能从头重放
+        executeUpdate(
+                "CREATE OR REPLACE FUNCTION plp_cur_big_backward() RETURNS INT LANGUAGE plpgsql AS $$"
+                        + " DECLARE c CURSOR FOR SELECT a FROM plp_cur_big ORDER BY a;" //
+                        + "   r RECORD; s INT := 0;" //
+                        + " BEGIN" //
+                        + "   OPEN c;" //
+                        + "   FETCH c INTO r; s := s + r.a;" // 1
+                        + "   FETCH ABSOLUTE 100000 FROM c INTO r; s := s + r.a;" // 100000
+                        + "   FETCH PRIOR FROM c INTO r; s := s + r.a;" // 99999
+                        + "   FETCH BACKWARD 2 FROM c INTO r; s := s + r.a;" // 99997
+                        + "   FETCH FIRST FROM c INTO r; s := s + r.a;" // 1
+                        + "   FETCH LAST FROM c INTO r; s := s + r.a;" // 150000
+                        + "   CLOSE c;" //
+                        + "   RETURN s;" //
+                        + " END; $$");
+        executeQuery("SELECT plp_cur_big_backward()");
+        assertEquals(1 + 100000 + 99999 + 99997 + 1 + 150000, getIntValue(1));
+    }
+
     // DECLARE CURSOR / OPEN / FETCH / CLOSE 和refcursor门户
     @Test
     public void testCursor() throws Exception {
