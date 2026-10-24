@@ -353,6 +353,17 @@ public class SqlProcedure extends SchemaObjectBase {
         return types;
     }
 
+    public int getInputParameterPolymorphicType(int inputIndex) {
+        return parameters[inputIndexes[inputIndex]].getPolymorphicType();
+    }
+
+    public int[] getInputPolymorphicTypes() {
+        int[] types = new int[inputIndexes.length];
+        for (int i = 0; i < inputIndexes.length; i++)
+            types[i] = parameters[inputIndexes[i]].getPolymorphicType();
+        return types;
+    }
+
     /**
      * 同名过程按入参类型重载，所以schema里存过程对象的key要带上入参签名。
      * 入参类型相同的过程对应同一个key。
@@ -366,6 +377,9 @@ public class SqlProcedure extends SchemaObjectBase {
         for (int i = 0; i < inputIndexes.length; i++) {
             buff.appendExceptFirst(",");
             buff.append(parameters[inputIndexes[i]].getType());
+            int poly = parameters[inputIndexes[i]].getPolymorphicType();
+            if (poly != Column.POLY_NONE)
+                buff.append('/').append('P').append(poly);
         }
         return buff.append(')').toString();
     }
@@ -374,6 +388,10 @@ public class SqlProcedure extends SchemaObjectBase {
      * 入参类型和给定的类型列表完全一致，用于CREATE时判断是否已经有同签名的过程。
      */
     public boolean matchesSignature(int[] argumentTypeIds) {
+        return matchesSignature(argumentTypeIds, null);
+    }
+
+    public boolean matchesSignature(int[] argumentTypeIds, int[] polymorphicTypes) {
         if (argumentTypeIds == null) {
             return true;
         }
@@ -381,7 +399,12 @@ public class SqlProcedure extends SchemaObjectBase {
             return false;
         }
         for (int i = 0; i < argumentTypeIds.length; i++) {
-            if (argumentTypeIds[i] != parameters[inputIndexes[i]].getType()) {
+            Column column = parameters[inputIndexes[i]];
+            if (argumentTypeIds[i] != column.getType()) {
+                return false;
+            }
+            if (polymorphicTypes != null && i < polymorphicTypes.length
+                    && polymorphicTypes[i] != column.getPolymorphicType()) {
                 return false;
             }
         }
@@ -425,9 +448,13 @@ public class SqlProcedure extends SchemaObjectBase {
         }
         int score = 0;
         for (int i = 0; i < count; i++) {
-            int parameterType = overAllParameters ? parameters[i].getType()
-                    : parameters[inputIndexes[i]].getType();
-            int match = SqlFunction.getTypeMatch(argumentTypeIds[i], parameterType);
+            Column column = overAllParameters ? parameters[i] : parameters[inputIndexes[i]];
+            int match = SqlFunction.getPolymorphicMatch(argumentTypeIds[i],
+                    column.getPolymorphicType());
+            if (match == SqlFunction.MATCH_NONE)
+                return SqlFunction.MATCH_NONE;
+            if (match == SqlFunction.MATCH_POLYMORPHIC_UNDECIDED)
+                match = SqlFunction.getTypeMatch(argumentTypeIds[i], column.getType());
             if (match == SqlFunction.MATCH_NONE) {
                 return SqlFunction.MATCH_NONE;
             }

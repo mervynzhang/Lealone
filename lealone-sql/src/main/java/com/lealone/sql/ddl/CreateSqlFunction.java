@@ -56,6 +56,9 @@ public class CreateSqlFunction extends SchemaStatement {
     // RETURNS comp / RETURNS SETOF comp
     private CompositeType compositeReturnType;
     private boolean compositeSetof;
+    // RETURNS anyelement/anyarray
+    private int returnPolymorphicType;
+    private boolean returnPolymorphicSetof;
     private String[] columnNames;
     private String[] columnTypeSqls;
     private int[] columnTypes;
@@ -122,6 +125,11 @@ public class CreateSqlFunction extends SchemaStatement {
     public void setCompositeReturnType(CompositeType type, boolean setof) {
         this.compositeReturnType = type;
         this.compositeSetof = setof;
+    }
+
+    public void setPolymorphicReturnType(int type, boolean setof) {
+        this.returnPolymorphicType = type;
+        this.returnPolymorphicSetof = setof;
     }
 
     /**
@@ -227,10 +235,36 @@ public class CreateSqlFunction extends SchemaStatement {
     }
 
     // PL/pgSQL解释器用CAST解析参数类型，数组类型(含VARIADIC)的写法还解析不了
+    private boolean hasAnyElementInputParameter() {
+        for (int i = 0; i < parameterModes.length; i++) {
+            if (parameterModes[i] == SqlFunction.PARAM_OUT)
+                continue;
+            int poly = Column.getPolymorphicType(parameterTypes[i]);
+            if (poly == Column.POLY_ANYELEMENT || poly == Column.POLY_ANYNONARRAY
+                    || poly == Column.POLY_ANYENUM)
+                return true;
+        }
+        return false;
+    }
+
+    private boolean hasAnyArrayInputParameter() {
+        for (int i = 0; i < parameterModes.length; i++) {
+            if (parameterModes[i] == SqlFunction.PARAM_OUT)
+                continue;
+            int poly = Column.getPolymorphicType(parameterTypes[i]);
+            if (poly == Column.POLY_ANYARRAY || poly == Column.POLY_ANYELEMENT
+                    || poly == Column.POLY_ANYNONARRAY || poly == Column.POLY_ANYENUM)
+                return true;
+        }
+        return false;
+    }
+
     private boolean hasArrayParameter() {
         for (int i = 0; i < parameterTypeIds.length; i++) {
             if (parameterTypeIds[i] == Value.ARRAY) {
                 // 复合类型参数也是Value.ARRAY，但它是record而不是数组
+                if (Column.getPolymorphicType(parameterTypes[i]) == Column.POLY_ANYARRAY)
+                    continue;
                 if (parameterTypes[i] == null
                         || schema.findCompositeType(session, parameterTypes[i]) == null)
                     return true;
@@ -293,7 +327,7 @@ public class CreateSqlFunction extends SchemaStatement {
         // 数据库启动时回放sys(meta)记录, 这时FUNCTION_ALIAS先于TABLE_OR_VIEW创建(DbObjectType.createOrder),
         // 函数体引用的表还没建出来, 必须跳过校验, 否则重启会失败; 等价于PG的check_function_bodies=off。
         // 这个判断不能删!
-        if (session.getDatabase().isStarting())
+        if (session.getDatabase().isStarting() || !session.isCheckFunctionBodies())
             return;
         int outputCount = getOutputParameterCount();
         int declaredType = Value.UNKNOWN;
@@ -404,6 +438,23 @@ public class CreateSqlFunction extends SchemaStatement {
     }
 
     // 只有入参参与函数签名，OUT参数不影响重载
+    private int[] getInputPolymorphicTypes() {
+        int count = 0;
+        for (int mode : parameterModes) {
+            if (mode != SqlFunction.PARAM_OUT) {
+                count++;
+            }
+        }
+        int[] types = new int[count];
+        int i = 0;
+        for (int p = 0; p < parameterModes.length; p++) {
+            if (parameterModes[p] != SqlFunction.PARAM_OUT) {
+                types[i++] = Column.getPolymorphicType(parameterTypes[p]);
+            }
+        }
+        return types;
+    }
+
     private int[] getInputParameterTypeIds() {
         int count = 0;
         for (int mode : parameterModes) {
@@ -425,7 +476,8 @@ public class CreateSqlFunction extends SchemaStatement {
     private FunctionAlias findSameSignature() {
         int[] types = getInputParameterTypeIds();
         for (FunctionAlias f : schema.findFunctions(session, functionName)) {
-            if (f instanceof SqlFunction && ((SqlFunction) f).matchesSignature(types)) {
+            if (f instanceof SqlFunction
+                    && ((SqlFunction) f).matchesSignature(types, getInputPolymorphicTypes())) {
                 return f;
             }
         }
@@ -454,6 +506,15 @@ public class CreateSqlFunction extends SchemaStatement {
         if (compositeReturnType != null && getOutputParameterCount() > 0) {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                     "RETURNS composite type can not be used with OUT parameters");
+        }
+        if (returnPolymorphicType == Column.POLY_ANYELEMENT
+                && !hasAnyElementInputParameter()) {
+            throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                    "cannot determine result data type of anyelement return type");
+        }
+        if (returnPolymorphicType == Column.POLY_ANYARRAY && !hasAnyArrayInputParameter()) {
+            throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                    "cannot determine result data type of anyarray return type");
         }
         if (plpgsql) {
             PlpgSqlParser.parse(body);
@@ -509,6 +570,8 @@ public class CreateSqlFunction extends SchemaStatement {
             function.setReturnsRecord(true);
         if (compositeReturnType != null) {
             function.setCompositeReturnType(compositeReturnType, compositeSetof);
+        } else if (returnPolymorphicType != Column.POLY_NONE) {
+            function.setPolymorphicReturnType(returnPolymorphicType, returnPolymorphicSetof);
         } else {
             function.setReturnType(returnTypeSql, returnType);
         }

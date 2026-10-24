@@ -23,7 +23,8 @@ public enum SessionSetting {
     EXPRESSION_COMPILE_THRESHOLD,
     OLAP_OPERATOR_FACTORY_NAME,
     OLAP_THRESHOLD,
-    OLAP_BATCH_SIZE;
+    OLAP_BATCH_SIZE,
+    CHECK_FUNCTION_BODIES;
 
     public String getName() {
         if (this == VARIABLE)

@@ -68,7 +68,7 @@ public class SystemFunction extends BuiltInFunction {
             CSVWRITE = 211, MEMORY_FREE = 212, MEMORY_USED = 213, TRANSACTION_ISOLATION_LEVEL = 214,
             SCHEMA = 215, SESSION_ID = 216, ARRAY_LENGTH = 217, GREATEST = 218, LEAST = 219,
             CANCEL_SESSION = 220, SET = 221, FILE_READ = 222, TRANSACTION_ID = 223, TRUNCATE_VALUE = 224,
-            NVL2 = 225, DECODE = 226, ARRAY_CONTAINS = 227;
+            NVL2 = 225, DECODE = 226, ARRAY_CONTAINS = 227, ARRAY_APPEND = 228;
 
     public static final int VERSION = 229;
     public static final int ROW_NUMBER = 230;
@@ -100,6 +100,7 @@ public class SystemFunction extends BuiltInFunction {
         addFunctionNotDeterministic("NEXTVAL", NEXTVAL, VAR_ARGS, Value.LONG);
         addFunctionNotDeterministic("CURRVAL", CURRVAL, VAR_ARGS, Value.LONG);
         addFunction("ARRAY_GET", ARRAY_GET, 2, Value.STRING);
+        addFunction("ARRAY_APPEND", ARRAY_APPEND, 2, Value.ARRAY);
         addFunction("ARRAY_CONTAINS", ARRAY_CONTAINS, 2, Value.BOOLEAN, false, true);
         addFunction("CSVREAD", CSVREAD, VAR_ARGS, Value.RESULT_SET, false, false);
         addFunction("CSVWRITE", CSVWRITE, VAR_ARGS, Value.INT, false, false);
@@ -109,7 +110,7 @@ public class SystemFunction extends BuiltInFunction {
                 Value.INT);
         addFunctionNotDeterministic("SCHEMA", SCHEMA, 0, Value.STRING);
         addFunctionNotDeterministic("SESSION_ID", SESSION_ID, 0, Value.INT);
-        addFunction("ARRAY_LENGTH", ARRAY_LENGTH, 1, Value.INT);
+        addFunction("ARRAY_LENGTH", ARRAY_LENGTH, VAR_ARGS, Value.INT);
         addFunctionWithNull("LEAST", LEAST, VAR_ARGS, Value.NULL);
         addFunctionWithNull("GREATEST", GREATEST, VAR_ARGS, Value.NULL);
         addFunctionNotDeterministic("CANCEL_SESSION", CANCEL_SESSION, 1, Value.BOOLEAN);
@@ -321,6 +322,31 @@ public class SystemFunction extends BuiltInFunction {
         Value v5 = lazyArgs ? null : getNullOrValue(session, args, values, 5);
         Value result;
         switch (info.type) {
+        case ARRAY_APPEND: {
+            if (v0 == null || v0.getType() != Value.ARRAY) {
+                result = ValueNull.INSTANCE;
+                break;
+            }
+            Value[] list = ((ValueArray) v0).getList();
+            Value[] newList = new Value[list.length + 1];
+            System.arraycopy(list, 0, newList, 0, list.length);
+            newList[list.length] = v1 == null ? ValueNull.INSTANCE : v1;
+            result = ValueArray.get(newList);
+            break;
+        }
+        case ARRAY_LENGTH: {
+            if (v0 == null || v0.getType() != Value.ARRAY || args.length > 2) {
+                result = ValueNull.INSTANCE;
+                break;
+            }
+            if (args.length == 2
+                    && (v1 == null || v1 == ValueNull.INSTANCE || v1.getInt() != 1)) {
+                result = ValueNull.INSTANCE;
+                break;
+            }
+            result = ValueInt.get(((ValueArray) v0).getList().length);
+            break;
+        }
         case NULLIF:
             // 相等返回null，不相等返回v0
             result = database.areEqual(v0, v1) ? ValueNull.INSTANCE : v0;
@@ -699,6 +725,7 @@ public class SystemFunction extends BuiltInFunction {
             min = 1;
             break;
         case FILE_READ:
+        case ARRAY_LENGTH:
             min = 1;
             max = 2;
             break;

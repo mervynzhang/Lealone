@@ -81,6 +81,9 @@ public class SetSession extends SetStatement {
         case OLAP_BATCH_SIZE:
             session.setOlapBatchSize(getIntValue());
             break;
+        case CHECK_FUNCTION_BODIES:
+            session.setCheckFunctionBodies(getIntValue() != 0);
+            break;
         default:
             DbException.throwInternalError("unknown setting type: " + setting);
         }

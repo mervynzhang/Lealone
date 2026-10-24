@@ -66,6 +66,47 @@ public class Column {
      */
     public static final int NULLABLE_UNKNOWN = ResultSetMetaData.columnNullableUnknown;
 
+    // PostgreSQL多态伪类型；0表示普通类型
+    public static final int POLY_NONE = 0;
+    public static final int POLY_ANYELEMENT = 1;
+    public static final int POLY_ANYARRAY = 2;
+    public static final int POLY_ANYNONARRAY = 3;
+    public static final int POLY_ANYENUM = 4;
+
+    public static int getPolymorphicType(String name) {
+        if (name == null)
+            return POLY_NONE;
+        String n = StringUtils.toUpperEnglish(name.trim());
+        if ("ANYELEMENT".equals(n))
+            return POLY_ANYELEMENT;
+        if ("ANYARRAY".equals(n))
+            return POLY_ANYARRAY;
+        if ("ANYNONARRAY".equals(n))
+            return POLY_ANYNONARRAY;
+        if ("ANYENUM".equals(n))
+            return POLY_ANYENUM;
+        return POLY_NONE;
+    }
+
+    public static boolean isPolymorphicTypeName(String name) {
+        return getPolymorphicType(name) != POLY_NONE;
+    }
+
+    public static String getPolymorphicTypeName(int type) {
+        switch (type) {
+        case POLY_ANYELEMENT:
+            return "ANYELEMENT";
+        case POLY_ANYARRAY:
+            return "ANYARRAY";
+        case POLY_ANYNONARRAY:
+            return "ANYNONARRAY";
+        case POLY_ANYENUM:
+            return "ANYENUM";
+        default:
+            return null;
+        }
+    }
+
     private final int type;
     private long precision;
     private int scale;
@@ -73,6 +114,8 @@ public class Column {
     private Table table;
     // 复合类型列，类型值用ValueArray表示
     private CompositeType compositeType;
+    // PostgreSQL多态伪类型(anyelement/anyarray/...)
+    private int polymorphicType;
     private String name;
     private int columnId;
     private boolean nullable = true;
@@ -149,6 +192,8 @@ public class Column {
      * @return the value
      */
     public Value convert(Value v) {
+        if (polymorphicType != POLY_NONE)
+            return v == null ? ValueNull.INSTANCE : v;
         if (compositeType != null)
             return compositeType.convert(v);
         try {
@@ -495,6 +540,14 @@ public class Column {
         this.compositeType = compositeType;
     }
 
+    public int getPolymorphicType() {
+        return polymorphicType;
+    }
+
+    public void setPolymorphicType(int polymorphicType) {
+        this.polymorphicType = polymorphicType;
+    }
+
     public IExpression getDefaultExpression() {
         return defaultExpression;
     }
@@ -748,6 +801,7 @@ public class Column {
         defaultExpressionEvaluator = source.defaultExpressionEvaluator;
         originalSQL = source.originalSQL;
         compositeType = source.compositeType;
+        polymorphicType = source.polymorphicType;
         // autoIncrement, start, increment is not set
         convertNullToDefault = source.convertNullToDefault;
         sequence = source.sequence;

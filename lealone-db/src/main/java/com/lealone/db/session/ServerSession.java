@@ -123,6 +123,8 @@ public class ServerSession extends SessionBase implements InternalSession {
     private HashMap<String, Value> variables;
     private HashSet<Result> temporaryResults;
     private int queryTimeout;
+    // PostgreSQL的check_function_bodies，默认开启
+    private boolean checkFunctionBodies = true;
     private boolean commitOrRollbackDisabled;
     private int modificationId;
     private int objectId;
@@ -1304,6 +1306,14 @@ public class ServerSession extends SessionBase implements InternalSession {
 
     public int getQueryTimeout() {
         return queryTimeout;
+    }
+
+    public boolean isCheckFunctionBodies() {
+        return checkFunctionBodies;
+    }
+
+    public void setCheckFunctionBodies(boolean checkFunctionBodies) {
+        this.checkFunctionBodies = checkFunctionBodies;
     }
 
     public int getModificationId() {

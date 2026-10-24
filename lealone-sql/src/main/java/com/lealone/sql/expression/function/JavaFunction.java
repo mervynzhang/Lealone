@@ -267,6 +267,19 @@ public class JavaFunction extends Function {
 
     @Override
     public int getType() {
+        resolveOverload();
+        if (functionAlias instanceof SqlFunction) {
+            SqlFunction f = (SqlFunction) functionAlias;
+            if (f.isReturnPolymorphic()) {
+                int[] types = getArgumentTypeIds();
+                for (int i = 0; i < types.length; i++) {
+                    // 字符串字面量在重载消解里按UNKNOWN处理，但多态返回值需要实参的真实类型
+                    if (types[i] == Value.UNKNOWN && args[i].getType() != Value.UNKNOWN)
+                        types[i] = args[i].getType();
+                }
+                return f.resolvePolymorphicReturnType(types);
+            }
+        }
         return getJavaMethod().getDataType();
     }
 

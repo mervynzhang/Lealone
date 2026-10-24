@@ -67,6 +67,8 @@ public class SqlFunction extends FunctionAlias {
     private String[] parameterTypes; // 参数的SQL类型文本
     private int[] parameterTypeIds; // 对应Value的类型
     private int[] parameterComponentTypes; // 数组参数的元素类型，-1表示不是数组
+    // 每个参数的多态伪类型(Column.POLY_*)，0表示普通类型
+    private int[] parameterPolymorphicTypes;
     private int[] parameterModes; // PARAM_IN/PARAM_OUT/PARAM_INOUT
     private int[] inputIndexes; // 入参在参数列表中的下标
     private int[] outputIndexes; // 返回列对应的参数下标
@@ -92,6 +94,9 @@ public class SqlFunction extends FunctionAlias {
     // RETURNS comp / RETURNS SETOF comp声明的复合类型
     private CompositeType compositeReturnType;
     private boolean compositeSetof;
+    // RETURNS anyelement/anyarray等多态返回类型
+    private int returnPolymorphicType;
+    private boolean returnPolymorphicSetof;
     private String[] columnNames;
     private String[] columnTypeSqls;
     private int[] columnTypes;
@@ -141,6 +146,9 @@ public class SqlFunction extends FunctionAlias {
         this.parameterTypes = parameterTypes;
         this.parameterTypeIds = parameterTypeIds;
         this.parameterComponentTypes = parameterComponentTypes;
+        this.parameterPolymorphicTypes = new int[parameterTypes == null ? 0 : parameterTypes.length];
+        for (int i = 0; parameterTypes != null && i < parameterTypes.length; i++)
+            this.parameterPolymorphicTypes[i] = Column.getPolymorphicType(parameterTypes[i]);
         this.parameterModes = parameterModes;
         this.variadic = variadic;
 
@@ -456,6 +464,10 @@ public class SqlFunction extends FunctionAlias {
      * 只比较入参的类型；没写参数类型列表时总是匹配。
      */
     public boolean matchesSignature(int[] argumentTypeIds) {
+        return matchesSignature(argumentTypeIds, null);
+    }
+
+    public boolean matchesSignature(int[] argumentTypeIds, int[] polymorphicTypes) {
         if (argumentTypeIds == null) {
             return true;
         }
@@ -463,7 +475,12 @@ public class SqlFunction extends FunctionAlias {
             return false;
         }
         for (int i = 0; i < argumentTypeIds.length; i++) {
-            if (argumentTypeIds[i] != parameterTypeIds[inputIndexes[i]]) {
+            int index = inputIndexes[i];
+            if (argumentTypeIds[i] != parameterTypeIds[index]) {
+                return false;
+            }
+            if (polymorphicTypes != null && i < polymorphicTypes.length
+                    && polymorphicTypes[i] != getParameterPolymorphicType(index)) {
                 return false;
             }
         }
@@ -490,6 +507,9 @@ public class SqlFunction extends FunctionAlias {
             if (parameterTypeIds[index] == Value.ARRAY) {
                 buff.append('/').append(parameterComponentTypes[index]);
             }
+            int poly = getParameterPolymorphicType(index);
+            if (poly != Column.POLY_NONE)
+                buff.append('/').append('P').append(poly);
         }
         return buff.append(')').toString();
     }
@@ -526,6 +546,9 @@ public class SqlFunction extends FunctionAlias {
     public static final int MATCH_IMPLICIT = 1;
     /** 实参是没有类型的字面量(比如'5')或者NULL，由参数类型决定它的类型 */
     public static final int MATCH_UNTYPED = 2;
+    /** 多态形参比具体类型的隐式匹配优先级低 */
+    public static final int MATCH_POLYMORPHIC = 3;
+    public static final int MATCH_POLYMORPHIC_UNDECIDED = -2;
     /** 类型不兼容，需要显式CAST，这个函数不可能是被调用的重载 */
     public static final int MATCH_NONE = -1;
 
@@ -553,13 +576,41 @@ public class SqlFunction extends FunctionAlias {
             if (variadic && i >= fixedCount) {
                 parameterType = parameterComponentTypes[index];
             }
-            int match = getTypeMatch(argumentTypeIds[i], parameterType);
+            int match = getPolymorphicMatch(argumentTypeIds[i], getParameterPolymorphicType(index));
+            if (match == MATCH_NONE) {
+                return MATCH_NONE;
+            }
+            if (match == MATCH_POLYMORPHIC_UNDECIDED)
+                match = getTypeMatch(argumentTypeIds[i], parameterType);
             if (match == MATCH_NONE) {
                 return MATCH_NONE;
             }
             score += match;
         }
         return score;
+    }
+
+    /**
+     * 多态伪类型的匹配规则：anyarray只接受数组，anynonarray不接受数组，
+     * 其它情况让具体类型优先(返回-2表示继续按声明类型比较)。
+     */
+    public static int getPolymorphicMatch(int argumentType, int polymorphicType) {
+        switch (polymorphicType) {
+        case Column.POLY_ANYARRAY:
+            if (argumentType == Value.ARRAY || argumentType == Value.UNKNOWN
+                    || argumentType == Value.NULL)
+                return MATCH_POLYMORPHIC;
+            return MATCH_NONE;
+        case Column.POLY_ANYNONARRAY:
+            if (argumentType == Value.ARRAY)
+                return MATCH_NONE;
+            return MATCH_POLYMORPHIC;
+        case Column.POLY_ANYELEMENT:
+        case Column.POLY_ANYENUM:
+            return MATCH_POLYMORPHIC;
+        default:
+            return MATCH_POLYMORPHIC_UNDECIDED;
+        }
     }
 
     /**
@@ -851,6 +902,68 @@ public class SqlFunction extends FunctionAlias {
 
     public boolean isCompositeReturning() {
         return compositeReturnType != null && !compositeSetof;
+    }
+
+    public void setPolymorphicReturnType(int type, boolean setof) {
+        this.returnPolymorphicType = type;
+        this.returnPolymorphicSetof = setof;
+        String name = Column.getPolymorphicTypeName(type);
+        this.returnTypeSql = name;
+        this.hasDeclaredReturnType = true;
+        if (setof) {
+            int columnType = type == Column.POLY_ANYARRAY ? Value.ARRAY : Value.NULL;
+            DataType dataType = DataType.getDataType(columnType);
+            setReturnColumns(false, null, new String[] { name }, new int[] { columnType },
+                    new long[] { dataType.defaultPrecision }, new int[] { dataType.defaultScale });
+        } else {
+            this.returnType = type == Column.POLY_ANYARRAY ? Value.ARRAY : Value.UNKNOWN;
+        }
+    }
+
+    public boolean isReturnPolymorphic() {
+        return returnPolymorphicType != Column.POLY_NONE;
+    }
+
+    public int getReturnPolymorphicType() {
+        return returnPolymorphicType;
+    }
+
+    public boolean isReturnPolymorphicSetof() {
+        return returnPolymorphicSetof;
+    }
+
+    /**
+     * 按实参静态类型推导多态返回类型，anyelement等返回实参类型，anyarray返回ARRAY。
+     */
+    public int resolvePolymorphicReturnType(int[] argumentTypeIds) {
+        if (returnPolymorphicType == Column.POLY_NONE || argumentTypeIds == null)
+            return returnType;
+        if (returnPolymorphicType == Column.POLY_ANYARRAY)
+            return Value.ARRAY;
+        for (int i = 0; i < inputParameterCount; i++) {
+            int index = inputIndexes[i];
+            int poly = getParameterPolymorphicType(index);
+            if (poly == returnPolymorphicType || (poly == Column.POLY_ANYELEMENT
+                    && returnPolymorphicType == Column.POLY_ANYNONARRAY)) {
+                int type = i < argumentTypeIds.length ? argumentTypeIds[i] : Value.UNKNOWN;
+                if (type != Value.NULL && type != Value.UNKNOWN)
+                    return type;
+            }
+        }
+        return returnType;
+    }
+
+    public int getParameterPolymorphicType(int index) {
+        if (parameterPolymorphicTypes == null || index < 0 || index >= parameterPolymorphicTypes.length)
+            return Column.POLY_NONE;
+        return parameterPolymorphicTypes[index];
+    }
+
+    public int[] getInputPolymorphicTypes() {
+        int[] types = new int[inputParameterCount];
+        for (int i = 0; i < inputParameterCount; i++)
+            types[i] = getParameterPolymorphicType(inputIndexes[i]);
+        return types;
     }
 
     protected CompositeType getCompositeReturnType() {
@@ -1180,6 +1293,8 @@ public class SqlFunction extends FunctionAlias {
             return ValueNull.INSTANCE;
         }
         Value v = getBodyValue(session, rs, rs.getMetaData(), 1, returnType);
+        if (returnType == Value.UNKNOWN)
+            return v;
         return v.convertTo(returnType);
     }
 

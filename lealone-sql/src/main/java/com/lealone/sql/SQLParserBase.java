@@ -2913,6 +2913,10 @@ public class SQLParserBase implements SQLParser {
             if (isToken("SELECT") || isToken("FROM")) {
                 Query query = parseSelect();
                 r = new SubQuery(query);
+            } else if (isToken("ARRAY")) {
+                read();
+                read("[");
+                r = readArrayLiteral();
             } else {
                 throw getSyntaxError();
             }
@@ -4325,6 +4329,15 @@ public class SQLParserBase implements SQLParser {
         Schema schema = getSchema();
         if (schema == null && session != null)
             schema = session.getDatabase().findSchema(session, session.getCurrentSchemaName());
+        int polymorphicType = Column.getPolymorphicType(original);
+        if (polymorphicType != Column.POLY_NONE) {
+            Column c = new Column(columnName,
+                    polymorphicType == Column.POLY_ANYARRAY ? Value.ARRAY : Value.NULL);
+            c.setOriginalSQL(original);
+            c.setPolymorphicType(polymorphicType);
+            read();
+            return c;
+        }
         CompositeType compositeType = null;
         if (schema != null)
             compositeType = schema.findCompositeType(session, original);
@@ -5822,7 +5835,9 @@ public class SQLParserBase implements SQLParser {
                             dataType.defaultScale);
                 } else {
                     Column returnColumn = parseColumnWithType(null);
-                    if (returnColumn.getCompositeType() != null) {
+                    if (returnColumn.getPolymorphicType() != Column.POLY_NONE) {
+                        command.setPolymorphicReturnType(returnColumn.getPolymorphicType(), true);
+                    } else if (returnColumn.getCompositeType() != null) {
                         command.setCompositeReturnType(returnColumn.getCompositeType(), true);
                     } else if (returnColumn.getTable() != null
                             && returnColumn.getType() == Value.JAVA_OBJECT) {
@@ -5877,7 +5892,9 @@ public class SQLParserBase implements SQLParser {
                 command.setReturnType("VOID", Value.NULL);
             } else {
                 Column returnColumn = parseColumnWithType(null);
-                if (returnColumn.getCompositeType() != null) {
+                if (returnColumn.getPolymorphicType() != Column.POLY_NONE) {
+                    command.setPolymorphicReturnType(returnColumn.getPolymorphicType(), false);
+                } else if (returnColumn.getCompositeType() != null) {
                     command.setCompositeReturnType(returnColumn.getCompositeType(), false);
                 } else {
                     command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
@@ -5972,6 +5989,8 @@ public class SQLParserBase implements SQLParser {
             // 最后一条语句就是返回值，所以对外的bodySql用最后一条，校验逻辑可以复用
             command.setBody(body, bodySqls[last], statementParameterIndexes[last]);
             command.setAtomicBody(bodySqls, statementParameterIndexes);
+        } else if (body.isEmpty() && !session.isCheckFunctionBodies()) {
+            command.setBody(body, "", new int[0]);
         } else {
             // PostgreSQL的AS '$$ ... $$'写法里可以有多条语句(比如函数体里做DDL)，
             // 这时按语句列表顺序执行，最后一条查询的结果就是返回值
@@ -6153,7 +6172,8 @@ public class SQLParserBase implements SQLParser {
         if (token == null) {
             return false;
         }
-        return DataType.getTypeByName(StringUtils.toUpperEnglish(token)) != null;
+        return Column.isPolymorphicTypeName(token)
+                || DataType.getTypeByName(StringUtils.toUpperEnglish(token)) != null;
     }
 
     private static int[] toIntArray(ArrayList<Integer> list) {
@@ -6625,6 +6645,11 @@ public class SQLParserBase implements SQLParser {
             boolean value = readBooleanSetting();
             int setting = value ? SQLStatement.SET_AUTOCOMMIT_TRUE : SQLStatement.SET_AUTOCOMMIT_FALSE;
             return new TransactionStatement(session, setting);
+        } else if (readIf(SessionSetting.CHECK_FUNCTION_BODIES.name())) {
+            readIfEqualOrTo();
+            SetSession command = new SetSession(session, SessionSetting.CHECK_FUNCTION_BODIES);
+            command.setInt(readBooleanSetting() ? 1 : 0);
+            return command;
         } else if (readIf(SessionSetting.TRANSACTION_ISOLATION_LEVEL.name())) {
             SetSession command = new SetSession(session, SessionSetting.TRANSACTION_ISOLATION_LEVEL);
             readIfEqualOrTo();

@@ -170,10 +170,28 @@ public class CreateProcedure extends SchemaStatement {
         return types;
     }
 
+    private int[] getInputPolymorphicTypes() {
+        int count = 0;
+        for (int mode : parameterModes) {
+            if (mode != SqlProcedure.PARAM_OUT) {
+                count++;
+            }
+        }
+        int[] types = new int[count];
+        int i = 0;
+        for (int p = 0; p < parameterModes.size(); p++) {
+            if (parameterModes.get(p) != SqlProcedure.PARAM_OUT) {
+                types[i++] = parameters.get(p).getPolymorphicType();
+            }
+        }
+        return types;
+    }
+
     // 找出入参类型都相同的已有过程，也就是和这次CREATE冲突的那个重载
     private boolean findSameSignature(int[] inputTypeIds) {
+        int[] polyTypes = getInputPolymorphicTypes();
         for (SqlProcedure p : schema.findProcedures(session, procedureName)) {
-            if (p.matchesSignature(inputTypeIds)) {
+            if (p.matchesSignature(inputTypeIds, polyTypes)) {
                 return true;
             }
         }

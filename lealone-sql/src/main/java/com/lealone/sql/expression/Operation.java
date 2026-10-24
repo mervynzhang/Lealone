@@ -13,6 +13,7 @@ import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueInt;
+import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueNull;
 import com.lealone.db.value.ValueString;
 import com.lealone.sql.expression.function.Function;
@@ -201,7 +202,9 @@ public class Operation extends Expression {
             break;
         case CONCAT:
             right = right.optimize(session);
-            dataType = Value.STRING;
+            dataType = left.getType() == Value.ARRAY || right.getType() == Value.ARRAY
+                    ? Value.ARRAY
+                    : Value.STRING;
             if (left.isConstant() && right.isConstant()) {
                 return ValueExpression.get(getValue(session));
             }
@@ -430,6 +433,26 @@ public class Operation extends Expression {
                 return ValueNull.INSTANCE;
             }
             return l;
+        }
+        if (l.getType() == Value.ARRAY || r.getType() == Value.ARRAY) {
+            Value[] leftList = l.getType() == Value.ARRAY ? ((ValueArray) l).getList() : null;
+            Value[] rightList = r.getType() == Value.ARRAY ? ((ValueArray) r).getList() : null;
+            if (leftList == null) {
+                Value[] list = new Value[rightList.length + 1];
+                list[0] = l;
+                System.arraycopy(rightList, 0, list, 1, rightList.length);
+                return ValueArray.get(list);
+            }
+            if (rightList == null) {
+                Value[] list = new Value[leftList.length + 1];
+                System.arraycopy(leftList, 0, list, 0, leftList.length);
+                list[leftList.length] = r;
+                return ValueArray.get(list);
+            }
+            Value[] list = new Value[leftList.length + rightList.length];
+            System.arraycopy(leftList, 0, list, 0, leftList.length);
+            System.arraycopy(rightList, 0, list, leftList.length, rightList.length);
+            return ValueArray.get(list);
         }
         String s1 = l.getString(), s2 = r.getString();
         StringBuilder buff = new StringBuilder(s1.length() + s2.length());

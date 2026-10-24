@@ -16,6 +16,7 @@ import com.lealone.db.api.ErrorCode;
 import com.lealone.db.result.SimpleResultSet;
 import com.lealone.db.schema.CompositeType;
 import com.lealone.db.schema.Schema;
+import com.lealone.db.table.Column;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
@@ -279,19 +280,27 @@ public class PlpgSqlInterpreter {
         for (int i = 0; i < parameterNames.length; i++) {
             PlpgSqlVariable variable = new PlpgSqlVariable(parameterNames[i], false, false, false);
             int type = Value.UNKNOWN;
-            if (parameterTypes != null && i < parameterTypes.length) {
-                CompositeType compositeType = findCompositeType(parameterTypes[i]);
-                if (compositeType != null) {
-                    variable.setCompositeType(compositeType);
-                    type = Value.ARRAY;
-                } else {
-                    type = resolveType(parameterTypes[i]);
-                }
-            }
-            variable.setType(type);
             Value value = parameterValues != null && i < parameterValues.length
                     ? parameterValues[i]
                     : ValueNull.INSTANCE;
+            if (parameterTypes != null && i < parameterTypes.length) {
+                int poly = Column.getPolymorphicType(parameterTypes[i]);
+                if (poly != Column.POLY_NONE) {
+                    if (poly == Column.POLY_ANYARRAY)
+                        type = Value.ARRAY;
+                    else if (value != null && value != ValueNull.INSTANCE)
+                        type = value.getType();
+                } else {
+                    CompositeType compositeType = findCompositeType(parameterTypes[i]);
+                    if (compositeType != null) {
+                        variable.setCompositeType(compositeType);
+                        type = Value.ARRAY;
+                    } else {
+                        type = resolveType(parameterTypes[i]);
+                    }
+                }
+            }
+            variable.setType(type);
             variable.setInitialValue(value);
             scope.declare(variable);
             parameterVariables[i] = variable;
