@@ -66,7 +66,10 @@ public class FileStorage {
         if (cipher != null)
             config.put("cipher", cipher);
         if (key != null)
-            config.put("encryptionKey", key);
+            // 必须用DbSetting.ENCRYPTION_KEY.name()，CaseInsensitiveMap只是忽略大小写，
+            // 写"encryptionKey"会被标准化成ENCRYPTIONKEY，构造函数取ENCRYPTION_KEY时取不到，
+            // 结果就是"指定了CIPHER但文件没加密"
+            config.put(DbSetting.ENCRYPTION_KEY.name(), key);
         FileStorage fs = open(fileName, config);
         if (handler != null) {
             fs.handler = handler;
