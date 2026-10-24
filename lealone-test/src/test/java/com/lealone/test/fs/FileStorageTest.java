@@ -6,14 +6,17 @@
 package com.lealone.test.fs;
 
 import java.io.File;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 
 import org.junit.Test;
 
 import com.lealone.common.security.SHA256;
+import com.lealone.db.Constants;
 import com.lealone.storage.fs.FileStorage;
 import com.lealone.storage.fs.FileStorageInputStream;
 import com.lealone.storage.fs.FileStorageOutputStream;
+import com.lealone.storage.fs.FileUtils;
 import com.lealone.test.TestBase;
 
 public class FileStorageTest extends FsTestBase {
@@ -58,6 +61,44 @@ public class FileStorageTest extends FsTestBase {
     public void testStream() throws Exception {
         testStream("LZF");
         testStream(null);
+    }
+
+    // 块长度是垃圾数据时(比如用错误密码读加密脚本，块头是解出来的垃圾)不能按这个长度去分配内存，
+    // 修复前这里抛OutOfMemoryError，会让整个数据库被强行关闭
+    @Test
+    public void testCorruptedChunkLength() throws Exception {
+        String fileName = joinDirs("FileStorageTest", "CorruptedChunkLength.dat");
+        byte[] bytes = new byte[Constants.FILE_BLOCK_SIZE * 2];
+        ByteBuffer.wrap(bytes).putInt(Integer.MAX_VALUE);
+        OutputStream out = FileUtils.newOutputStream(fileName, false);
+        out.write(bytes);
+        out.close();
+
+        FileStorage fs = FileStorage.open(null, fileName, "r");
+        FileStorageInputStream in = new FileStorageInputStream(fs, null, false, false);
+        // 当成文件已结束处理，让调用者(比如RUNSCRIPT校验密码)自己去报文件损坏或密码错误
+        assertEquals(-1, in.read());
+        in.close();
+        fs.close();
+    }
+
+    // 块长度为正但超出文件剩余范围(不是 Integer.MAX_VALUE 那种极端值)时也是同一类损坏:
+    // 必须按读到末尾处理(不能按这个长度去分配内存), 同时留一条 warn 日志便于排查
+    @Test
+    public void testChunkLengthExceedsFileSize() throws Exception {
+        String fileName = joinDirs("FileStorageTest", "ChunkLengthTooLarge.dat");
+        byte[] bytes = new byte[Constants.FILE_BLOCK_SIZE * 2];
+        // 声明一个比文件剩余空间大得多的块, 但还远没到 Integer.MAX_VALUE
+        ByteBuffer.wrap(bytes).putInt(Constants.FILE_BLOCK_SIZE * 1024);
+        OutputStream out = FileUtils.newOutputStream(fileName, false);
+        out.write(bytes);
+        out.close();
+
+        FileStorage fs = FileStorage.open(null, fileName, "r");
+        FileStorageInputStream in = new FileStorageInputStream(fs, null, false, false);
+        assertEquals(-1, in.read());
+        in.close();
+        fs.close();
     }
 
     private void testStream(String compressionAlgorithm) throws Exception {
