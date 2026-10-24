@@ -122,7 +122,8 @@ select * from test_ret_set_scalar(1,10);
 
 -- @case plpgsql.setof_composite_record
 -- @pg plpgsql.sql:1487-1512
--- 缺失: RETURNS SETOF <表行类型> 不支持(和 SQL 函数一样, 只支持标量 setof/RETURNS TABLE),
+-- 缺失: 这段用 FOR rec IN SELECT * FROM tbl LOOP(plpgsql 的 FOR ... IN 查询) 还未支持,
+--       报 50100 "PL/pgSQL: FOR ... IN query"; RETURNS SETOF <表行类型> 本身已经可以
 --       DECLARE rec RECORD / row 表%ROWTYPE 本身已经可用, 卡在返回类型上
 create function test_table_func_rec() returns setof found_test_tbl as '
 DECLARE
@@ -362,39 +363,26 @@ select * from foo;
 
 -- @case plpgsql.out_params_exception
 -- @pg plpgsql.sql:3609-3638
--- 缺失: leaker_2 的返回类型是 RETURNS RECORD(复合返回类型不支持), leaker_1 里还有
---       (leaker_2(fail)).error_code 这种复合返回值取字段的写法
-CREATE FUNCTION leaker_1(fail BOOL) RETURNS INTEGER AS $$
-DECLARE
-  v_var INTEGER;
-BEGIN
-  BEGIN
-    v_var := (leaker_2(fail)).error_code;
-  EXCEPTION
-    WHEN others THEN RETURN 0;
-  END;
-  RETURN 1;
-END;
-$$ LANGUAGE plpgsql;
+-- 适配: 函数体写成一行; PG 先建 leaker_1 后建 leaker_2(前向引用), 这里按依赖顺序先建 leaker_2;
+--       (leaker_2(fail)).error_code 这种"带 OUT 参数的函数返回复合值再取字段"现在已经支持
+create function leaker_2(fail boolean, out error_code int, out new_id int) returns record as $$ begin if fail then raise exception 'fail ...'; end if; error_code := 1; new_id := 1; return; end $$ language plpgsql;
+> update count: 0
 
-CREATE FUNCTION leaker_2(fail BOOL, OUT error_code INTEGER, OUT new_id INTEGER)
-  RETURNS RECORD AS $$
-BEGIN
-  IF fail THEN
-    RAISE EXCEPTION 'fail ...';
-  END IF;
-  error_code := 1;
-  new_id := 1;
-  RETURN;
-END;
-$$ LANGUAGE plpgsql;
-SELECT * FROM leaker_1(false);
-SELECT * FROM leaker_1(true);
--- PG 期望: 1 和 0
+create function leaker_1(fail boolean) returns int as $$ declare v_var int; begin begin v_var := (leaker_2(fail)).error_code; exception when others then return 0; end; return 1; end $$ language plpgsql;
+> update count: 0
 
--- ---------------------------------------------------------------------------
--- 块标签与限定名(第二轮 PL/pgSQL 补齐后可用)
--- ---------------------------------------------------------------------------
+select * from leaker_1(false);
+> LEAKER_1
+> --------
+> 1
+> rows: 1
+
+-- 异常被内层 WHEN others 接住, 返回 0
+select * from leaker_1(true);
+> LEAKER_1
+> --------
+> 0
+> rows: 1
 
 -- @case plpgsql.qualified_names
 -- @pg plpgsql.sql:2841-2858
