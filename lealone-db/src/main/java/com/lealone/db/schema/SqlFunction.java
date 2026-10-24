@@ -552,7 +552,10 @@ public class SqlFunction extends FunctionAlias {
         this.language = language == null ? "SQL" : language;
     }
 
-    protected String getBody() {
+    /**
+     * 函数体原文，PG_PROC.prosrc和pg_get_functiondef会用到。
+     */
+    public String getBody() {
         return body;
     }
 
@@ -562,6 +565,35 @@ public class SqlFunction extends FunctionAlias {
 
     protected String[] getParameterTypes() {
         return parameterTypes;
+    }
+
+    /**
+     * 入参声明的类型文本(和CREATE FUNCTION里写的一致)，PG_PROC.proargtypes用。
+     * 没保存原始文本时回退到Value类型名。
+     */
+    public String getInputParameterTypeSQL(int inputIndex) {
+        int index = inputIndexes[inputIndex];
+        if (parameterTypes != null && index < parameterTypes.length && parameterTypes[index] != null) {
+            return parameterTypes[index];
+        }
+        int type = parameterTypeIds[index];
+        if (type == Value.ARRAY && parameterComponentTypes[index] != Value.UNKNOWN) {
+            return DataType.getDataType(parameterComponentTypes[index]).name + "[]";
+        }
+        return DataType.getDataType(type).name;
+    }
+
+    /**
+     * 返回值声明的类型文本，PG_PROC.prorettype用。
+     */
+    public String getReturnTypeSQL() {
+        if (returnTypeSql != null) {
+            return returnTypeSql;
+        }
+        if (returnsTable || compositeSetof || returnsRecord) {
+            return "record";
+        }
+        return DataType.getDataType(returnType).name;
     }
 
     protected int getReturnType() {

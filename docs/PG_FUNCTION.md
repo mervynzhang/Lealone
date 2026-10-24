@@ -261,6 +261,7 @@ SELECT var_count(1, 2, 3);  -- 3
 - `ALTER PROCEDURE`/`ALTER ROUTINE`（存储过程重载已支持，见 `docs/PROCEDURE.md`）
 - `COMMENT ON FUNCTION name(type)` 仍按函数名存（多个重载共用一份注释）
 - PG 的 preferred-type 平局再选；`CREATE FUNCTION f(int)`（参数只写类型不写名）
+- `pg_catalog` 兼容 schema / 与 PG 同名的 `pg_proc` 对象（只提供 `INFORMATION_SCHEMA.PG_PROC`）
 - `ALTER FUNCTION ... SET SCHEMA`（换 schema）、`SET configuration_parameter FROM CURRENT`
 - `DROP FUNCTION ... CASCADE/RESTRICT`
 - `SET`/`RESET` 只落 DDL，不真正影响函数体执行时的会话参数（见2.8节）
@@ -361,7 +362,36 @@ SELECT f('x');          -- x!
 | `SqlProcedure.getMatchScore/matchesDropSignature` | 存储过程复用同一套匹配规则；DROP 按完整参数列表+IN/OUT模式匹配 |
 | `ProcedureOverloadTest` | 过程重载、DROP 签名/模式、IF NOT EXISTS、SCRIPT 往返、重启 |
 
-## 六、已知限制 / 额外发现但没修的问题
+## 六、函数目录（PostgreSQL 兼容）
+
+Lealone 提供只读的内置元数据表 `INFORMATION_SCHEMA.PG_PROC`（不是 PG 的 `pg_catalog.pg_proc`，
+查询时要带 `INFORMATION_SCHEMA.` 前缀），每个 `SqlFunction` 一行，`CREATE ALIAS`/`CREATE AGGREGATE`
+建的对象不在里面：
+
+| 列 | 含义 |
+| --- | --- |
+| `PRONAME` | 函数名（按数据库的大小写设置转成大写/小写） |
+| `PRORETTYPE` | 返回值类型文本，和 `CREATE FUNCTION` 里写的一致 |
+| `PROARGTYPES` | 入参类型文本，格式为 `{INT,VARCHAR}`，数组参数带 `[]`，无参数是 `{}` |
+| `PROVOLATILE` | `i`/`s`/`v`，对应 IMMUTABLE/STABLE/VOLATILE |
+| `PROISSTRICT` | 是否 STRICT（RETURNS NULL ON NULL INPUT） |
+| `PROSECDEF` | 是否 SECURITY DEFINER |
+| `PROLEAKPROOF` | 是否 LEAKPROOF |
+| `PROSRC` | 函数体原文 |
+
+这些列直接读当前对象状态，`ALTER FUNCTION` 之后马上变化；表本身是 `InfoMetaTable` 生成的
+只读伪表，数据库启动时自动创建，不参与 `SCRIPT`/备份（和 `INFORMATION_SCHEMA` 其它表一样），
+所以不需要额外的持久化处理，重启后行由元数据重建。
+
+内置函数 `pg_get_functiondef(函数名)` 返回该函数的 `getCreateSQL()` 文本（`CREATE FUNCTION ...`，
+不是 PG 的 `CREATE OR REPLACE FUNCTION`，也没有 schema 前缀）。它只接受函数名，没有 regproc/oid
+参数；同名有多个重载时报 90152，找不到报 90077。该函数标记为非确定性函数，避免在 prepare 阶段
+把结果当成常量缓存起来。
+
+PG 回归里原来查 `pg_proc`/`pg_get_functiondef` 的 5 个用例已经改成等价的 Lealone 目录查询并执行，
+见 `docs/PG_REGRESS.md`。
+
+## 七、已知限制 / 额外发现但没修的问题
 
 1. 函数体的 SQL 语法/列名/常量返回类型现在建函数时就校验（数据库启动回放时跳过），
    但 setof/table 的结果列形状仍是调用时校验；函数体里也不能写 `;` 和 `?`。

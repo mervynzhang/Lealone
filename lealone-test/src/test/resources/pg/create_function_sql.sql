@@ -86,12 +86,22 @@ select functest_A_3() r;
 
 -- @case function_sql.pg_proc
 -- @pg create_function_sql.sql:29-36
--- 缺失: Lealone 没有 pg_proc 系统目录和 regproc 类型
-select proname, prorettype::regtype, proargtypes::regtype[] from pg_proc
-       where oid in ('functest_A_1'::regproc,
-                     'functest_A_2'::regproc,
-                     'functest_A_3'::regproc) order by proname;
--- PG 期望: functest_a_1 | boolean | [text, date] 等 3 行
+-- 适配: PG 查 pg_proc 并用 regproc/regtype 转换 oid;
+--       Lealone 的等价只读目录是 INFORMATION_SCHEMA.PG_PROC, 类型列直接是文本,
+--       也没有 regproc 类型, 所以按 proname 过滤, 去掉全部 ::regproc/::regtype 转换。
+--       A_2 在 a2_array_arg 用例里因为 $1 位置参数被 skip, 这里补建一份(只用于目录检查)。
+create function functest_A_2(a text[]) returns int language sql
+    as 'select 1';
+> update count: 0
+select proname, prorettype, proargtypes from information_schema.pg_proc
+       where proname in ('FUNCTEST_A_1', 'FUNCTEST_A_2', 'FUNCTEST_A_3')
+       order by proname;
+> PRONAME      PRORETTYPE PROARGTYPES
+> ------------ ---------- -----------
+> FUNCTEST_A_1 BOOLEAN    {TEXT,DATE}
+> FUNCTEST_A_2 INT        {TEXT[]}
+> FUNCTEST_A_3 BOOLEAN    {}
+> rows: 3
 
 -- ---------------------------------------------------------------------------
 -- IMMUTABLE | STABLE | VOLATILE
@@ -143,15 +153,33 @@ select functest_B_4(-1) r;
 
 -- @case function_sql.volatility_catalog
 -- @pg create_function_sql.sql:49-61
--- 缺失: Lealone 没有 pg_proc.provolatile, 也没有 ALTER FUNCTION
-select proname, provolatile from pg_proc
-       where oid in ('functest_B_1'::regproc,
-                     'functest_B_2'::regproc,
-                     'functest_B_3'::regproc,
-                     'functest_B_4'::regproc) order by proname;
+-- 适配: pg_proc 换成 INFORMATION_SCHEMA.PG_PROC, 按 proname 过滤(没有 regproc/oid);
+--       ALTER FUNCTION 已支持, 所以保留 PG 的"改属性后再查一次"两段断言。
+select proname, provolatile from information_schema.pg_proc
+       where proname in ('FUNCTEST_B_1', 'FUNCTEST_B_2', 'FUNCTEST_B_3',
+                         'FUNCTEST_B_4') order by proname;
+> PRONAME      PROVOLATILE
+> ------------ -----------
+> FUNCTEST_B_1 v
+> FUNCTEST_B_2 i
+> FUNCTEST_B_3 s
+> FUNCTEST_B_4 v
+> rows: 4
+
 alter function functest_B_2(int) volatile;
+> update count: 0
 alter function functest_B_3(int) cost 100;
--- PG 期望: 4 行, 再 ALTER 后 functest_b_2 的 provolatile 变成 v
+> update count: 0
+select proname, provolatile from information_schema.pg_proc
+       where proname in ('FUNCTEST_B_1', 'FUNCTEST_B_2', 'FUNCTEST_B_3',
+                         'FUNCTEST_B_4') order by proname;
+> PRONAME      PROVOLATILE
+> ------------ -----------
+> FUNCTEST_B_1 v
+> FUNCTEST_B_2 v
+> FUNCTEST_B_3 s
+> FUNCTEST_B_4 v
+> rows: 4
 
 -- ---------------------------------------------------------------------------
 -- SECURITY DEFINER | INVOKER, LEAKPROOF
@@ -159,19 +187,42 @@ alter function functest_B_3(int) cost 100;
 
 -- @case function_sql.security_definer
 -- @pg create_function_sql.sql:66-83
--- 缺失: Lealone 不支持 SECURITY DEFINER/INVOKER 属性, 没有 pg_proc.prosecdef, 也没有 ALTER FUNCTION
+-- 适配: SECURITY DEFINER/INVOKER 和 ALTER FUNCTION 都已支持, 只把 pg_proc 换成
+--       INFORMATION_SCHEMA.PG_PROC 并按 proname 过滤(没有 regproc/oid)。
 create function functest_C_1(a int) returns boolean language 'sql'
     as 'select a > 0';
+> update count: 0
 create function functest_C_2(a int) returns boolean language 'sql'
     security definer as 'select a = 0';
+> update count: 0
 create function functest_C_3(a int) returns boolean language 'sql'
     security invoker as 'select a < 0';
-select proname, prosecdef from pg_proc
-       where oid in ('functest_C_1'::regproc,
-                     'functest_C_2'::regproc,
-                     'functest_C_3'::regproc) order by proname;
+> update count: 0
+select proname, prosecdef from information_schema.pg_proc
+       where proname in ('FUNCTEST_C_1', 'FUNCTEST_C_2', 'FUNCTEST_C_3')
+       order by proname;
+> PRONAME      PROSECDEF
+> ------------ ---------
+> FUNCTEST_C_1 FALSE
+> FUNCTEST_C_2 TRUE
+> FUNCTEST_C_3 FALSE
+> rows: 3
+
+alter function functest_C_1(int) immutable;
+> update count: 0
 alter function functest_C_2(int) security invoker;
--- PG 期望: functest_c_1=f, functest_c_2=t, functest_c_3=f, ALTER 后 c_2 变 f
+> update count: 0
+alter function functest_C_3(int) security definer;
+> update count: 0
+select proname, prosecdef from information_schema.pg_proc
+       where proname in ('FUNCTEST_C_1', 'FUNCTEST_C_2', 'FUNCTEST_C_3')
+       order by proname;
+> PRONAME      PROSECDEF
+> ------------ ---------
+> FUNCTEST_C_1 FALSE
+> FUNCTEST_C_2 FALSE
+> FUNCTEST_C_3 TRUE
+> rows: 3
 
 -- @case function_sql.leakproof
 -- @pg create_function_sql.sql:88-119
@@ -266,26 +317,44 @@ select functest_F_4(50) r;
 
 -- @case function_sql.strict_catalog
 -- @pg create_function_sql.sql:132-145
--- 缺失: Lealone 没有 pg_proc.proisstrict, 也不支持 ALTER FUNCTION
---       (CALLED ON NULL INPUT 关键字现在可以写了, 见 function_sql.strict)
-create function functest_F_2(a int) returns boolean language 'sql'
-    called on null input as 'select a = 50';
-select proname, proisstrict from pg_proc
-       where oid in ('functest_F_1'::regproc,
-                     'functest_F_2'::regproc,
-                     'functest_F_3'::regproc,
-                     'functest_F_4'::regproc) order by proname;
+-- 适配: 四个 functest_F_* 已经由 function_sql.strict 用例建好, 这里不再重复建 F_2;
+--       pg_proc 换成 INFORMATION_SCHEMA.PG_PROC, 按 proname 过滤(没有 regproc/oid)。
+select proname, proisstrict from information_schema.pg_proc
+       where proname in ('FUNCTEST_F_1', 'FUNCTEST_F_2', 'FUNCTEST_F_3',
+                         'FUNCTEST_F_4') order by proname;
+> PRONAME      PROISSTRICT
+> ------------ -----------
+> FUNCTEST_F_1 FALSE
+> FUNCTEST_F_2 FALSE
+> FUNCTEST_F_3 TRUE
+> FUNCTEST_F_4 TRUE
+> rows: 4
+
 alter function functest_F_2(int) strict;
--- PG 期望: f_1=f, f_2=f, f_3=t, f_4=t; ALTER 后 f_2 变 t
+> update count: 0
+select proname, proisstrict from information_schema.pg_proc
+       where proname in ('FUNCTEST_F_1', 'FUNCTEST_F_2', 'FUNCTEST_F_3',
+                         'FUNCTEST_F_4') order by proname;
+> PRONAME      PROISSTRICT
+> ------------ -----------
+> FUNCTEST_F_1 FALSE
+> FUNCTEST_F_2 TRUE
+> FUNCTEST_F_3 TRUE
+> FUNCTEST_F_4 TRUE
+> rows: 4
 
 -- @case function_sql.pg_get_functiondef
 -- @pg create_function_sql.sql:150-153
--- 缺失: Lealone 没有 pg_get_functiondef() 和 regproc
-select pg_get_functiondef('functest_A_1'::regproc);
-select pg_get_functiondef('functest_B_3'::regproc);
-select pg_get_functiondef('functest_C_3'::regproc);
-select pg_get_functiondef('functest_F_2'::regproc);
--- PG 期望: 4 个 CREATE OR REPLACE FUNCTION 文本
+-- 适配: Lealone 新增了同名内置函数 pg_get_functiondef(函数名), 返回
+--       getCreateSQL() 的文本; 没有 regproc 类型, 所以传字符串而不是 ::regproc。
+select pg_get_functiondef('functest_A_1');
+>> CREATE FUNCTION FUNCTEST_A_1(A TEXT, B DATE) RETURNS BOOLEAN VOLATILE CALLED ON NULL INPUT AS 'select a = ''abcd'' and b > ''2001-01-01'''
+select pg_get_functiondef('functest_B_3');
+>> CREATE FUNCTION FUNCTEST_B_3(A INT) RETURNS BOOLEAN STABLE CALLED ON NULL INPUT COST 100 AS 'select a = 0'
+select pg_get_functiondef('functest_C_3');
+>> CREATE FUNCTION FUNCTEST_C_3(A INT) RETURNS BOOLEAN VOLATILE CALLED ON NULL INPUT SECURITY DEFINER AS 'select a < 0' OWNER TO ROOT
+select pg_get_functiondef('functest_F_2');
+>> CREATE FUNCTION FUNCTEST_F_2(A INT) RETURNS BOOLEAN VOLATILE STRICT AS 'select a = 50'
 
 -- ---------------------------------------------------------------------------
 -- SQL-standard body

@@ -52,6 +52,7 @@ import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SchemaObject;
 import com.lealone.db.schema.Sequence;
+import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.schema.TriggerObject;
 import com.lealone.db.schema.UserAggregate;
 import com.lealone.db.schema.UserDataType;
@@ -109,6 +110,8 @@ public class InfoMetaTable extends MetaTable {
     private static final int DB_OBJECTS = 28; // 对应SYS表
     private static final int SERVICES = 29;
     private static final int PLUGINS = 30;
+    // PostgreSQL兼容的只读函数目录，列是PG回归用例真正用到的那些
+    private static final int PG_PROC = 31;
 
     /**
      * Get the number of meta table types. Supported meta table
@@ -117,7 +120,7 @@ public class InfoMetaTable extends MetaTable {
      * @return the number of meta table types
      */
     public static int getMetaTableTypeCount() {
-        return PLUGINS + 1;
+        return PG_PROC + 1;
     }
 
     public InfoMetaTable(Schema schema, int id, int type) {
@@ -305,6 +308,11 @@ public class InfoMetaTable extends MetaTable {
         case PLUGINS:
             setObjectName("PLUGINS");
             cols = createColumns("ID INT", "PLUGIN_CATALOG", "PLUGIN_NAME", "STATE", "SQL");
+            break;
+        case PG_PROC:
+            setObjectName("PG_PROC");
+            cols = createColumns("PRONAME", "PRORETTYPE", "PROARGTYPES", "PROVOLATILE",
+                    "PROISSTRICT BOOLEAN", "PROSECDEF BOOLEAN", "PROLEAKPROOF BOOLEAN", "PROSRC");
             break;
         default:
             throw DbException.getInternalError("type=" + type);
@@ -1392,6 +1400,33 @@ public class InfoMetaTable extends MetaTable {
             }
             break;
         }
+        case PG_PROC: {
+            for (SchemaObject obj : database.getAllSchemaObjects(DbObjectType.FUNCTION_ALIAS)) {
+                if (!(obj instanceof SqlFunction)) {
+                    // CREATE ALIAS/AGGREGATE不是SQL函数，不出现在PG_PROC里
+                    continue;
+                }
+                SqlFunction function = (SqlFunction) obj;
+                add(rows,
+                        // PRONAME
+                        identifier(function.getName()),
+                        // PRORETTYPE
+                        function.getReturnTypeSQL(),
+                        // PROARGTYPES
+                        getPgProcArgTypes(function),
+                        // PROVOLATILE (i/s/v和PostgreSQL一致)
+                        getPgProcVolatility(function.getVolatility()),
+                        // PROISSTRICT
+                        "" + function.isStrict(),
+                        // PROSECDEF
+                        "" + function.isSecurityDefiner(),
+                        // PROLEAKPROOF
+                        "" + function.isLeakproof(),
+                        // PROSRC
+                        replaceNullWithEmpty(function.getBody()));
+            }
+            break;
+        }
         case SERVICES: {
             for (SchemaObject obj : database.getAllSchemaObjects(DbObjectType.SERVICE)) {
                 Service service = (Service) obj;
@@ -1445,6 +1480,24 @@ public class InfoMetaTable extends MetaTable {
         default:
             throw DbException.getInternalError("action=" + action);
         }
+    }
+
+    private static String getPgProcArgTypes(SqlFunction function) {
+        StatementBuilder buff = new StatementBuilder("{");
+        for (int i = 0; i < function.getInputParameterCount(); i++) {
+            buff.appendExceptFirst(",");
+            buff.append(function.getInputParameterTypeSQL(i));
+        }
+        return buff.append('}').toString();
+    }
+
+    private static String getPgProcVolatility(String volatility) {
+        if (SqlFunction.IMMUTABLE.equalsIgnoreCase(volatility)) {
+            return "i";
+        } else if (SqlFunction.STABLE.equalsIgnoreCase(volatility)) {
+            return "s";
+        }
+        return "v";
     }
 
     private void addPrivileges(ArrayList<Row> rows, DbObject grantee, String catalog, Table table,

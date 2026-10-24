@@ -12,6 +12,7 @@ import java.io.Reader;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -24,6 +25,7 @@ import com.lealone.db.Database;
 import com.lealone.db.Mode;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.command.Command;
+import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.Sequence;
 import com.lealone.db.session.ServerSession;
@@ -59,7 +61,7 @@ public class SystemFunction extends BuiltInFunction {
 
     public static final int DATABASE = 150, USER = 151, CURRENT_USER = 152, IDENTITY = 153,
             SCOPE_IDENTITY = 154, AUTOCOMMIT = 155, READONLY = 156, DATABASE_PATH = 157,
-            LOCK_TIMEOUT = 158, DISK_SPACE_USED = 159;
+            LOCK_TIMEOUT = 158, DISK_SPACE_USED = 159, PG_GET_FUNCTIONDEF = 160;
 
     public static final int IFNULL = 200, CASEWHEN = 201, CONVERT = 202, CAST = 203, COALESCE = 204,
             NULLIF = 205, CASE = 206, NEXTVAL = 207, CURRVAL = 208, ARRAY_GET = 209, CSVREAD = 210,
@@ -116,6 +118,9 @@ public class SystemFunction extends BuiltInFunction {
         addFunctionNotDeterministic("TRANSACTION_ID", TRANSACTION_ID, 0, Value.STRING);
         addFunctionWithNull("DECODE", DECODE, VAR_ARGS, Value.NULL);
         addFunctionNotDeterministic("DISK_SPACE_USED", DISK_SPACE_USED, 1, Value.LONG);
+        // PostgreSQL兼容函数: 按函数名返回CREATE FUNCTION的DDL文本;
+        // 结果依赖schema里的函数定义(DDL可变), 所以不能当确定性函数在prepare阶段折叠
+        addFunctionNotDeterministic("PG_GET_FUNCTIONDEF", PG_GET_FUNCTIONDEF, 1, Value.STRING);
         addFunction("VERSION", VERSION, 0, Value.STRING);
 
         // pseudo function
@@ -197,6 +202,9 @@ public class SystemFunction extends BuiltInFunction {
         case DISK_SPACE_USED:
             result = ValueLong.get(getDiskSpaceUsed(session, v));
             break;
+        case PG_GET_FUNCTIONDEF:
+            result = getFunctionDef(session, v.getString());
+            break;
         case CAST:
         case CONVERT: {
             v = v.convertTo(dataType);
@@ -226,6 +234,39 @@ public class SystemFunction extends BuiltInFunction {
             throw getUnsupportedException();
         }
         return result;
+    }
+
+    // pg_get_functiondef(name): 返回函数的CREATE FUNCTION文本，重载时要求参数类型唯一
+    private static Value getFunctionDef(ServerSession session, String name) {
+        FunctionAlias function = findFunction(session, name);
+        if (function == null) {
+            throw DbException.get(ErrorCode.FUNCTION_ALIAS_NOT_FOUND_1, name);
+        }
+        return ValueString.get(function.getCreateSQL());
+    }
+
+    private static FunctionAlias findFunction(ServerSession session, String name) {
+        Database db = session.getDatabase();
+        ArrayList<FunctionAlias> list = db.getSchema(session, session.getCurrentSchemaName())
+                .findFunctions(session, name);
+        if (list.isEmpty()) {
+            String[] schemaNames = session.getSchemaSearchPath();
+            if (schemaNames != null) {
+                for (String schemaName : schemaNames) {
+                    list = db.getSchema(session, schemaName).findFunctions(session, name);
+                    if (!list.isEmpty()) {
+                        break;
+                    }
+                }
+            }
+        }
+        if (list.isEmpty()) {
+            return null;
+        }
+        if (list.size() > 1) {
+            throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, name);
+        }
+        return list.get(0);
     }
 
     private static long getDiskSpaceUsed(ServerSession session, Value v0) {
