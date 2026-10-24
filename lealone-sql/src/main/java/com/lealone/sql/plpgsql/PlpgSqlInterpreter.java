@@ -1119,7 +1119,8 @@ public class PlpgSqlInterpreter {
                         "cursor " + variable.getName() + " has no query");
             PlpgSqlSqlExecutor.CursorResult queryResult = sqlExecutor.queryForCursor(query,
                     openCursorArguments(cursor, node));
-            cursor.open(queryResult.result, queryResult.columnNames, queryResult.columnTypes);
+            cursor.open(session, queryResult.result, queryResult.columnNames,
+                    queryResult.columnTypes);
             return;
         }
         if (node.query == null)
@@ -1128,7 +1129,8 @@ public class PlpgSqlInterpreter {
         String portalName = unnamedPortalName(variable);
         PlpgSqlSqlExecutor.CursorResult queryResult = sqlExecutor.queryForCursor(node.query, scope);
         PlpgSqlCursor cursor = new PlpgSqlCursor(portalName);
-        cursor.open(queryResult.result, queryResult.columnNames, queryResult.columnTypes);
+        cursor.open(session, queryResult.result, queryResult.columnNames,
+                    queryResult.columnTypes);
         getPortalMap().put(portalName, cursor);
         // constant refcursor可以带初始门户名, 打开时门户名没变就不算给常量赋值
         if (!variable.isConstant() || !portalName.equals(variable.getValue().getString())) {

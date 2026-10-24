@@ -5,17 +5,19 @@
  */
 package com.lealone.sql.plpgsql;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import com.lealone.db.api.CursorPortal;
 import com.lealone.db.result.Result;
+import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
 
 /**
- * PL/pgSQL游标的运行时状态。OPEN时只执行查询并持有结果(Result)，不把行复制进内存；
- * 行数超过maxMemoryRows时由LocalResult自己落盘，所以大结果集不会撑爆堆。
- * 顺序方向(NEXT/FORWARD)一路next()读；回退方向先reset()再前进到目标行，
- * 缓冲区就是LocalResult本身(可能已落盘)，回退不会额外占用内存。
+ * PL/pgSQL游标的运行时状态。OPEN时把查询结果流式搬进游标自己的存储，然后立刻关掉引擎的Result：
+ * 行数不超过maxMemoryRows时留在内存里，超过之后写进游标自己的tuplestore(引擎临时StorageMap，会落盘)，
+ * 所以大游标保持打开时堆占用也不是"整个结果集"。
+ * FETCH任何方向都按行号直接取，回退不用重放。
  */
 public class PlpgSqlCursor implements CursorPortal {
 
@@ -23,13 +25,15 @@ public class PlpgSqlCursor implements CursorPortal {
     private String query;
     private List<String> parameterNames;
     private List<String> parameterTypes;
-    // 查询结果，行数超过阈值时LocalResult会把行落到临时文件
-    private Result result;
+    // 小结果集直接留在内存里，这样小游标不用付落盘代价
+    private List<Value[]> memoryRows;
+    // 大结果集落到游标自己的tuplestore，关闭时连临时文件一起删掉
+    private PlpgSqlTuplestore tuplestore;
     private String[] columnNames;
     private int[] columnTypes;
+    private int rowCount;
     // 当前行下标，-1表示在第一行之前，rowCount表示在最后一行之后
     private int position = -1;
-    // 当前行，Result.currentRow()返回的数组在下次next()之前都有效，解释器拿到后立刻用掉
     private Value[] currentRow;
     private boolean open;
 
@@ -74,20 +78,86 @@ public class PlpgSqlCursor implements CursorPortal {
         return columnTypes;
     }
 
-    public void open(Result result, String[] columnNames, int[] columnTypes) {
-        this.result = result;
+    public void open(ServerSession session, Result result, String[] columnNames,
+            int[] columnTypes) {
         this.columnNames = columnNames;
         this.columnTypes = columnTypes;
         this.position = -1;
         this.currentRow = null;
+        this.rowCount = 0;
         this.open = true;
+        try {
+            dump(session, result);
+        } catch (RuntimeException e) {
+            // 搬行过程中出错要立刻释放已经落盘的临时map
+            closeStorage();
+            this.open = false;
+            throw e;
+        }
+    }
+
+    // OPEN时把引擎结果流式搬进游标自己的存储，然后立刻关掉引擎的Result
+    private void dump(ServerSession session, Result result) {
+        if (result == null)
+            return;
+        int memoryLimit = session.getDatabase().getMaxMemoryRows();
+        int columnCount = columnNames == null ? 0 : columnNames.length;
+        try {
+            while (result.next()) {
+                Value[] row = result.currentRow();
+                Value[] values = copyRow(row, columnCount);
+                if (tuplestore == null && rowCount < memoryLimit) {
+                    if (memoryRows == null)
+                        memoryRows = new ArrayList<>();
+                    memoryRows.add(values);
+                } else {
+                    if (tuplestore == null)
+                        switchToTuplestore(session, columnCount);
+                    tuplestore.add(values);
+                }
+                rowCount++;
+            }
+        } finally {
+            result.close();
+        }
+        if (tuplestore != null)
+            tuplestore.flush();
+    }
+
+    // 超过内存阈值时才建tuplestore，并把已经攒在内存里的行搬过去
+    private void switchToTuplestore(ServerSession session, int columnCount) {
+        tuplestore = new PlpgSqlTuplestore(session, columnCount);
+        if (memoryRows != null) {
+            for (int i = 0; i < memoryRows.size(); i++)
+                tuplestore.add(memoryRows.get(i));
+            memoryRows = null;
+        }
+    }
+
+    // 结果行可能带排序用的内部列，只保留可见列；结果里的数组可能被复用，一律复制一份
+    private Value[] copyRow(Value[] row, int columnCount) {
+        int count = row == null ? 0 : row.length;
+        if (count > columnCount)
+            count = columnCount;
+        Value[] values = new Value[count];
+        if (row != null)
+            System.arraycopy(row, 0, values, 0, count);
+        return values;
     }
 
     public int size() {
-        if (result == null)
-            return 0;
-        int count = result.getRowCount();
-        return count < 0 ? 0 : count;
+        return rowCount;
+    }
+
+    // 按行号取行，内存和tuplestore两条路
+    private Value[] rowAt(int pos) {
+        if (pos < 0 || pos >= rowCount)
+            return null;
+        if (memoryRows != null)
+            return memoryRows.get(pos);
+        if (tuplestore == null)
+            return null;
+        return tuplestore.get(pos);
     }
 
     public Value[] currentRow() {
@@ -95,11 +165,7 @@ public class PlpgSqlCursor implements CursorPortal {
     }
 
     public void close() {
-        if (result != null) {
-            // 落盘结果持有临时文件，关闭游标时必须释放
-            result.close();
-            result = null;
-        }
+        closeStorage();
         this.columnNames = null;
         this.columnTypes = null;
         this.position = -1;
@@ -112,9 +178,22 @@ public class PlpgSqlCursor implements CursorPortal {
         close();
     }
 
+    // 释放游标自己的存储(内存行 + 落盘临时map，后者连临时文件一起删掉)
+    private void closeStorage() {
+        if (tuplestore != null) {
+            tuplestore.close();
+            tuplestore = null;
+        }
+        if (memoryRows != null) {
+            memoryRows.clear();
+            memoryRows = null;
+        }
+        this.rowCount = 0;
+    }
+
     // FETCH的方向，返回这次实际经过的行数
     public int move(String direction, int count) {
-        if (!open || result == null)
+        if (!open)
             return 0;
         String dir = direction == null ? "NEXT" : direction.toUpperCase();
         int old = position;
@@ -149,44 +228,32 @@ public class PlpgSqlCursor implements CursorPortal {
     private int fetchForward(int count) {
         int fetched = 0;
         for (int i = 0; i < count; i++) {
-            if (!result.next()) {
-                position = size();
+            Value[] row = rowAt(position + 1);
+            if (row == null) {
+                position = rowCount;
                 currentRow = null;
                 return fetched;
             }
             position++;
             fetched++;
-            currentRow = visibleRow(result.currentRow());
+            currentRow = row;
         }
         return fetched;
     }
 
-    // 定位到指定行，-1表示第一行之前；回退时从头重放(LocalResult落盘后同样支持reset)
+    // 定位到指定行，-1表示第一行之前；tuplestore按行号直接定位，不需要重放
     private void seekTo(int target) {
         if (target < -1)
             target = -1;
-        int count = size();
-        if (target > count)
-            target = count;
-        if (target < position) {
-            result.reset();
-            position = -1;
-            currentRow = null;
-        }
-        if (target >= 0 && target < count) {
-            fetchForward(target - position);
+        if (target > rowCount)
+            target = rowCount;
+        if (target >= 0 && target < rowCount) {
+            currentRow = rowAt(target);
+            position = currentRow == null ? rowCount : target;
         } else {
             position = target;
             currentRow = null;
         }
     }
 
-    // 结果行可能带排序用的内部列，可见列更少时复制一份，否则直接用结果里的数组(避免逐行分配)
-    private Value[] visibleRow(Value[] row) {
-        if (row == null || columnNames == null || row.length <= columnNames.length)
-            return row;
-        Value[] copy = new Value[columnNames.length];
-        System.arraycopy(row, 0, copy, 0, columnNames.length);
-        return copy;
-    }
 }
