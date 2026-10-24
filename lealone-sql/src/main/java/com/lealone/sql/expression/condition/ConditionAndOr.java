@@ -108,11 +108,12 @@ public class ConditionAndOr extends Condition {
         Value r;
         switch (andOrType) {
         case AND: {
-            if (!l.getBoolean()) {
+            // NULL AND FALSE 是 FALSE，所以左操作数是 NULL 时不能直接返回，还要看右边
+            if (l != ValueNull.INSTANCE && !l.getBoolean()) {
                 return l;
             }
             r = right.getValue(session);
-            if (!r.getBoolean()) {
+            if (r != ValueNull.INSTANCE && !r.getBoolean()) {
                 return r;
             }
             if (l == ValueNull.INSTANCE) {
@@ -221,14 +222,19 @@ public class ConditionAndOr extends Condition {
         }
         switch (andOrType) {
         case AND:
+            // NULL 常量不能当成 FALSE 来简化，NULL AND x 的结果由 x 决定
             if (l != null) {
-                if (Boolean.FALSE.equals(l.getBoolean())) {
+                if (l == ValueNull.INSTANCE) {
+                    break;
+                } else if (Boolean.FALSE.equals(l.getBoolean())) {
                     return ValueExpression.get(l);
                 } else if (Boolean.TRUE.equals(l.getBoolean())) {
                     return right;
                 }
             } else if (r != null) {
-                if (Boolean.FALSE.equals(r.getBoolean())) {
+                if (r == ValueNull.INSTANCE) {
+                    break;
+                } else if (Boolean.FALSE.equals(r.getBoolean())) {
                     return ValueExpression.get(r);
                 } else if (Boolean.TRUE.equals(r.getBoolean())) {
                     return left;
@@ -236,14 +242,19 @@ public class ConditionAndOr extends Condition {
             }
             break;
         case OR:
+            // 同理，x OR NULL 只有 x 是 TRUE 时才能简化
             if (l != null) {
-                if (Boolean.TRUE.equals(l.getBoolean())) {
+                if (l == ValueNull.INSTANCE) {
+                    break;
+                } else if (Boolean.TRUE.equals(l.getBoolean())) {
                     return ValueExpression.get(l);
                 } else if (Boolean.FALSE.equals(l.getBoolean())) {
                     return right;
                 }
             } else if (r != null) {
-                if (Boolean.TRUE.equals(r.getBoolean())) {
+                if (r == ValueNull.INSTANCE) {
+                    break;
+                } else if (Boolean.TRUE.equals(r.getBoolean())) {
                     return ValueExpression.get(r);
                 } else if (Boolean.FALSE.equals(r.getBoolean())) {
                     return left;

@@ -44,16 +44,9 @@ public class ExpressionList extends Expression {
 
     @Override
     public Expression optimize(ServerSession session) {
-        boolean allConst = true;
+        // 行值构造器不能折叠成常量，否则 (a, b) IS NULL 之类无法区分行值和普通的数组值
         for (int i = 0; i < list.length; i++) {
-            Expression e = list[i].optimize(session);
-            if (!e.isConstant()) {
-                allConst = false;
-            }
-            list[i] = e;
-        }
-        if (allConst) {
-            return ValueExpression.get(getValue(session));
+            list[i] = list[i].optimize(session);
         }
         return this;
     }
