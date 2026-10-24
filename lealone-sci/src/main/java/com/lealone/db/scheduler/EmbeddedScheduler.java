@@ -191,16 +191,17 @@ public class EmbeddedScheduler extends InternalSchedulerBase {
             }
         }
 
-        // 等锁的session被挂起后没人再检查它，必须由调度器定期检查，超时就把错误交给语句
+        // 等锁的session被挂起后没人再检查它，必须由调度器定期检查。
+        // 超时后只把session标成就绪，让重试这条语句的线程自己抛超时错误，
+        // 不能在这里回滚事务或者执行语句，否则会跟执行语句的线程互相破坏状态
         private void checkLockTimeout() {
             if (session.getStatus() != SessionStatus.WAITING)
                 return;
-            YieldableCommand c = session.getYieldableCommand();
-            if (c == null)
+            if (session.getYieldableCommand() == null)
                 return;
-            Throwable e = session.getLockTimeoutError();
-            if (e != null)
-                c.getYieldable().handleException(e);
+            if (session.isLockWaitTimeout()) {
+                session.retryForLockTimeout();
+            }
         }
 
         private void runTask(AsyncTask task) {
