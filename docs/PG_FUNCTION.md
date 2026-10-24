@@ -157,9 +157,9 @@ SELECT var_count(1, 2, 3);  -- 3
    `COLUMN_COUNT_DOES_NOT_MATCH`。每一列按位置转换成声明的类型。
    setof/table 的结果列数和类型转换仍发生在**调用时**，创建时不执行函数体；
    标量返回值的列数和常量类型在创建时就校验（见第 1 条）。
-7. **select 列表里不展开**：PostgreSQL 里 `SELECT f(1)` 会把 setof 函数展开成多行，
-   Lealone 不支持这种展开，遇到这种写法会明确报 `FEATURE_NOT_SUPPORTED`，
-   提示改用 `SELECT * FROM f(...)`，不会静默返回第一行。
+7. **select 列表里会展开**：`SELECT f(1)`、`SELECT id, f(1) FROM t`、`f(1) LIMIT n`、
+   `WHERE x IN (SELECT f(1))` 都和 PostgreSQL 一样把 setof 函数展开成多行；
+   **例外**：`f(1) + 1` 这类把 setof 结果当标量参与运算的写法仍报 `FEATURE_NOT_SUPPORTED: RESULT_SET +`。
 8. **`CALL f(1)`**：Lealone 既有的 `CALL` 对返回 ResultSet 的函数会把整张结果集返回，
    所以 setof 函数也可以用 `CALL` 调用（PostgreSQL 的 `CALL` 只用于存储过程，这是 Lealone 的扩展）。
 9. **参数按名字引用**：创建时用 Lealone 自己的 tokenizer 对 body 切词，把与参数名匹配的**标识符**
@@ -179,7 +179,7 @@ SELECT var_count(1, 2, 3);  -- 3
       - 表上下文（`SELECT * FROM f(1)`）里仍然展开成一列一列，列名用参数名；
       - `STRICT` 函数入参为 NULL 时 `SELECT f(NULL)` 得到 NULL record，`SELECT * FROM f(NULL)`
         得到一行全 NULL（PostgreSQL 在这里都是 NULL 记录）。
-      此时不能再写 `RETURNS`。表达式里还不能对 record 取字段（`(f(1)).j` 不支持）。
+      此时不能再写 `RETURNS`。表达式里可以对结果取字段（`SELECT (f(1)).j`，返回 `2`）。
     - 只有 `OUT` 参数、没有入参时可以直接 `SELECT f()`。
     - `OUT` 参数在函数体里被引用时绑定为 NULL（PostgreSQL 里在 SQL 函数体中引用 OUT 参数是非法的），
       因此不要依赖这种写法。
@@ -192,7 +192,7 @@ SELECT var_count(1, 2, 3);  -- 3
    调用时最后一个参数位置可以传 0 到多个实参，运行期打包成 `ValueArray` 传给函数体：
    - 不传时是空数组（不是 NULL），固定参数仍然不能少；
    - 展开出来的每个实参都按**数组元素类型**转换；
-   - 只传一个数组值时直接当数组用（不再多包一层）。Lealone 目前没有 `ARRAY[...]` 字面量，
+   - 只传一个数组值时直接当数组用（不再多包一层）。`ARRAY[...]` 字面量已支持（`SELECT ARRAY[1,2,3]`），
      所以这条只有函数返回数组时才用得上。
 13. **调用期类型转换**：实参按参数声明的类型转换（`Value.convertTo`）后再绑定给函数体，
    和 PostgreSQL “实参按声明类型做隐式转换”对齐；不能转换时抛 `DATA_CONVERSION_ERROR_1`（22018，
@@ -237,7 +237,7 @@ SELECT var_count(1, 2, 3);  -- 3
 | `IMMUTABLE` / `STABLE` / `VOLATILE` | 完整 | `IMMUTABLE`/`STABLE` 都是 `deterministic=true`，默认 `VOLATILE`；持久化时**原样保留**用户写的关键字（上一版把 `STABLE` 归一化成 `IMMUTABLE`） |
 | `STRICT` / `RETURNS NULL ON NULL INPUT` / `CALLED ON NULL INPUT` | 完整 | 两种写法都等价于 `STRICT`（任一入参为 NULL 时不执行函数体），`CALLED ON NULL INPUT` 是显式写出来的默认行为；DDL 里一定写出 `STRICT` 或 `CALLED ON NULL INPUT` 之一，所以重启后语义不变 |
 | `SECURITY DEFINER` / `SECURITY INVOKER` | 完整 | `DEFINER` 时函数体用一个**属主身份的嵌套会话**执行（SQL 函数体和 PL/pgSQL 函数体都支持），`INVOKER`（默认）用调用者身份；属主默认是创建者，DDL 里同时持久化 `SECURITY DEFINER` 和 `OWNER TO`，重启后仍然生效 |
-| `OWNER TO user` | 只影响 DEFINER 的执行身份 | Lealone 没有函数级的 ownership/EXECUTE 权限，属主唯一的作用是 `SECURITY DEFINER` 时以谁的身份执行；用户必须存在，否则报 `USER_NOT_FOUND_1`。为了能回放，`OWNER TO` 写成 `AS` 之后的 Lealone 扩展子句 |
+| `OWNER TO user` | 只影响 DEFINER 的执行身份 | 属主决定 `SECURITY DEFINER` 时以谁的身份执行；用户必须存在，否则报 `USER_NOT_FOUND_1`。为了能回放，`OWNER TO` 写成 `AS` 之后的 Lealone 扩展子句。函数级 `GRANT/REVOKE EXECUTE ON FUNCTION` 已支持（授权/检查规则和过程一致，见 `docs/PROCEDURE.md`） |
 | `LEAKPROOF` / `NOT LEAKPROOF` | 只解析 + 持久化 | Lealone 没有泄露证明（leakproof）机制，不生效；`NOT LEAKPROOF` 只是把标记清掉（PG 默认值） |
 | `WINDOW` | 只解析 + 持久化 | Lealone 没有窗口函数框架，标记不生效；保留是为了 PG 的 DDL 能过 |
 | `COST n` / `ROWS n` | 只解析 + 持久化 | 优化器不使用这两个提示（`JavaFunction.getCost()` 仍按固定值算）；`ROWS` 在 PostgreSQL 里只对 SETOF 有意义，这里不做校验 |
@@ -313,13 +313,12 @@ SELECT var_count(1, 2, 3);  -- 3
 
 ## 四、明确不做（都不在本次范围内）
 
-- select 列表里展开 setof 函数（`SELECT f(1)` 展开成多行）、以及 `f(1) + 1` 这类嵌套使用
+- `f(1) + 1` 这类把 setof 结果当标量参与运算的嵌套使用（select 列表里展开已经支持）
 - `ROWS n` 只当属性存着，不作为优化器的行数提示
 - `ROWS FROM(...)` 多函数合并成一个表函数（单个函数的 `WITH ORDINALITY` 已支持）
-- 自定义复合类型（`CREATE TYPE ... AS (...)`）、`%ROWTYPE` 数组、整行 `record` 当标量
-- `ALTER PROCEDURE`/`ALTER ROUTINE`（存储过程重载已支持，见 `docs/PROCEDURE.md`）
+- 整行 `record` 当标量用（复合类型 `CREATE TYPE`、`%ROWTYPE` 数组已经支持）
 - `COMMENT ON FUNCTION name(type)` 仍按函数名存（多个重载共用一份注释）
-- PG 的 preferred-type 平局再选；`CREATE FUNCTION f(int)`（参数只写类型不写名）
+- PG 的 preferred-type 平局再选
 - `pg_catalog` 兼容 schema / 与 PG 同名的 `pg_proc` 对象（只提供 `INFORMATION_SCHEMA.PG_PROC`）
 - `ALTER FUNCTION ... SET SCHEMA`（换 schema）、`SET configuration_parameter FROM CURRENT`
 - `DROP FUNCTION ... CASCADE`（RESTRICT 的依赖检查已实现，CASCADE 未实现）
@@ -404,8 +403,7 @@ SELECT f('x');          -- x!
   Lealone 没有这一层，直接报歧义（例如 `f(bigint)` 与 `f(double)` 被 `SMALLINT` 实参调用）；
 * 无类型实参只认 `NULL` 和**字符串字面量**；`CAST('5' AS VARCHAR)` 这种显式转过的常量在解析期
   已经是 `ValueExpression`，也会被当成无类型（PG 里它是 text，需要隐式/显式转换才行）；
-* `CREATE FUNCTION f(int)` 这种“参数只写类型不写名字”的写法还不支持（参数名必填），
-  和重载无关，是词法层的老限制；
+* `CREATE FUNCTION f(int)` 这种"参数只写类型不写名字"的写法已经支持（函数体里用 `$1` 引用）；
 * PostgreSQL 的 `text` 在 Lealone 里映射成 `CLOB`，匹配时把 `CLOB` 和字符串类型
   (`VARCHAR/CHAR/...)` 当成同一类（可以互相隐式转换），所以 `text` 参数能接受字符串字面量/表达式。
 
@@ -484,44 +482,59 @@ PG 回归里原来查 `pg_proc`/`pg_get_functiondef` 的 5 个用例已经改成
 3. `TABLE x` 作为函数体只支持裸表名：Lealone 的 `TABLE x` 语句本身不支持 `WHERE`（`TABLE t1 WHERE id = 1`
    会报语法错），所以 `TABLE` 函数体只能取整表的数据。
 4. 函数名解析仍只查 session 当前 schema，`USE s3` 之后调用 `PUBLIC` 里的函数必须写成 `PUBLIC.f()`。
-5. setof 函数只有顶层出现在 select 列表时才会被拦下并报 `FEATURE_NOT_SUPPORTED`；
-   `f(1) + 1`、`WHERE f(1) = 1`、`ORDER BY f(1)` 这类嵌套/其它位置没有专门校验，
-   会走普通表达式的类型转换路径报错或得到不可用的值，不会静默返回第一行。
-6. setof 函数体的列数/列类型只在调用时校验和转换；创建时不执行函数体，也不做类型兼容性预检查。
-7. 声明列的精度（如 `VARCHAR(5)`）只体现在结果元数据里，不强制截断函数体返回的值，
+5. select 列表里展开 setof 函数已经支持；`f(1) + 1` 这类"把结果集当标量"的写法会明确报
+   `FEATURE_NOT_SUPPORTED: RESULT_SET +`（不会静默返回第一行）。
+6. **setof 函数体内联进执行计划没做**：`EXPLAIN` 里只能看到函数表（`EXPLAIN (COSTS OFF)` 本身已支持），
+   PG 的 `function_sql.setof_inline` 用例依赖"计划里能看到内联后的子计划"，所以这条用例在
+   `PgRegressTest` 里 skip（见 `docs/PG_REGRESS.md` 第五节）。
+7. **`CREATE OPERATOR CLASS` 没做**：`function_sql.partition_ops` 用例依赖操作符类/分区索引，
+   同样记录在 `docs/PG_REGRESS.md` 第五节。
+8. setof 函数体的列数/列类型只在调用时校验和转换；创建时不执行函数体，也不做类型兼容性预检查。
+9. 声明列的精度（如 `VARCHAR(5)`）只体现在结果元数据里，不强制截断函数体返回的值，
    这一点和既有的 `CREATE ALIAS` 表函数一致。
-8. 表函数实参不能引用同一 FROM 里其它表的列（没有 LATERAL），会报
+10. 表函数实参不能引用同一 FROM 里其它表的列（没有 LATERAL），会报
    `Column "L.ID" not found`；只有常量/参数/变量可以作为实参。
-9. `FROM f(1) AS t` 只给表起别名，不会像 PostgreSQL 那样把单列结果的列名改成 `t`；
+11. `FROM f(1) AS t` 只给表起别名，不会像 PostgreSQL 那样把单列结果的列名改成 `t`；
    要改列名得用列别名列表 `FROM f(1) AS t(x)`。列别名列表允许少于结果列数（PostgreSQL 要求个数相同）。
-10. 标量函数当表函数用（`SELECT * FROM f(1)`）已经支持，得到一行一列，列名用函数名
+12. 标量函数当表函数用（`SELECT * FROM f(1)`）已经支持，得到一行一列，列名用函数名
     （`CREATE ALIAS` 建的标量 Java 函数同样适用）。返回 NULL 时也有一行（值为 NULL），不是空集。
     只有 `RETURNS SETOF`/`RETURNS TABLE` 的函数返回类型才是 `Value.RESULT_SET`。
-11. 单个 OUT/INOUT 参数等价于标量返回，函数体必须只返回一列：函数体返回多列时建函数就报 22018
+13. 单个 OUT/INOUT 参数等价于标量返回，函数体必须只返回一列：函数体返回多列时建函数就报 22018
     （调用路径也不会再静默取第一列）。
-12. 多个 OUT 参数时 `SELECT f(1)` 得到 record（`(43, foo)`），`SELECT * FROM f(1)` 得到一行多列；
+14. 多个 OUT 参数时 `SELECT f(1)` 得到 record（`(43, foo)`），`SELECT * FROM f(1)` 得到一行多列；
     但 record 值不能再参与运算或取字段，只能整体打印/比较。函数体返回 0 行时 `SELECT f(1)` 是 NULL，
     `SELECT * FROM f(1)` 是一行全 NULL（PostgreSQL 也返回 NULL 记录）。
-13. `VARIADIC` 调用时传单个 NULL 会被当成“一个 NULL 元素”，PostgreSQL 会把它当成 NULL 数组。
-14. `CREATE OR REPLACE FUNCTION` 的报错优先级和 PG 相反：Lealone 先校验函数体再看重名，
+15. `VARIADIC` 调用时传单个 NULL 会被当成“一个 NULL 元素”，PostgreSQL 会把它当成 NULL 数组。
+16. `CREATE OR REPLACE FUNCTION` 的报错优先级和 PG 相反：Lealone 先校验函数体再看重名，
     所以“同名函数已存在 + 新函数体非法”时报的是函数体错误，PG 会先报重名。不影响正确性。
-14. DDL 回滚后，同一个 session 里之前 prepare 过的 `SELECT f(...)` 可能命中缓存的执行计划，
+17. DDL 回滚后，同一个 session 里之前 prepare 过的 `SELECT f(...)` 可能命中缓存的执行计划，
     仍然返回旧结果（函数对象其实已经回滚掉了，新 session 调用会报找不到）。这是 DDL 与
     prepared statement 缓存之间的老问题，不在本次改动范围内。
-15. `ALTER FUNCTION ... COST/ROWS/SET/LEAKPROOF/WINDOW` 全部只改 DDL，调用行为和优化器行为都不变；
+18. `ALTER FUNCTION ... COST/ROWS/SET/LEAKPROOF/WINDOW` 全部只改 DDL，调用行为和优化器行为都不变；
     其中 `SET` 如果不生效，`SET search_path` 也就不会影响函数体里未限定表名的解析（仍按调用方 schema）。
-16. `SECURITY DEFINER` 依赖 DDL 里的 `OWNER TO`：如果属主用户被删掉了，调用会报 `USER_NOT_FOUND_1`；
+19. `SECURITY DEFINER` 依赖 DDL 里的 `OWNER TO`：如果属主用户被删掉了，调用会报 `USER_NOT_FOUND_1`；
     属主的权限就是嵌套会话的权限，Lealone 没有函数级的 EXECUTE 权限，所以“谁能调用这个函数”
     不受属主控制。
-17. `DROP/ALTER FUNCTION` 的签名比较只看类型（`Value` 类型 id），`varchar(10)` 与 `varchar`、
+20. `DROP/ALTER FUNCTION` 的签名比较只看类型（`Value` 类型 id），`varchar(10)` 与 `varchar`、
     `numeric(10,2)` 与 `numeric` 视为同一类型；比较的是**入参**个数与类型，参数模式关键字
     （`IN/OUT/INOUT/VARIADIC`）会被读掉但写出来的每个类型仍占一个位置，所以和 PostgreSQL 一样只写
     IN/INOUT 参数即可（`DROP FUNCTION f(OUT int)` 在只有 OUT 参数的函数上会报函数不存在）。
-18. `ALTER FUNCTION` 一次只能带一个动作（和 PostgreSQL 一致），例如改易变性、改 `COST` 要分两条语句。
-19. `COMMENT ON FUNCTION` 的注释按**函数名**存（和 `COMMENT ON ALIAS` 共用一份 key），
+21. `ALTER FUNCTION` 一次只能带一个动作（和 PostgreSQL 一致），例如改易变性、改 `COST` 要分两条语句。
+22. `COMMENT ON FUNCTION` 的注释按**函数名**存（和 `COMMENT ON ALIAS` 共用一份 key），
     不支持重载所以没有歧义；但函数被 `OR REPLACE` 重建后注释会保留（PostgreSQL 也是保留）。
-20. `ALTER FUNCTION` 只支持 `SqlFunction`/`PlpgSqlFunction`；`CREATE ALIAS` 建的 Java 函数、
+23. `ALTER FUNCTION` 只支持 `SqlFunction`/`PlpgSqlFunction`；`CREATE ALIAS` 建的 Java 函数、
     `CREATE AGGREGATE` 建的对象都报 `FEATURE_NOT_SUPPORTED`。
-21. `DROP FUNCTION/PROCEDURE` 现在按 RESTRICT 语义检查依赖：有其它例程的函数体/DEFAULT引用它时
+24. `DROP FUNCTION/PROCEDURE` 现在按 RESTRICT 语义检查依赖：有其它例程的函数体/DEFAULT引用它时
     报 90107（不是 PG 的 2BP01），**没有实现 CASCADE**；依赖分析是文本级的，同名重载只按名字匹配，
     可能比 PG 更保守。
+
+## 八、当前完成度与剩余缺口
+
+函数线的整体完成度、PG 回归用例的覆盖情况，统一维护在 `docs/PG_REGRESS.md` 第十一节
+"当前完成度与剩余缺口"（一张表：能力 / 状态 / 还差什么）。和函数直接相关的剩余项：
+
+* `function_sql.setof_inline`：SQL 函数 SETOF 体内联进执行计划没做（`EXPLAIN` 里只有函数表），
+  而且 runner 还不能断言多行计划文本；
+* `function_sql.partition_ops`：没有 `CREATE OPERATOR CLASS`；
+* 函数侧已知差异（`SECURITY DEFINER`/`SET ROLE`/授权默认值/`refcursor` 等）见 `docs/PROCEDURE.md` 第五节。
+
