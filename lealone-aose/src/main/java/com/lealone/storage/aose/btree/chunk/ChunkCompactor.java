@@ -162,10 +162,12 @@ public class ChunkCompactor {
         int size = old.size();
         long maxBytesToWrite = Chunk.MAX_SIZE;
         for (; index < size; index++) {
-            bytes += old.get(index).sumOfLivePageLength;
-            if (bytes > maxBytesToWrite) // 不能超过chunk的最大容量
+            long next = bytes + old.get(index).sumOfLivePageLength;
+            if (next > maxBytesToWrite) // 不能超过chunk的最大容量
                 break;
+            bytes = next;
         }
-        return index == size ? old : old.subList(0, index + 1);
+        // index已经超出容量，不能包含进来
+        return index == size ? old : old.subList(0, index);
     }
 }

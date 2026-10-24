@@ -260,6 +260,9 @@ public class ClientSession extends SessionBase implements LobLocalStorage.LobRea
                 if (ack.buff != null && ack.buff.length > 0) {
                     System.arraycopy(ack.buff, 0, buff, off, ack.buff.length);
                     ac.setAsyncResult(ack.buff.length);
+                } else {
+                    // 读到末尾，服务端返回0个字节，这里也要结束回调，否则调用者会一直等下去
+                    ac.setAsyncResult(0);
                 }
             });
             return ac.get();
