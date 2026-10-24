@@ -24,22 +24,18 @@ public class PgFunctionDefectTest extends SqlTestBase {
         setEmbedded(true);
     }
 
-    // RETURNS SETOF VOID: 每一行都是NULL, 不能是Java序列化字节
+    // RETURNS SETOF VOID: 和PostgreSQL一致, 不返回任何行(也不能是Java序列化字节)
     @Test
     public void testSetofVoid() throws Exception {
         executeUpdate("CREATE OR REPLACE FUNCTION sv2() RETURNS SETOF VOID AS $$ SELECT 1 $$");
         try (Statement s = conn.createStatement();
                 ResultSet rs = s.executeQuery("SELECT * FROM sv2()")) {
-            assertTrue(rs.next());
-            assertNull(rs.getString(1));
             assertFalse(rs.next());
         }
         // VOID不关心函数体返回多少列
         executeUpdate("CREATE OR REPLACE FUNCTION sv3() RETURNS SETOF VOID AS $$ SELECT 1, 2 $$");
         try (Statement s = conn.createStatement();
                 ResultSet rs = s.executeQuery("SELECT * FROM sv3()")) {
-            assertTrue(rs.next());
-            assertNull(rs.getString(1));
             assertFalse(rs.next());
         }
         // 标量VOID仍然正常

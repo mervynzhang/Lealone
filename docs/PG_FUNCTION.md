@@ -88,8 +88,8 @@ SELECT var_count(1, 2, 3);  -- 3
 2. **标量函数**：取结果集**第一行第一列**作为返回值；结果集没有行时返回 `NULL`。
 3. **`RETURNS SETOF type`**：函数返回多行，每行只有一列，值的类型是声明的 `type`。
    列名和 PostgreSQL 一样是**函数名**（未加引号的标识符在 Lealone 里默认转成大写）。
-   当 `type` 是 `VOID` 时结果列类型是 `NULL`，函数体返回多少列都不关心，每一行都是一个空值
-   （PG 官方回归里 setof void 是 0 行，本分支按“每行空值”的约定实现，见 `PG_REGRESS.md` N1）。
+   当 `type` 是 `VOID` 时结果列类型是 `NULL`，和 PostgreSQL 一样**不返回任何行**，
+   函数体返回什么、返回多少列都不影响（PG 官方回归 `voidtest5` 的期望输出就是 `(0 rows)`）。
 4. **`RETURNS TABLE(c1 t1, c2 t2, ...)`**：函数返回多行多列，结果列名/类型就是声明的那些。
    至少声明一列，列名不能重复（重名报 `SYNTAX_ERROR_1`）。
 5. **表函数调用**：setof 函数可以出现在 `FROM` 里，调用形式和表一样，可以带参数、别名、
@@ -290,6 +290,8 @@ PostgreSQL 允许 `f(int)` 与 `f(varchar)` 并存，Lealone 目前做不到。�
 12. 多个 OUT 参数时函数返回 `ValueResultSet`，所以 `SELECT f(1)` 这种“把整行当一个值”的写法不可用，
     必须写成 `SELECT * FROM f(1)`；函数体返回 0 行时得到 0 行结果（PostgreSQL 这里返回一行 NULL 记录）。
 13. `VARIADIC` 调用时传单个 NULL 会被当成“一个 NULL 元素”，PostgreSQL 会把它当成 NULL 数组。
+14. `CREATE OR REPLACE FUNCTION` 的报错优先级和 PG 相反：Lealone 先校验函数体再看重名，
+    所以“同名函数已存在 + 新函数体非法”时报的是函数体错误，PG 会先报重名。不影响正确性。
 14. DDL 回滚后，同一个 session 里之前 prepare 过的 `SELECT f(...)` 可能命中缓存的执行计划，
     仍然返回旧结果（函数对象其实已经回滚掉了，新 session 调用会报找不到）。这是 DDL 与
     prepared statement 缓存之间的老问题，不在本次改动范围内。
