@@ -497,5 +497,10 @@ public interface SQLStatement extends SQLCommand {
      */
     int DROP_PROCEDURE = 152;
 
+    /**
+     * The type of an ALTER FUNCTION statement.
+     */
+    int ALTER_FUNCTION = 153;
+
     String INTERNAL_SAVEPOINT = "_INTERNAL_SAVEPOINT_";
 }

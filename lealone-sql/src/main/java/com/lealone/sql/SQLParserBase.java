@@ -81,6 +81,7 @@ import com.lealone.sql.config.LealoneConfig;
 import com.lealone.sql.ddl.AlterDatabase;
 import com.lealone.sql.ddl.AlterIndexRename;
 import com.lealone.sql.ddl.AlterSchemaRename;
+import com.lealone.sql.ddl.AlterSqlFunction;
 import com.lealone.sql.ddl.AlterSequence;
 import com.lealone.sql.ddl.AlterTableAddConstraint;
 import com.lealone.sql.ddl.AlterTableAlterColumn;
@@ -5501,6 +5502,46 @@ public class SQLParserBase implements SQLParser {
         return toIntArray(typeIds);
     }
 
+    protected StatementBase parseAlterSqlFunction() {
+        boolean ifExists = readIfExists(false);
+        String functionName = readIdentifierWithSchema();
+        AlterSqlFunction command = new AlterSqlFunction(session, getSchema());
+        command.setFunctionName(functionName);
+        command.setIfExists(ifExists);
+        command.setArgumentTypeIds(parseFunctionArgumentTypeList());
+        if (readIf("RENAME")) {
+            read("TO");
+            command.setNewName(readUniqueIdentifier());
+        } else if (readIf("OWNER")) {
+            read("TO");
+            command.setOwnerName(readUniqueIdentifier());
+        } else if (readIf("SET")) {
+            if (isToken("SCHEMA")) {
+                // 换schema要移动对象，这里不支持
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "ALTER FUNCTION ... SET SCHEMA");
+            }
+            String name = readColumnIdentifier();
+            if (!readIf("=")) {
+                readIf("TO");
+            }
+            command.setConfigItem(name, readFunctionConfigValue());
+        } else if (readIf("RESET")) {
+            if (readIf("ALL")) {
+                command.setResetAll(true);
+            } else {
+                command.setResetConfigName(readColumnIdentifier());
+            }
+        } else {
+            FunctionAttributes attributes = new FunctionAttributes();
+            if (!readFunctionAttribute(attributes)) {
+                throw getSyntaxError();
+            }
+            command.setAttributes(attributes);
+        }
+        return command;
+    }
+
     protected Query parseWith() {
         boolean recursive = readIf("RECURSIVE");
         do { // 支持多个逗号分隔的CTE
@@ -5621,6 +5662,8 @@ public class SQLParserBase implements SQLParser {
             return parseAlterSequence();
         } else if (readIf("VIEW")) {
             return parseAlterView();
+        } else if (readIf("FUNCTION")) {
+            return parseAlterSqlFunction();
         } else if (readIf("DATABASE")) {
             return parseAlterDatabase();
         } else if (readIf("CATALOG")) {
