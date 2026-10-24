@@ -893,7 +893,7 @@ public class InfoMetaTable extends MetaTable {
                             // DATA_TYPE
                             "" + DataType.convertTypeToSQLType(method.getDataType()),
                             // TYPE_NAME
-                            DataType.getDataType(method.getDataType()).name,
+                            getMetaTypeName(method.getDataType()),
                             // COLUMN_COUNT INT
                             "" + method.getParameterCount(),
                             // RETURNS_RESULT SMALLINT
@@ -1542,6 +1542,14 @@ public class InfoMetaTable extends MetaTable {
             return "INOUT";
         }
         return "IN";
+    }
+
+    // 触发器函数的返回类型是Value.UNKNOWN, 没有对应的DataType,
+    // 不能因为一个函数的类型特殊就让整张元表对任何查询都不可用
+    private static String getMetaTypeName(int type) {
+        if (type == Value.UNKNOWN)
+            return "UNKNOWN";
+        return DataType.getDataType(type).name;
     }
 
     private void addFunctionParameters(ArrayList<Row> rows, String catalog, SqlFunction function) {
