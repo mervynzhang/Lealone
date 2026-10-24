@@ -49,7 +49,6 @@
 | # | 问题 | 位置 |
 |---|---|---|
 | 17 | 每条 UPDATE/DELETE 多一次 `map.put`（页锁 + 可能分裂） | `AOTransactionMap.java:453-457` |
-| 18 | 等待期间约 100 次全调度 pump/ms，白烧一个核 | `StatementBase.java:553-565` |
 | 19 | 每次事务性叶子页写多一次 `getCommittedObjects` + 每行 `copySelf`，最坏 4 次序列化，且重试 3 次后静默放弃 | `RowStorageLeafPage.java:87-127` |
 | 20 | 全量备份也把整个库读两遍（crc 预读 + 写 zip） | `StorageBase.java:275-300` |
 | 21 | 每个游标一份 HashMap 随扫描行数无界增长 | `StandardSecondaryIndex.java:326,385-411` |
@@ -61,7 +60,11 @@
 | 22 | SLT 门禁假绿：statement 失败永不计入门禁；baseline 只比"每文件失败计数" | `SltRunner.java:108-110`、`SltBaseline.java:156-159` |
 | 24 | 测试不 hermetic：不清理 `target/test-data` 再跑会有 131 errors；跑套件会改写被跟踪的 `orm/generated/*.java` | `TestBase.java:51`、`SqlTestBase` 默认库 |
 
-## 三、判定为"问题不成立或未能复现"（不动）
+## 三、判定为"问题不成立或收益未证实"（不动）
+
+| 项 | 复审建议 | 实测结论 |
+|---|---|---|
+| `StatementBase.syncExecute` 等待循环"100 次全调度 pump/ms 白烧一个核" | 改成 1 次 pump + 1ms | **未证实，未采纳**。两个场景实测（4 线程争抢同一行的 1200 次更新；以及"持锁者闲置 2 秒"的纯等待场景）：等待期间进程 CPU 都是 ~150 ms / 2 秒（约占单核 7%），改与不改的 CPU 与墙钟差异都在噪声内（墙钟甚至偶有变差）。原因是每次 pump 在无活可干时开销很小，且当前等待主要走 `scheduler.await()` 而不是这个自旋循环。**结论：这不是热路径瓶颈，改它属于无收益改动。**
 
 | 提交 | 结论 |
 |---|---|
