@@ -5,13 +5,20 @@
  */
 package com.lealone.sql.dml;
 
+import java.util.ArrayList;
+
+import com.lealone.common.exceptions.DbException;
+import com.lealone.common.util.StatementBuilder;
+import com.lealone.db.api.ErrorCode;
 import com.lealone.db.async.AsyncResultHandler;
 import com.lealone.db.async.Future;
 import com.lealone.db.result.LocalResult;
 import com.lealone.db.result.Result;
+import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
+import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
 import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.PreparedSQLStatement;
@@ -20,6 +27,7 @@ import com.lealone.sql.executor.YieldableBase;
 import com.lealone.sql.executor.YieldableCallProcedure;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.ExpressionColumn;
+import com.lealone.sql.expression.ValueExpression;
 
 /**
  * This class represents the statement
@@ -29,18 +37,80 @@ import com.lealone.sql.expression.ExpressionColumn;
  */
 public class CallProcedure extends Call {
 
-    private final SqlProcedure procedure;
+    // 解析时先拿到同名的所有候选过程，prepare阶段再按实参类型消解
+    private SqlProcedure procedure;
+    private final ArrayList<SqlProcedure> candidates;
     private final Expression[] args;
-    private final Expression[] resultExpressions;
     // OUT/INOUT参数对应的结果列
-    private final Expression[] outputExpressions;
+    private Expression[] outputExpressions;
+    // 过程名+更新数的结果列
+    private Expression[] resultExpressions;
+    // 字符串字面量在PostgreSQL里没有类型，重载消解时按参数声明的类型解析
+    private final boolean[] untypedArguments;
+    private boolean resolved;
     // 过程体里是否有查询语句: -1还没判断, 0没有, 1有
     private int bodyHasQuery = -1;
 
-    public CallProcedure(ServerSession session, SqlProcedure procedure, Expression[] args) {
+    public CallProcedure(ServerSession session, ArrayList<SqlProcedure> candidates, Expression[] args) {
         super(session);
-        this.procedure = procedure;
+        this.candidates = candidates;
         this.args = args;
+        this.untypedArguments = getUntypedArguments(args);
+    }
+
+    private static boolean[] getUntypedArguments(Expression[] args) {
+        boolean[] untyped = new boolean[args.length];
+        for (int i = 0; i < args.length; i++) {
+            untyped[i] = args[i] instanceof ValueExpression && args[i].getType() == Value.STRING;
+        }
+        return untyped;
+    }
+
+    // 实参的静态类型，没有类型的字面量当成UNKNOWN
+    private int[] getArgumentTypeIds() {
+        int[] argumentTypeIds = new int[args.length];
+        for (int i = 0; i < args.length; i++) {
+            argumentTypeIds[i] = untypedArguments[i] ? Value.UNKNOWN : args[i].getType();
+        }
+        return argumentTypeIds;
+    }
+
+    // 按实参类型在候选过程里消解重载，规则和函数重载一致
+    private void resolveOverload() {
+        if (resolved) {
+            return;
+        }
+        int[] argumentTypeIds = getArgumentTypeIds();
+        SqlProcedure best = null;
+        int bestScore = Integer.MAX_VALUE;
+        boolean ambiguous = false;
+        for (int i = 0; i < candidates.size(); i++) {
+            SqlProcedure candidate = candidates.get(i);
+            int score = candidate.getMatchScore(argumentTypeIds);
+            if (score == SqlFunction.MATCH_NONE) {
+                continue;
+            }
+            if (score < bestScore) {
+                bestScore = score;
+                best = candidate;
+                ambiguous = false;
+            } else if (score == bestScore) {
+                ambiguous = true;
+            }
+        }
+        // 多个重载的匹配程度相同时不猜，和PostgreSQL一样报歧义
+        if (ambiguous) {
+            throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, getSignatureText());
+        }
+        if (best == null) {
+            throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
+        }
+        procedure = best;
+        initResultExpressions();
+        resolved = true;
+    }
+
+    private void initResultExpressions() {
         ExpressionColumn c = new ExpressionColumn(session.getDatabase(),
                 new Column(procedure.getName() + "()", Value.INT));
         resultExpressions = new Expression[] { c };
@@ -57,7 +127,20 @@ public class CallProcedure extends Call {
         }
     }
 
+    // 用于报错信息的调用签名，例如 P(INT, VARCHAR)
+    private String getSignatureText() {
+        StatementBuilder buff = new StatementBuilder(candidates.get(0).getName()).append('(');
+        int[] argumentTypeIds = getArgumentTypeIds();
+        for (int i = 0; i < argumentTypeIds.length; i++) {
+            buff.appendExceptFirst(", ");
+            buff.append(argumentTypeIds[i] == Value.UNKNOWN ? "UNKNOWN"
+                    : DataType.getDataType(argumentTypeIds[i]).name);
+        }
+        return buff.append(')').toString();
+    }
+
     public SqlProcedure getProcedure() {
+        resolveOverload();
         return procedure;
     }
 
@@ -66,11 +149,13 @@ public class CallProcedure extends Call {
     }
 
     public Expression[] getResultExpressions() {
+        resolveOverload();
         return resultExpressions;
     }
 
     // CALL的结果列：有OUT/INOUT参数时是OUT/INOUT参数，否则是过程名+更新数
     public Expression[] getOutputExpressions() {
+        resolveOverload();
         return outputExpressions;
     }
 
@@ -89,6 +174,7 @@ public class CallProcedure extends Call {
     // 有OUT/INOUT参数的过程总是返回一行，所以也按查询语句执行
     @Override
     public boolean isQuery() {
+        resolveOverload();
         if (procedure.hasOutputParameters())
             return true;
         if (bodyHasQuery < 0) {
@@ -101,6 +187,7 @@ public class CallProcedure extends Call {
     public PreparedSQLStatement prepare() {
         for (int i = 0, len = args.length; i < len; i++)
             args[i] = args[i].optimize(session);
+        resolveOverload();
         return this;
     }
 

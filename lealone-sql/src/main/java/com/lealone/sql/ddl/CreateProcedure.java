@@ -91,6 +91,34 @@ public class CreateProcedure extends SchemaStatement {
         }
     }
 
+    // 只有入参参与过程签名，OUT参数不影响重载
+    private int[] getInputParameterTypeIds() {
+        int count = 0;
+        for (int mode : parameterModes) {
+            if (mode != SqlProcedure.PARAM_OUT) {
+                count++;
+            }
+        }
+        int[] types = new int[count];
+        int i = 0;
+        for (int p = 0; p < parameterModes.size(); p++) {
+            if (parameterModes.get(p) != SqlProcedure.PARAM_OUT) {
+                types[i++] = parameters.get(p).getType();
+            }
+        }
+        return types;
+    }
+
+    // 找出入参类型都相同的已有过程，也就是和这次CREATE冲突的那个重载
+    private boolean findSameSignature(int[] inputTypeIds) {
+        for (SqlProcedure p : schema.findProcedures(session, procedureName)) {
+            if (p.matchesSignature(inputTypeIds)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public int update() {
         session.getUser().checkAdmin();
@@ -98,7 +126,9 @@ public class CreateProcedure extends SchemaStatement {
         if (lock == null)
             return -1;
 
-        if (schema.findProcedure(session, procedureName) != null) {
+        // 参数类型不同的重载可以共存，只有入参签名完全相同的才算重复
+        int[] inputTypeIds = getInputParameterTypeIds();
+        if (findSameSignature(inputTypeIds)) {
             if (ifNotExists)
                 return 0;
             throw DbException.get(ErrorCode.PROCEDURE_ALREADY_EXISTS_1, procedureName);

@@ -20,16 +20,19 @@ public class LealoneSQLParser extends SQLParserBase {
     }
 
     // CALL procedureName(...) 先按存储过程解析，找不到再退回原来的函数调用表达式，
-    // 这样H2遗留的CALL语法和新的存储过程语法可以共存
+    // 这样H2遗留的CALL语法和新的存储过程语法可以共存。
+    // 同名的过程可能有多个重载，先拿到所有候选，等prepare阶段按实参类型消解
     @Override
     protected Call parseCall() {
-        SqlProcedure procedure = null;
-        if (currentTokenType == IDENTIFIER)
-            procedure = getSchema(session.getCurrentSchemaName()).findProcedure(session, currentToken);
-        if (procedure == null)
+        ArrayList<SqlProcedure> procedures = null;
+        if (currentTokenType == IDENTIFIER) {
+            procedures = getSchema(session.getCurrentSchemaName()).findProcedures(session,
+                    currentToken);
+        }
+        if (procedures == null || procedures.isEmpty())
             return super.parseCall();
 
-        CallProcedure command = new CallProcedure(session, procedure, parseProcedureArgs());
+        CallProcedure command = new CallProcedure(session, procedures, parseProcedureArgs());
         currentStatement = command;
         return command;
     }
