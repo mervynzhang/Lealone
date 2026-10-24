@@ -446,14 +446,46 @@ grant execute on procedure ptest10 to cp_grant_user;
 
 -- @case procedure.privileges
 -- @pg create_procedure.sql:258-267
--- 缺失: Lealone 没有 REVOKE EXECUTE ON PROCEDURE / SET ROLE 这套过程权限语义
-create user regress_cp_user1;
+-- 适配: PG 原句逐条保留(CREATE USER / GRANT INSERT / REVOKE EXECUTE FROM PUBLIC / SET ROLE / CALL),
+--       只补上结果断言; 放行那次 CALL 的参数用 'priv' 方便最后清理(不影响后面的用例)
+create user regress_cp_user1 password 'x';
+> update count: 0
+
 grant insert on cp_test to regress_cp_user1;
+> update count: 0
+
+-- 过程本来没有授权记录时人人可调用, REVOKE FROM PUBLIC 之后 PUBLIC 就被拒了
 revoke execute on procedure ptest1(text) from public;
+> update count: 0
+
 set role regress_cp_user1;
-call ptest1('a');  -- PG 期望: 权限不足
+> update count: 0
+
+-- PG 原句: 权限不足(42501)
+call ptest1('a');
+> exception 42501
+
 reset role;
--- PG 期望: 第一条 CALL 报 42501, 授权后再 CALL 成功
+> update count: 0
+
+grant execute on procedure ptest1(text) to regress_cp_user1;
+> update count: 0
+
+set role regress_cp_user1;
+> update count: 0
+
+call ptest1('priv');
+> update count: 1
+
+reset role;
+> update count: 0
+
+-- 适配: 清理这次插入的行, 后面的用例依赖 cp_test 的行数
+delete from cp_test where b = 'priv';
+> update count: 1
+
+drop user regress_cp_user1;
+> update count: 0
 
 -- @case procedure.routine_syntax
 -- @pg create_procedure.sql:272-278
