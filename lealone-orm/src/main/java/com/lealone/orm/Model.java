@@ -744,6 +744,9 @@ public abstract class Model<T extends Model<T>> implements com.lealone.db.value.
     }
 
     protected T decode0(Object obj, JsonFormat format) {
+        // 服务调用返回null时直接返回null，否则obj.toString()会抛NPE
+        if (obj == null)
+            return null;
         if (format == null)
             format = getJsonFormat();
         Map<String, Object> map;
