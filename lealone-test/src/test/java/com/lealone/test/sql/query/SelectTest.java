@@ -140,8 +140,8 @@ public class SelectTest extends SqlTestBase {
         sql = "select sum(f3) from SelectTest";
         assertEquals(418, getIntValue(1, true));
         sql = "select avg(f3) from SelectTest";
-        // 因为f3是int，所以内部已进行4舍5入
-        assertEquals(34.0, getDoubleValue(1, true), 0.2);
+        // 整数列的AVG不再截断，418/12
+        assertEquals(418.0 / 12, getDoubleValue(1, true), 0.0001);
     }
 
     void testForUpdate() throws Exception {
