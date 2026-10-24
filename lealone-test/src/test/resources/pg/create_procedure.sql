@@ -344,16 +344,32 @@ call sum(1);
 
 -- @case procedure.alter_and_bad_def
 -- @pg create_procedure.sql:239-249
--- 缺失: Lealone 不支持 ALTER PROCEDURE/ALTER FUNCTION, 不支持 WINDOW/STRICT/VARIADIC/DEFAULT 参数
+-- 适配: PG 的过程只接受 SECURITY/SET 这一小撮属性, WINDOW/STRICT 会报错; Lealone 的过程和
+--       函数共用同一套属性子句(ALTER PROCEDURE 本轮才支持), 所以前两条建过程和 ALTER PROCEDURE
+--       按 Lealone 的实际行为断言成功;
+--       最后的 DROP PROCEDURE ptest1 去掉了, 因为后面的清理用例还要用 ptest1
 create procedure ptestx() language sql window as $$ insert into cp_test values (1, 'a') $$;
+> update count: 0
+
+-- 同名同签名的过程只能有一个, 再建一次报 90150
 create procedure ptestx() language sql strict as $$ insert into cp_test values (1, 'a') $$;
+> exception 90150
+
+-- Lealone 的过程不支持 VARIADIC 参数: VARIADIC写在参数名位置上会被当成类型名, 报42102
 create procedure ptestx(a variadic int[], b out int) language sql
   as $$ select a[1] $$;
+> exception 42102
+
 alter procedure ptest1(text) strict;
-alter function ptest1(text) volatile;      -- PG 期望: 失败(不是函数)
-alter procedure cp_testfunc1(int) volatile; -- PG 期望: 失败(不是过程)
-drop procedure ptest1;
--- PG 期望: 前面几条建过程/ALTER 都报错, 最后 DROP PROCEDURE ptest1 成功
+> update count: 0
+
+-- PG 期望: 42809 ("ptest1" is not a function), Lealone 报 90077(函数不存在)
+alter function ptest1(text) volatile;
+> exception 90077
+
+-- PG 期望: 42809 ("cp_testfunc1" is not a procedure), Lealone 报 90151(过程不存在)
+alter procedure cp_testfunc1(int) volatile;
+> exception 90151
 
 -- @case procedure.drop_wrong_kind
 -- @pg create_procedure.sql:276-278
@@ -366,6 +382,29 @@ drop procedure cp_testfunc1;
 
 drop procedure nonexistent;
 > exception 90151
+
+-- @case procedure.grant_execute
+-- @pg create_procedure.sql:258-267
+-- 适配: Lealone 没有 SET ROLE 和 PUBLIC 角色, 过程权限也不参与调用检查, 所以这里只验证
+--       GRANT/REVOKE EXECUTE ON PROCEDURE|FUNCTION 的解析、过程重载的签名匹配和授权落库
+create user cp_grant_user password 'x';
+> update count: 0
+
+grant execute on procedure ptest1(text) to cp_grant_user;
+> update count: 0
+
+revoke execute on procedure ptest1(text) from cp_grant_user;
+> update count: 0
+
+grant execute on function cp_testfunc1(int) to cp_grant_user;
+> update count: 0
+
+revoke execute on function cp_testfunc1(int) from cp_grant_user;
+> update count: 0
+
+-- 有重载时必须写参数类型
+grant execute on procedure ptest10 to cp_grant_user;
+> exception 90152
 
 -- @case procedure.privileges
 -- @pg create_procedure.sql:258-267
