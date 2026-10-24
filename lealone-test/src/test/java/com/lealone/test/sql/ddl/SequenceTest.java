@@ -148,10 +148,7 @@ public class SequenceTest extends SqlAssertTestBase {
     // 以下为已确认缺陷（期望值按 SQL 标准与 H2 2.4.240 实测）
     // ------------------------------------------------------------------
 
-    // BUG: 带 CYCLE 的序列到 MAXVALUE 之后不回绕，而是抛 90009 SEQUENCE_ATTRIBUTES_INVALID。
-    // 期望: 1,2,3 之后回到 1（H2 行为）；实际: 第 4 次 NEXTVAL 报
-    // "Unable to create or alter sequence ... invalid attributes (start value "4", max value "3")"。
-    @Ignore("BUG: CYCLE does not wrap around; Nth+1 NEXTVAL fails with 90009 instead of returning MINVALUE")
+    // 带 CYCLE 的序列到 MAXVALUE 之后回绕到 MINVALUE（H2 行为）
     @Test
     public void cycleWrapsAtBoundary() {
         drop("seq_c1");
@@ -163,9 +160,7 @@ public class SequenceTest extends SqlAssertTestBase {
         drop("seq_c1");
     }
 
-    // BUG: 不带 CYCLE 的序列耗尽时错误码是 90009（属性非法），而不是 90006 SEQUENCE_EXHAUSTED。
-    // 期望: 90006 "Sequence has run out of numbers"（H2 行为）；实际: 90009。
-    @Ignore("BUG: exhausted sequence raises 90009 SEQUENCE_ATTRIBUTES_INVALID instead of 90006 SEQUENCE_EXHAUSTED")
+    // 不带 CYCLE 的序列耗尽时报 90006 SEQUENCE_EXHAUSTED（H2 行为）
     @Test
     public void exhaustedSequenceErrorCode() {
         drop("seq_c2");
