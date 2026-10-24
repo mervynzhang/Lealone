@@ -322,7 +322,12 @@ public class Operation extends Expression {
             DbException.throwInternalError("type=" + opType);
         }
         if (left.isConstant() && (right == null || right.isConstant())) {
-            return ValueExpression.get(getValue(session));
+            try {
+                return ValueExpression.get(getValue(session));
+            } catch (DbException e) {
+                // 常量折叠时可能出错，比如 CASE/COALESCE 里不会被求值的分支有除以0，
+                // 这时保留原来的表达式，等真正执行到再报错
+            }
         }
         return this;
     }
