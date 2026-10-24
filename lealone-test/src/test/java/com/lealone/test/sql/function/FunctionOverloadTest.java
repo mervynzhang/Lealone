@@ -13,6 +13,7 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.TimeZone;
 
 import org.junit.Test;
 
@@ -156,6 +157,27 @@ public class FunctionOverloadTest extends SqlTestBase {
         assertEquals("date", getStringValue(2));
     }
 
+    // 运行期默认时区被改过之后(比如同一个JVM里别的用例调用TimeZone.setDefault)，
+    // 隐式转换的结果也必须和显式CAST逐字节一致
+    @Test
+    public void testDateTimeConversionAfterTimeZoneChange() throws Exception {
+        executeUpdate("CREATE FUNCTION fz(a TIMESTAMP) RETURNS TIMESTAMP AS $$ SELECT a $$");
+        executeUpdate("CREATE FUNCTION fz2(a DATE) RETURNS DATE AS $$ SELECT a $$");
+        TimeZone defaultZone = TimeZone.getDefault();
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("GMT+8"));
+            executeQuery("SELECT fz(CAST('2020-01-02' AS DATE)), "
+                    + "CAST(CAST('2020-01-02' AS DATE) AS TIMESTAMP)");
+            assertEquals(getStringValue(2), getStringValue(1));
+            assertEquals(rs.getTimestamp(2).getTime(), rs.getTimestamp(1).getTime());
+            // DATE参数按墙上时间原样传进函数体
+            executeQuery("SELECT fz2(CAST('2020-01-02' AS DATE)), CAST('2020-01-02' AS DATE)");
+            assertEquals(getStringValue(2), getStringValue(1));
+        } finally {
+            TimeZone.setDefault(defaultZone);
+        }
+    }
+
     // 隐式转换矩阵: 只允许PostgreSQL里implicit的类型对，其余必须显式CAST
     @Test
     public void testImplicitConversionMatrix() throws Exception {
@@ -185,6 +207,9 @@ public class FunctionOverloadTest extends SqlTestBase {
         executeQuery("SELECT fm4(CAST('2020-01-02' AS DATE)), "
                 + "CAST(CAST('2020-01-02' AS DATE) AS TIMESTAMP)");
         assertEquals(getStringValue(2), getStringValue(1));
+        // 时间戳数值也必须逐字节一致: 隐式转换不能过Timestamp/epoch那套时区换算
+        assertEquals(rs.getTimestamp(2).getTime(), rs.getTimestamp(1).getTime());
+        assertEquals(rs.getTimestamp(2).getNanos(), rs.getTimestamp(1).getNanos());
         assertEquals(Types.TIMESTAMP, rs.getMetaData().getColumnType(1));
         executeUpdate("CREATE FUNCTION fm5(a DATE) RETURNS DATE AS $$ SELECT a $$");
         executeQueryThanAssertErrorCode("SELECT fm5(CAST('2020-01-02 03:04:05' AS TIMESTAMP))",
