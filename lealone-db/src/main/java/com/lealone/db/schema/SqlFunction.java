@@ -283,7 +283,7 @@ public class SqlFunction extends FunctionAlias {
 
     /**
      * 判断函数是否匹配DROP FUNCTION/ALTER FUNCTION里写的参数类型列表。
-     * 不支持重载，所以只比较入参的类型；没写参数类型列表时总是匹配。
+     * 只比较入参的类型；没写参数类型列表时总是匹配。
      */
     public boolean matchesSignature(int[] argumentTypeIds) {
         if (argumentTypeIds == null) {
@@ -298,6 +298,56 @@ public class SqlFunction extends FunctionAlias {
             }
         }
         return true;
+    }
+
+    /**
+     * 同名函数按参数类型重载，所以schema里存函数对象的key要带上入参签名。
+     * 参数类型相同的函数对应同一个key，不同时各占一个key。
+     */
+    public String getOverloadKey() {
+        return getOverloadKey(getName());
+    }
+
+    public String getOverloadKey(String name) {
+        if (parameterTypeIds == null) {
+            return name;
+        }
+        StatementBuilder buff = new StatementBuilder(name).append('(');
+        for (int i = 0; i < inputParameterCount; i++) {
+            int index = inputIndexes[i];
+            buff.appendExceptFirst(",");
+            buff.append(parameterTypeIds[index]);
+            if (parameterTypeIds[index] == Value.ARRAY) {
+                buff.append('/').append(parameterComponentTypes[index]);
+            }
+        }
+        return buff.append(')').toString();
+    }
+
+    /**
+     * 入参的类型id列表，用于重载消解和按签名查找函数。
+     */
+    public int[] getInputParameterTypeIds() {
+        int[] types = new int[inputParameterCount];
+        for (int i = 0; i < inputParameterCount; i++) {
+            types[i] = parameterTypeIds[inputIndexes[i]];
+        }
+        return types;
+    }
+
+    /**
+     * 数组入参的元素类型，非数组参数为-1。
+     */
+    public int getInputParameterComponentType(int inputIndex) {
+        return parameterComponentTypes[inputIndexes[inputIndex]];
+    }
+
+    public int getInputParameterCount() {
+        return inputParameterCount;
+    }
+
+    public boolean isVariadic() {
+        return variadic;
     }
 
     // 用于报错信息的签名，例如 F(INT, VARCHAR)

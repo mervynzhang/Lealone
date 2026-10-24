@@ -177,6 +177,7 @@
 90149=Plugin {0} not found
 90150=Procedure {0} already exists
 90151=Procedure {0} not found
+90152=Function name {0} is not unique, please specify the parameter types
 HY000=General error: {0}
 HY004=Unknown data type: {0}
 HYC00=Feature not supported: {0}

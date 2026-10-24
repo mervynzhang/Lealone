@@ -5,6 +5,7 @@
  */
 package com.lealone.db;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 
 import com.lealone.common.util.CaseInsensitiveMap;
@@ -35,55 +36,78 @@ public class TransactionalDbObjects {
     }
 
     public DbObject find(ServerSession session, String dbObjectName) {
+        return getMap(session).get(dbObjectName);
+    }
+
+    /**
+     * 返回当前事务能看到的所有对象，用于按名字查找同一名字的多个对象(比如重载函数)。
+     */
+    public ArrayList<DbObject> findAll(ServerSession session) {
+        return new ArrayList<>(getMap(session).values());
+    }
+
+    // 返回当前事务能看到的对象表，find和findAll共用同一套版本判断规则
+    private HashMap<String, DbObject> getMap(ServerSession session) {
         if (session == null) {
             if (version <= 0)
-                return dbObjects.get(dbObjectName);
+                return dbObjects;
             else if (old != null) {
-                return old.find(session, dbObjectName);
+                return old.getMap(session);
             } else {
-                return dbObjects.get(dbObjectName);
+                return dbObjects;
             }
         }
         Transaction transaction = session.getTransaction();
         long tid = transaction.getTransactionId();
         if (tid == version || tid == parentVersion) {
-            return dbObjects.get(dbObjectName);
+            return dbObjects;
         } else if (tid < version) {
             // 看看是不是嵌套session更新了
             if (session.getMaxNestedTransactionId() >= version)
-                return dbObjects.get(dbObjectName);
+                return dbObjects;
         }
         Transaction pt = transaction.getParentTransaction();
         if (pt != null && pt.getTransactionId() == version) {
-            return dbObjects.get(dbObjectName);
+            return dbObjects;
         }
         switch (transaction.getIsolationLevel()) {
         case Transaction.IL_REPEATABLE_READ:
         case Transaction.IL_SERIALIZABLE:
             if (tid >= version)
-                return dbObjects.get(dbObjectName);
+                return dbObjects;
             else if (old != null) {
-                return old.find(session, dbObjectName);
+                return old.getMap(session);
             }
-            return dbObjects.get(dbObjectName);
+            return dbObjects;
         case Transaction.IL_READ_COMMITTED:
             if (version <= 0)
-                return dbObjects.get(dbObjectName);
+                return dbObjects;
             else if (old != null) {
-                return old.find(session, dbObjectName);
+                return old.getMap(session);
             }
         default:
-            return dbObjects.get(dbObjectName);
+            return dbObjects;
         }
     }
 
     public void add(DbObject dbObject) {
-        dbObjects.put(dbObject.getName(), dbObject);
+        add(dbObject.getName(), dbObject);
+    }
+
+    /**
+     * 用指定的key存放对象，重载函数用“名字+参数签名”作为key。
+     */
+    public void add(String key, DbObject dbObject) {
+        dbObjects.put(key, dbObject);
     }
 
     public void copyOnAdd(ServerSession session, DbObject dbObject) {
+        copyOnAdd(session, dbObject.getName(), dbObject);
+    }
+
+    public void copyOnAdd(ServerSession session, String key, DbObject dbObject) {
         copy(session);
-        add(dbObject);
+        add(key, dbObject);
     }
 
     public void remove(String dbObjectName) {

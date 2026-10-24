@@ -1916,6 +1916,12 @@ public class ErrorCode {
 
     public static final int PROCEDURE_NOT_FOUND_1 = 90151;
 
+    /**
+     * The error with code <code>90152</code> is thrown when a function name has
+     * multiple overloads and the statement does not specify the parameter types.
+     */
+    public static final int AMBIGUOUS_FUNCTION_NAME_1 = 90152;
+
     // next are 90056, 90110, 90122, 90151
 
     private ErrorCode() {
@@ -1986,6 +1992,8 @@ public class ErrorCode {
             return "42S21";
         case COLUMN_NOT_FOUND_1:
             return "42S22";
+        case AMBIGUOUS_FUNCTION_NAME_1:
+            return "42725";
 
         // 0A: feature not supported
 
