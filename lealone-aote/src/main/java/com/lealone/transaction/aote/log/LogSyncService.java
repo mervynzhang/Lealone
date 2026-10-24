@@ -23,6 +23,7 @@ import com.lealone.db.util.Awaiter;
 import com.lealone.transaction.PendingTransaction;
 import com.lealone.transaction.aote.AOTransaction;
 import com.lealone.transaction.aote.CheckpointService;
+import com.lealone.transaction.aote.log.RedoLogRecord.LocalTransactionRLR;
 
 public abstract class LogSyncService extends Thread {
 
@@ -180,7 +181,10 @@ public abstract class LogSyncService extends Thread {
         scheduler.addPendingTransaction(pt);
 
         LogSyncService[] logSyncServices = t.transactionEngine.getLogSyncServices();
-        Set<Integer> serviceIndexs = t.getUndoLog().getRedoLogServiceIndexs();
+        UndoLog undoLog = ((RedoLogRecord) pt.getRedoLogRecord()).getUndoLog();
+        if (undoLog == null)
+            undoLog = t.getUndoLog();
+        Set<Integer> serviceIndexs = undoLog.getRedoLogServiceIndexs();
         for (int i : serviceIndexs) {
             // 不用写RedoLog的内存表直接返回
             if (i < 0 && serviceIndexs.size() == 1) {
@@ -250,6 +254,15 @@ public abstract class LogSyncService extends Thread {
 
         @Override
         public void asyncWrite(AOTransaction t, RedoLogRecord r) {
+            if (r instanceof LocalTransactionRLR) {
+                UndoLog ul = ((LocalTransactionRLR) r).getUndoLog();
+                // 重复提交时redo log已经写过，由第一次提交负责回调和fsync，
+                // 否则重复的PendingTransaction完成时会把下一条语句的事务清空
+                if (ul != null && ul.isRedoLogSubmitted())
+                    return;
+                if (ul != null)
+                    ul.setRedoLogSubmitted();
+            }
             addPendingTransaction(new PendingTransaction(t, r, nextLogId()), t);
         }
 
