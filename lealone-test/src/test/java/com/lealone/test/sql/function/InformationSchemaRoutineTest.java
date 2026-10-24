@@ -30,7 +30,7 @@ public class InformationSchemaRoutineTest extends SqlTestBase {
     public void testParameters() throws Exception {
         executeUpdate("CREATE FUNCTION isr_f(a INT, b VARCHAR) RETURNS INT AS $$ SELECT a $$");
         executeUpdate(
-                "CREATE PROCEDURE isr_p(a INT, OUT b INT, INOUT c INT) AS 'SELECT a, c'");
+                "CREATE PROCEDURE isr_p(a INT, OUT b INT, INOUT c INT) AS 'SELECT ?, ?'");
 
         executeQuery("SELECT p.ordinal_position, p.parameter_mode, p.parameter_name, p.data_type, "
                 + "p.parameter_default FROM INFORMATION_SCHEMA.PARAMETERS p "
@@ -61,7 +61,7 @@ public class InformationSchemaRoutineTest extends SqlTestBase {
     @Test
     public void testRoutines() throws Exception {
         executeUpdate("CREATE FUNCTION isr_r(a INT) RETURNS INT IMMUTABLE AS $$ SELECT a $$");
-        executeUpdate("CREATE PROCEDURE isr_q(a INT, OUT b INT) AS 'SELECT a, a'");
+        executeUpdate("CREATE PROCEDURE isr_q(a INT, OUT b INT) AS 'SELECT ?, ?'");
 
         executeQuery("SELECT routine_type, data_type, is_deterministic, security_type, "
                 + "external_language FROM INFORMATION_SCHEMA.ROUTINES WHERE routine_name = 'ISR_R'");
