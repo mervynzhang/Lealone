@@ -458,11 +458,16 @@ reset role;
 
 -- @case procedure.routine_syntax
 -- @pg create_procedure.sql:272-278
--- 缺失: Lealone 不支持 ALTER ROUTINE ... RENAME 和 DROP ROUTINE
+-- 适配: ROUTINE 是过程和函数的统称, Lealone 先按过程找再按函数找, 两边都匹配时
+--       报 42725(和 PG 的 42725 name is not unique 一致); cp_testfunc1 是函数
 alter routine cp_testfunc1(int) rename to cp_testfunc1a;
-alter routine cp_testfunc1a rename to cp_testfunc1;
+> update count: 0
+
+alter routine cp_testfunc1a(int) rename to cp_testfunc1;
+> update count: 0
+
 drop routine cp_testfunc1(int);
--- PG 期望: 重命名往返成功, DROP ROUTINE 成功
+> update count: 0
 
 -- ---------------------------------------------------------------------------
 -- 清理
