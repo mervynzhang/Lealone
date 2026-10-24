@@ -17,6 +17,9 @@ import com.lealone.test.TestBase;
 /**
  * ANALYZE (SELECTIVITY aggregation) must not fail or return bogus values when the
  * table scan runs into tombstones of deleted rows.
+ *
+ * 这是回归护栏，不是那个 NPE 的稳定复现用例：该 NPE 只在 page split + checkpoint
+ * 并发时才出现（ANALYZE 作为杂项任务在调度线程执行，扫到没有锁的墓碑行）。
  */
 public class AnalyzeTombstoneTest extends TestBase {
 
