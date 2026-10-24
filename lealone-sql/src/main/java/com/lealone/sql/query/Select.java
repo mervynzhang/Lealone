@@ -637,6 +637,9 @@ public class Select extends Query {
                 if (index.getIndexType().isHash()) {
                     continue;
                 }
+                if (index.isBuilding()) {
+                    continue; // 正在构建的索引数据还不全，不能用来满足排序
+                }
                 IndexColumn[] indexCols = index.getIndexColumns();
                 if (indexCols.length < sortCols.length) {
                     continue;
