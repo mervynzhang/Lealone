@@ -446,6 +446,13 @@ public class ValueLob extends Value {
                     Constants.IO_BUFFER_SIZE);
         }
         long byteCount = (type == Value.BLOB) ? precision : -1;
+        if (handler == null) {
+            // 既是"已存储的LOB"(不在内存、也不是临时文件)又没有data handler, 这是不该出现的状态:
+            // 直接用NPE报出来只能看到 "this.handler is null", 定位不到是哪张表哪个LOB,
+            // 这里换成带 lobId/tableId 的内部错误, 便于定位产生这种值的地方。
+            throw DbException.getInternalError(
+                    "LOB has no data handler, lobId: " + lobId + ", tableId: " + tableId);
+        }
         try {
             return handler.getLobStorage().getInputStream(this, hmac, byteCount);
         } catch (IOException e) {
