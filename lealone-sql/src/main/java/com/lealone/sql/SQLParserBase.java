@@ -1871,7 +1871,7 @@ public class SQLParserBase implements SQLParser {
             alias = readAliasIdentifier();
         } else if (currentTokenType == IDENTIFIER) {
             // left and right are not keywords (because they are functions as well)
-            if (!isToken("LEFT") && !isToken("RIGHT") && !isToken("FULL")) {
+            if (!isToken("LEFT") && !isToken("RIGHT") && !isToken("FULL") && !isToken("USING")) {
                 alias = readAliasIdentifier();
             }
         }
@@ -1935,10 +1935,8 @@ public class SQLParserBase implements SQLParser {
                 // the right hand side is the 'inner' table usually
                 TableFilter newTop = readTableFilter();
                 newTop = readJoin(newTop);
-                Expression on = null;
-                if (readIf("ON")) {
-                    on = readExpression();
-                }
+                // RIGHT JOIN时右边的表先输出，所以合并列取右边的
+                Expression on = readJoinCondition(top, newTop, false);
                 addJoin(newTop, top, true, on);
                 top = newTop;
                 last = newTop;
@@ -1947,10 +1945,7 @@ public class SQLParserBase implements SQLParser {
                 read("JOIN");
                 TableFilter join = readTableFilter();
                 top = readJoin(top);
-                Expression on = null;
-                if (readIf("ON")) {
-                    on = readExpression();
-                }
+                Expression on = readJoinCondition(top, join, true);
                 addJoin(top, join, true, on);
                 last = join;
             } else if (readIf("FULL")) {
@@ -1959,19 +1954,13 @@ public class SQLParserBase implements SQLParser {
                 read("JOIN");
                 TableFilter join = readTableFilter();
                 top = readJoin(top);
-                Expression on = null;
-                if (readIf("ON")) {
-                    on = readExpression();
-                }
+                Expression on = readJoinCondition(top, join, true);
                 addJoin(top, join, false, on);
                 last = join;
             } else if (readIf("JOIN")) {
                 TableFilter join = readTableFilter();
                 top = readJoin(top);
-                Expression on = null;
-                if (readIf("ON")) {
-                    on = readExpression();
-                }
+                Expression on = readJoinCondition(top, join, true);
                 addJoin(top, join, false, on);
                 last = join;
             } else if (readIf("CROSS")) {
@@ -2014,6 +2003,48 @@ public class SQLParserBase implements SQLParser {
             }
         }
         return top;
+    }
+
+    // 解析JOIN的ON或USING子句，USING等价于ON a.col = b.col，
+    // 并且SELECT *时USING列只输出一次
+    protected Expression readJoinCondition(TableFilter left, TableFilter right,
+            boolean skipRightColumns) {
+        if (!readIf("USING")) {
+            if (readIf("ON")) {
+                return readExpression();
+            }
+            return null;
+        }
+        read("(");
+        ArrayList<String> columnNames = Utils.newSmallArrayList();
+        do {
+            columnNames.add(readColumnIdentifier());
+        } while (readIfMore());
+        Expression on = null;
+        for (String columnName : columnNames) {
+            Column leftColumn = left.getTable().findColumn(columnName);
+            Column rightColumn = right.getTable().findColumn(columnName);
+            if (leftColumn == null || rightColumn == null) {
+                throw DbException.get(ErrorCode.COLUMN_NOT_FOUND_1, columnName);
+            }
+            // 被标记的列不会出现在SELECT *里，这样USING列只输出一次
+            if (skipRightColumns) {
+                right.addNaturalJoinColumn(rightColumn);
+            } else {
+                left.addNaturalJoinColumn(leftColumn);
+            }
+            Expression leftExpr = new ExpressionColumn(database, left.getSchemaName(),
+                    left.getTableAlias(), columnName);
+            Expression rightExpr = new ExpressionColumn(database, right.getSchemaName(),
+                    right.getTableAlias(), columnName);
+            Expression equal = new Comparison(session, Comparison.EQUAL, leftExpr, rightExpr);
+            if (on == null) {
+                on = equal;
+            } else {
+                on = new ConditionAndOr(ConditionAndOr.AND, on, equal);
+            }
+        }
+        return on;
     }
 
     /**
