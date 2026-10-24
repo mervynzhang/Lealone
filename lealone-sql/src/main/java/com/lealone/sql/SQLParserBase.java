@@ -40,6 +40,7 @@ import com.lealone.db.result.SortOrder;
 import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.Sequence;
+import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.schema.UserAggregate;
 import com.lealone.db.schema.UserDataType;
 import com.lealone.db.service.Service;
@@ -5125,16 +5126,43 @@ public class SQLParserBase implements SQLParser {
         read("(");
         ArrayList<String> parameterNames = Utils.newSmallArrayList();
         ArrayList<String> parameterTypes = Utils.newSmallArrayList();
+        ArrayList<Integer> parameterTypeIds = Utils.newSmallArrayList();
+        ArrayList<Integer> parameterComponentTypes = Utils.newSmallArrayList();
+        ArrayList<Integer> parameterModes = Utils.newSmallArrayList();
         if (!readIf(")")) {
+            int parameterIndex = 0;
             do {
-                String parameterName = readColumnIdentifier();
-                if (isDuplicateParameter(parameterNames, parameterName)) {
-                    throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
-                            "duplicate parameter name: " + parameterName);
+                parameterIndex++;
+                // PostgreSQL风格的参数模式，默认是IN
+                int mode = SqlFunction.PARAM_IN;
+                if (readIf("IN")) {
+                    if (readIf("OUT")) {
+                        mode = SqlFunction.PARAM_INOUT;
+                    }
+                } else if (readIf("OUT")) {
+                    mode = SqlFunction.PARAM_OUT;
+                } else if (readIf("INOUT")) {
+                    mode = SqlFunction.PARAM_INOUT;
                 }
-                Column column = parseColumnWithType(null);
+                String parameterName;
+                Column column;
+                // OUT/INOUT参数可以只写类型不写名字(名字只用于在函数体里引用)
+                if (mode != SqlFunction.PARAM_IN && isDataTypeName(currentToken)) {
+                    parameterName = "$" + parameterIndex;
+                    column = parseColumnWithType(null);
+                } else {
+                    parameterName = readColumnIdentifier();
+                    if (isDuplicateParameter(parameterNames, parameterName)) {
+                        throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                                "duplicate parameter name: " + parameterName);
+                    }
+                    column = parseColumnWithType(null);
+                }
                 parameterNames.add(parameterName);
                 parameterTypes.add(column.getOriginalSQL());
+                parameterTypeIds.add(column.getType());
+                parameterComponentTypes.add(-1);
+                parameterModes.add(mode);
             } while (readIf(","));
             read(")");
         }
@@ -5143,16 +5171,21 @@ public class SQLParserBase implements SQLParser {
         String[] types = new String[count];
         parameterNames.toArray(names);
         parameterTypes.toArray(types);
-        command.setParameters(names, types);
+        command.setParameters(names, types, toIntArray(parameterTypeIds),
+                toIntArray(parameterComponentTypes), toIntArray(parameterModes));
 
-        read("RETURNS");
-        if (readIf("SETOF")) {
-            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "RETURNS SETOF");
-        } else if (readIf("TABLE")) {
-            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "RETURNS TABLE");
+        if (readIf("RETURNS")) {
+            if (readIf("SETOF")) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "RETURNS SETOF");
+            } else if (readIf("TABLE")) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "RETURNS TABLE");
+            }
+            Column returnColumn = parseColumnWithType(null);
+            command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
+        } else {
+            // 有OUT/INOUT参数时可以省略RETURNS，返回类型由OUT参数推导
+            command.setReturnType(null, Value.UNKNOWN);
         }
-        Column returnColumn = parseColumnWithType(null);
-        command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
 
         // LANGUAGE子句和易变性关键字都是可选的，且顺序任意
         boolean deterministic = false;
@@ -5193,6 +5226,22 @@ public class SQLParserBase implements SQLParser {
             }
         }
         return false;
+    }
+
+    // 判断当前token是不是数据类型名，用于识别省略了名字的OUT/INOUT参数
+    private boolean isDataTypeName(String token) {
+        if (token == null) {
+            return false;
+        }
+        return DataType.getTypeByName(StringUtils.toUpperEnglish(token)) != null;
+    }
+
+    private static int[] toIntArray(ArrayList<Integer> list) {
+        int[] array = new int[list.size()];
+        for (int i = 0; i < array.length; i++) {
+            array[i] = list.get(i);
+        }
+        return array;
     }
 
     protected StatementBase parseDropSqlFunction() {
