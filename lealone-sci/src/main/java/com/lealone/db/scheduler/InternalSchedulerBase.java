@@ -65,11 +65,11 @@ public abstract class InternalSchedulerBase extends SchedulerBase implements Int
             @Override
             public R await() {
                 for (;;) {
-                    if (result != null || exception != null)
+                    if (completed)
                         break;
                     runMiscTasks();
                     runPageOperationTasks();
-                    if (result != null || exception != null)
+                    if (completed)
                         break;
                     runEventLoop();
                 }
