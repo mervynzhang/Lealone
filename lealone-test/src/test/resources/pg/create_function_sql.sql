@@ -307,24 +307,55 @@ create function functest_S_3a() returns boolean
 
 -- @case function_sql.sql_body_atomic
 -- @pg create_function_sql.sql:171-195
--- 缺失: Lealone 函数体只允许一条查询, 不支持 BEGIN ATOMIC 多语句体
+-- 适配: S_16 的函数体用 $2 引用第二个参数, Lealone 的函数体按参数名引用, 这里改成 b;
+--       S_10 的日期常量写成 date '...' 保证类型明确; 补上调用断言
 create function functest_S_10(a text, b date) returns boolean
     language sql
     begin atomic
-        select a = 'abcd' and b > '2001-01-01';
+        select a = 'abcd' and b > date '2001-01-01';
     end;
+> update count: 0
+
 create function functest_S_13() returns boolean
     begin atomic
         select 1;
         select false;
     end;
+> update count: 0
+
+select functest_S_13() r;
+> R
+> -----
+> FALSE
+> rows: 1
+
+select functest_S_10('abcd', date '2001-02-01') r;
+> R
+> ----
+> TRUE
+> rows: 1
+
 create table functest1 (i int);
+> update count: 0
+
 create function functest_S_16(a int, b int) returns void
     language sql
     begin atomic
-        insert into functest1 select a + $2;
+        insert into functest1 select a + b;
     end;
--- PG 期望: 3 个函数创建成功; functest_S_13() 返回 f
+> update count: 0
+
+select functest_S_16(1, 2) r;
+> R
+> ----
+> null
+> rows: 1
+
+select * from functest1;
+> I
+> -
+> 3
+> rows: 1
 
 -- @case function_sql.sql_body_polymorphic
 -- @pg create_function_sql.sql:197-205
@@ -339,13 +370,25 @@ create function functest_S_xx(a date) returns boolean
 
 -- @case function_sql.sql_body_case
 -- @pg create_function_sql.sql:207-212
--- 缺失: Lealone 无 BEGIN ATOMIC 体 (CASE 表达式本身是支持的, 见 function_sql.a1_args 的函数体)
+-- 适配: 补上调用断言, 同时验证BEGIN ATOMIC体里的CASE表达式不会打断脚本的语句切分
 create function functest_S_15(a int) returns boolean
 language sql
 begin atomic
     select case when a % 2 = 0 then true else false end;
 end;
--- PG 期望: functest_S_15(2)=t, functest_S_15(3)=f
+> update count: 0
+
+select functest_S_15(2) r;
+> R
+> ----
+> TRUE
+> rows: 1
+
+select functest_S_15(3) r;
+> R
+> -----
+> FALSE
+> rows: 1
 
 -- @case function_sql.pg_get_functiondef_sqlbody
 -- @pg create_function_sql.sql:214-228

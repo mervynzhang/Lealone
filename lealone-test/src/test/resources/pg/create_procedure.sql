@@ -78,15 +78,27 @@ select ptest1('x');
 
 -- @case procedure.atomic_body
 -- @pg create_procedure.sql:32-43
--- 缺失: Lealone 的过程体是分号分隔的 SQL 串, 不支持 SQL 标准体的 BEGIN ATOMIC ... END
+-- 适配: Lealone 过程体里用 ? 引用参数(PG 用参数名 x); PG 的 collate "C" 换成普通的 order by;
+--       断言改成"能查到新增的那一行", 不依赖前面用例留下的数据
 create procedure ptest1s(x text)
 language sql
 begin atomic
-  insert into cp_test values (1, x);
+  insert into cp_test values (1, ?);
 end;
+> update count: 0
+
 call ptest1s('b');
-select * from cp_test order by b collate "C";
--- PG 期望: CALL 成功, cp_test 多一行 (1,b)
+> update count: 1
+
+select count(*) c from cp_test where a = 1 and b = 'b';
+> C
+> -
+> 1
+> rows: 1
+
+-- 适配: 后面的用例依赖 cp_test 的行数, 这里把自己插入的行删掉
+delete from cp_test where b = 'b';
+> update count: 1
 
 -- @case procedure.utility_body
 -- @pg create_procedure.sql:46-50
@@ -204,13 +216,14 @@ call ptest7(least('a', 'b'), 'a');
 
 -- @case procedure.empty_body
 -- @pg create_procedure.sql:174-180
--- 缺失: Lealone 的过程体不能为空, 也不支持 BEGIN ATOMIC
+-- 适配: PG 里用 psql 的 \df 看过程定义, Lealone 的脚本执行器不支持元命令, 这里去掉
 create procedure ptest8(x text)
 begin atomic
 end;
-\df ptest8
+> update count: 0
+
 call ptest8('');
--- PG 期望: 建空过程成功, CALL 什么都不做
+> update count: 0
 
 -- @case procedure.out_params
 -- @pg create_procedure.sql:185-212
