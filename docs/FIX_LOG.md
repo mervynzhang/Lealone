@@ -16,6 +16,7 @@
 |---|---|---|---|---|
 | 1 | 关联子查询只在最内层与外层关联时，中间层子查询结果被跨外层行复用，返回上一行的过期值（静默错数据） | `CorrelatedVisitor` 展开嵌套子查询，并把嵌套查询自己的 `TableFilter` 并入"自己的列"集合 | 新增 `CorrelatedSubqueryTest` 4 例；回退本改动后正好两条嵌套用例变红（`expected:<2> but was:<1>`），两条对照仍绿 | 已修复 |
 | 2 | 异步提交回调在事务已结束时会丢失（语句挂死），重复提交时会重复执行（客户端收到两次响应） | `undoLog == null` 时补调 `asyncCommitComplete()`；`asyncCommitComplete()` 先取走 `asyncTask` 再置空，保证恰好一次 | 新增 `AsyncCommitCallbackTest` 2 例；去掉补调 → 30s 超时"没有回调"；去掉取走置空 → `expected:<1> but was:<2>` | 已修复 |
+| 10 | 常量折叠处的 `catch (DbException) {}` 空捕获会吞掉**所有**异常（含内部编程错误），把真缺陷降级成"不折叠"；与已回退的 `137de5658` 同型 | 新增 `DbException.isDataException`（SQLSTATE 22xxx），两处只容忍数据类错误，其余重新抛出 | 新增 `DataExceptionTest` 2 例；探针确认 `CASE WHEN TRUE THEN 1 ELSE 1/0`、`COALESCE(1,1/0)` 仍正常折叠，而 `1/0`、`CAST('x' AS INT)` 仍在运行期报 22012/22018 | 已修复 |
 | 9 | 行值 IN 的显式列表不走三值逻辑：`(1,NULL) IN ((1,2),(3,4))` 得 FALSE，标准/PostgreSQL 要求 UNKNOWN（左侧单元素列表因为被改写成 `Comparison` 反而正确，路径不一致） | `ConditionIn` 对行值改用 `Comparison.compareRowValue` 的三值逻辑；`ConditionInConstantSet` 对行值不再走 `HashSet.contains`，改为逐项三值比较；把 `compareRowValue` 提成可按 `Database` 复用的静态方法 | 新增 `PredicateLogicTest.rowValueInUsesThreeValuedLogic`（8 条断言）；回退修复后该用例变红（`expected NULL ... but was:<false>`） | 已修复 |
 | 8 | `OCTET_LENGTH`/`BIT_LENGTH` 对 BINARY/BLOB 按十六进制字符数计算（`X'41'` 得 2，应为 1），且把整串 LOB 物化一次 | 二进制类型直接取 `getPrecision()`（字节数），文本类型才按 UTF-8 计算 | 新增 `StringFunctionMatrixTest.octetAndBitLengthOnBinary`（BINARY/BLOB/中文各 2 条）；回退修复后该用例变红（`expected 1 but was 2`） | 已修复 |
 | 7 | 服务返回 Map/Array 时按 JSON 输出错误：嵌套 Map/List 被压成带引号的字符串、控制字符原样输出（非法 JSON）；`java.sql.Array` 转换对基本类型数组抛 CCE、元素为 null 时 NPE、且所有元素被转成字符串 | `ValueMap.jsonValue` 递归处理 MAP/ARRAY/LIST/SET 并转义控制字符；`ValueArray.get(java.sql.Array)` 改用反射按下标取元素、按元素类型转换 | 新增 `ValueJsonTest` 4 例；回退修复后 3 红 1 错（基本类型数组为 ClassCastException） | 已修复 |
@@ -36,7 +37,6 @@
 
 | # | 问题 | 位置 |
 |---|---|---|
-| 11 | `Operation.optimize`/`SystemFunction.optimize` 空 `catch (DbException) {}` 吞掉所有异常（含内部编程错误） | `Operation.java:338-341`、`SystemFunction.java:838-841` |
 | 12 | `rollbackToSavepoint` 的 `isClosed() → return` 与被回退的 `137de5658` 同类；正解是在 `YieldableBase.handleException`/`Session.commit/rollback` 加 try/finally | `AOTransaction.java:393-399` |
 | 13 | 加密文件密码错误/损坏被静默当 EOF（LOB 流也走这里 → 数据被悄悄截断） | `FileStorageInputStream.java:142-146` |
 | 14 | 去重表超过 10 万条后静默停止去重 | `QFlat.java:41` |
