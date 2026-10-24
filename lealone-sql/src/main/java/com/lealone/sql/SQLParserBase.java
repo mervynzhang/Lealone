@@ -6141,6 +6141,13 @@ public class SQLParserBase implements SQLParser {
      * 读取一个可选的函数属性(CREATE FUNCTION和ALTER FUNCTION共用)，
      * 读到了返回true，没读到返回false。
      */
+    // LEAKPROOF只能由admin设置
+    private void checkLeakproofRight() {
+        if (!database.isStarting()) {
+            session.getUser().checkAdmin();
+        }
+    }
+
     private boolean readFunctionAttribute(FunctionAttributes attributes) {
         if (readIf("IMMUTABLE")) {
             attributes.setVolatility(SqlFunction.IMMUTABLE);
@@ -6171,9 +6178,13 @@ public class SQLParserBase implements SQLParser {
                 attributes.setSecurityDefiner(Boolean.FALSE);
             }
         } else if (readIf("LEAKPROOF")) {
+            // LEAKPROOF会放宽优化器对表达式求值顺序的限制, 和PostgreSQL一样只有admin能设置;
+            // NOT LEAKPROOF也走这条(比PostgreSQL更严一点, 不影响普通用户)
+            checkLeakproofRight();
             attributes.setLeakproof(Boolean.TRUE);
         } else if (readIf("NOT")) {
             read("LEAKPROOF");
+            checkLeakproofRight();
             attributes.setLeakproof(Boolean.FALSE);
         } else if (readIf("WINDOW")) {
             attributes.setWindow(Boolean.TRUE);
