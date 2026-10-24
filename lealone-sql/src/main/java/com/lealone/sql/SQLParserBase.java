@@ -1869,7 +1869,13 @@ public class SQLParserBase implements SQLParser {
                     if (!function.isDeterministic()) {
                         recompileAlways = true;
                     }
-                    table = new FunctionTable(mainSchema, session, function);
+                    FunctionTable functionTable = new FunctionTable(mainSchema, session, function);
+                    // PostgreSQL的WITH ORDINALITY: 在函数返回的列后面追加一列从1开始的行号
+                    if (readIf("WITH")) {
+                        read("ORDINALITY");
+                        functionTable.setWithOrdinality();
+                    }
+                    table = functionTable;
                 }
             } else if (equalsToken("DUAL", tableName)) {
                 table = getDualTable(false);

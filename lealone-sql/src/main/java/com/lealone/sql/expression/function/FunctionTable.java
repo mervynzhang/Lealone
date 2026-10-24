@@ -26,6 +26,7 @@ import com.lealone.db.table.TableType;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueArray;
+import com.lealone.db.value.ValueLong;
 import com.lealone.db.value.ValueNull;
 import com.lealone.db.value.ValueResultSet;
 import com.lealone.sql.IExpression;
@@ -43,6 +44,8 @@ public class FunctionTable extends Table {
     private final Function function;
     private final Expression functionExpr;
     private final boolean recordReturning;
+    private boolean withOrdinality;
+    private String[] columnAliases;
     private LocalResult cachedResult;
     private Value cachedValue;
 
@@ -93,8 +96,33 @@ public class FunctionTable extends Table {
         return TableType.FUNCTION_TABLE;
     }
 
+    /**
+     * WITH ORDINALITY: 在函数返回的列后面追加一列从1开始的行号(bigint)。
+     */
+    public boolean isWithOrdinality() {
+        return withOrdinality;
+    }
+
+    // 列别名列表要能出现在重新生成的SQL里(如CREATE VIEW)，否则列名会丢
+    public String[] getColumnAliases() {
+        return columnAliases;
+    }
+
+    public void setWithOrdinality() {
+        if (withOrdinality) {
+            return;
+        }
+        withOrdinality = true;
+        Column[] oldColumns = getColumns();
+        Column[] newColumns = new Column[oldColumns.length + 1];
+        System.arraycopy(oldColumns, 0, newColumns, 0, oldColumns.length);
+        newColumns[oldColumns.length] = createColumn("ORDINALITY", Value.LONG);
+        setColumns(newColumns);
+    }
+
     // 派生表支持列别名列表，如 (VALUES(1, 2), (3, 4)) t(a, b)，用它重命名函数的输出列
     public void setColumnAliases(String[] columnAliases) {
+        this.columnAliases = columnAliases.clone();
         Column[] oldColumns = getColumns();
         if (columnAliases.length > oldColumns.length) {
             throw DbException.get(ErrorCode.COLUMN_COUNT_DOES_NOT_MATCH);
@@ -163,7 +191,11 @@ public class FunctionTable extends Table {
 
     @Override
     public String getSQL() {
-        return function.getSQL();
+        String sql = function.getSQL();
+        if (withOrdinality) {
+            sql += " WITH ORDINALITY";
+        }
+        return sql;
     }
 
     /**
@@ -186,9 +218,13 @@ public class FunctionTable extends Table {
             cachedResult.reset();
             return cachedResult;
         }
-        ResultSet rs = value.getResultSet();
-        LocalResult result = LocalResult.read(session, Expression.getExpressionColumns(session, rs), rs,
-                0);
+        LocalResult result;
+        if (withOrdinality) {
+            result = readWithOrdinality(session, value.getResultSet());
+        } else {
+            ResultSet rs = value.getResultSet();
+            result = LocalResult.read(session, Expression.getExpressionColumns(session, rs), rs, 0);
+        }
         if (function.isDeterministic()) {
             cachedResult = result;
             cachedValue = value;
@@ -220,34 +256,67 @@ public class FunctionTable extends Table {
 
     // 多OUT函数: record是一行多列, 从ValueArray取值; 严格函数返回NULL时当成一行全NULL
     private LocalResult createRecordResult(ServerSession session, Value v) {
-        Column[] cols = getColumns();
+        int columnCount = getColumns().length - (withOrdinality ? 1 : 0);
         Value[] row;
         if (v.getType() == Value.ARRAY) {
             row = ((ValueArray) v).getList();
         } else {
-            row = new Value[cols.length];
+            row = new Value[columnCount];
             Arrays.fill(row, ValueNull.INSTANCE);
         }
         IExpression[] expressions = createExpressions();
         LocalResult result = new LocalResult(session, expressions, expressions.length);
-        result.addRow(row);
+        result.addRow(appendOrdinality(row));
         result.done();
         return result;
     }
 
-    private ResultSet createRecordResultSet(Value v) {
+    // 函数返回结果集时逐行读出来, WITH ORDINALITY时追加行号列
+    private LocalResult readWithOrdinality(ServerSession session, ResultSet rs) {
         Column[] cols = getColumns();
+        int columnCount = cols.length - 1;
+        IExpression[] expressions = createExpressions();
+        LocalResult result = new LocalResult(session, expressions, expressions.length);
+        try {
+            for (int i = 0; rs.next(); i++) {
+                Value[] row = new Value[cols.length];
+                for (int j = 0; j < columnCount; j++) {
+                    row[j] = DataType.readValue(session, rs, j + 1, cols[j].getType());
+                }
+                row[columnCount] = ValueLong.get(i + 1);
+                result.addRow(row);
+            }
+        } catch (SQLException e) {
+            throw DbException.convert(e);
+        }
+        result.done();
+        return result;
+    }
+
+    private Value[] appendOrdinality(Value[] row) {
+        if (!withOrdinality) {
+            return row;
+        }
+        Value[] values = new Value[row.length + 1];
+        System.arraycopy(row, 0, values, 0, row.length);
+        values[row.length] = ValueLong.get(1);
+        return values;
+    }
+
+    private ResultSet createRecordResultSet(Value v) {
+        int columnCount = getColumns().length - (withOrdinality ? 1 : 0);
         Value[] row;
         if (v.getType() == Value.ARRAY) {
             row = ((ValueArray) v).getList();
         } else {
-            row = new Value[cols.length];
+            row = new Value[columnCount];
             Arrays.fill(row, ValueNull.INSTANCE);
         }
-        SimpleResultSet simple = createSimpleResultSet(cols);
-        Object[] objects = new Object[cols.length];
-        for (int i = 0; i < cols.length; i++) {
-            objects[i] = row[i].getString();
+        Value[] values = appendOrdinality(row);
+        SimpleResultSet simple = createSimpleResultSet(getColumns());
+        Object[] objects = new Object[values.length];
+        for (int i = 0; i < values.length; i++) {
+            objects[i] = values[i].getString();
         }
         simple.addRow(objects);
         return simple;
@@ -257,14 +326,19 @@ public class FunctionTable extends Table {
     private LocalResult createScalarResult(ServerSession session, Value v) {
         IExpression[] expressions = createExpressions();
         LocalResult result = new LocalResult(session, expressions, expressions.length);
-        result.addRow(new Value[] { v });
+        result.addRow(appendOrdinality(new Value[] { v }));
         result.done();
         return result;
     }
 
     private ResultSet createScalarResultSet(Value v) {
+        Value[] values = appendOrdinality(new Value[] { v });
         SimpleResultSet simple = createSimpleResultSet(getColumns());
-        simple.addRow(v.getString());
+        Object[] objects = new Object[values.length];
+        for (int i = 0; i < values.length; i++) {
+            objects[i] = values[i].getString();
+        }
+        simple.addRow(objects);
         return simple;
     }
 
