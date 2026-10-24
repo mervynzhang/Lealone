@@ -20,6 +20,7 @@ import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueNull;
 import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.PreparedSQLStatement;
 import com.lealone.sql.SQLStatement;
@@ -80,15 +81,36 @@ public class CallProcedure extends Call {
         if (positions == null) {
             throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
         }
+        boolean outPlaceholder = false;
         int inputCount = p.getInputParameterCount();
-        Expression[] ordered = new Expression[inputCount];
+        Expression[] orderedInputs = new Expression[inputCount];
         for (int i = 0; i < args.length; i++) {
-            ordered[positions[i]] = args[i];
+            if (positions[i] < 0) {
+                // CALL p(a => null)里的a是OUT参数, 只占位不求值
+                outPlaceholder = true;
+            } else {
+                orderedInputs[positions[i]] = args[i];
+            }
         }
         for (int i = 0; i < inputCount; i++) {
-            if (ordered[i] == null) {
-                ordered[i] = ValueExpression.get(p.getDefaultInputValue(i));
+            if (orderedInputs[i] == null) {
+                orderedInputs[i] = ValueExpression.get(p.getDefaultInputValue(i));
             }
+        }
+        if (!outPlaceholder) {
+            args = orderedInputs;
+            return;
+        }
+        // 写了OUT参数的命名占位时按完整参数列表传, OUT位置放NULL占位(执行时不会求值)
+        int parameterCount = p.getParameterCount();
+        Expression[] ordered = new Expression[parameterCount];
+        for (int i = 0; i < parameterCount; i++) {
+            if (p.getParameterMode(i) == SqlProcedure.PARAM_OUT) {
+                ordered[i] = ValueExpression.get(ValueNull.INSTANCE);
+            }
+        }
+        for (int i = 0; i < inputCount; i++) {
+            ordered[p.getInputParameterIndex(i)] = orderedInputs[i];
         }
         args = ordered;
     }
@@ -167,9 +189,13 @@ public class CallProcedure extends Call {
             if (!candidate.hasOutputParameters())
                 continue;
             // 实参个数对不上的重载运行期本来也调不到
-            if (candidate.getInputParameterCount() == args.length
-                    || candidate.getParameterCount() == args.length)
+            if (candidate.isVariadic()) {
+                if (args.length >= candidate.getFixedParameterCount())
+                    return true;
+            } else if (candidate.getInputParameterCount() == args.length
+                    || candidate.getParameterCount() == args.length) {
                 return true;
+            }
         }
         return false;
     }

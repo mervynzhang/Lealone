@@ -318,13 +318,34 @@ select * from cp_test_out;
 
 -- @case procedure.out_params_named
 -- @pg create_procedure.sql:199-212
--- 缺失: Lealone 不支持命名实参(a => null)和过程的 VARIADIC 参数, 也不支持同名过程按
---       OUT/IN 参数区分重载(报 90150 "Procedure already exists")
-create procedure ptest10(out a int, in b int, in c int) as $$ SELECT ? - ? $$;
-call ptest10(null, 7, 4);
-create procedure ptest11(a out int, variadic b int[]) as $$ SELECT ? + ? $$;
+-- 适配: 过程体用 ? 按位置引用入参; OUT 参数可以写命名占位(a => null), 只占位不求值;
+--       过程支持 VARIADIC 参数, 调用时把余下的实参打包成数组(这里用 array_length 断言长度,
+--       PG 的写法是对数组求和得 36);
+--       过程名加 n 后缀, 因为 PG 的 ptest10 同名签名在下面的 ambiguous_drop 用例里才建
+create procedure ptest10n(out a int, in b int, in c int) as $$ SELECT ? - ? $$;
+> update count: 0
+
+call ptest10n(null, 7, 4);
+> A
+> -
+> 3
+> rows: 1
+
+-- 命名实参: a 是OUT参数, 只当占位符
+call ptest10n(a => null, b => 10, c => 4);
+> A
+> -
+> 6
+> rows: 1
+
+create procedure ptest11(a out int, variadic b int[]) as $$ SELECT array_length(?, 1) $$;
+> update count: 0
+
 call ptest11(null, 11, 12, 13);
--- PG 期望: ptest10 的位置调用返回 3, 命名调用返回 6; ptest11 返回 36
+> A
+> -
+> 3
+> rows: 1
 
 -- @case procedure.ambiguous_drop
 -- @pg create_procedure.sql:216-232
@@ -397,10 +418,10 @@ create procedure ptestx_attr() language sql strict as $$ insert into cp_test val
 create procedure ptestx_attr() language sql strict as $$ insert into cp_test values (1, 'a') $$;
 > exception 90150
 
--- Lealone 的过程不支持 VARIADIC 参数: VARIADIC写在参数名位置上会被当成类型名, 报42102
+-- PG 期望: VARIADIC parameter must be the last input parameter; Lealone 也校验这一点
 create procedure ptestx_attr(a variadic int[], b out int) language sql
   as $$ select a[1] $$;
-> exception 42102
+> exception 42000
 
 alter procedure ptest1(text) strict;
 > update count: 0

@@ -40,6 +40,9 @@ public class CreateProcedure extends SchemaStatement {
     private boolean ifNotExists;
     // CREATE OR REPLACE PROCEDURE: 删掉旧的同名同签名过程再重新创建
     private boolean orReplace;
+    // 最后一个入参是VARIADIC数组参数, variadicComponentType是数组元素类型
+    private boolean variadic;
+    private int variadicComponentType = -1;
     private final ArrayList<Column> parameters = new ArrayList<>();
     private final ArrayList<Integer> parameterModes = new ArrayList<>();
     // 参数默认值: SQL文本和CREATE时算好的值, 没有默认值的位置是null
@@ -86,6 +89,15 @@ public class CreateProcedure extends SchemaStatement {
 
     public void setAttributes(FunctionAttributes attributes) {
         this.attributes = attributes;
+    }
+
+    public void setVariadicParameter(int componentType) {
+        this.variadic = true;
+        this.variadicComponentType = componentType;
+    }
+
+    public boolean hasVariadicParameter() {
+        return variadic;
     }
 
     public void addParameter(Column parameter, int mode, String defaultSql, Value defaultValue) {
@@ -252,7 +264,7 @@ public class CreateProcedure extends SchemaStatement {
         parameterDefaultValues.toArray(defaultValues);
         SqlProcedure procedure = new SqlProcedure(schema, getObjectId(), procedureName, body,
                 language, atomicBody, parameters.toArray(new Column[0]), toIntArray(parameterModes),
-                defaultSqls, defaultValues);
+                defaultSqls, defaultValues, variadic, variadicComponentType);
         if (attributes != null) {
             attributes.applyTo(procedure);
         }

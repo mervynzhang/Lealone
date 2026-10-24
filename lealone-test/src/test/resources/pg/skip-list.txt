@@ -32,4 +32,3 @@ procedure.privileges	create_procedure.sql:258-267	10	GRANT/REVOKE EXECUTE ON PRO
 plpgsql.trigger_room	plpgsql.sql:130-140	2	只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节
 plpgsql.trigger_raise	plpgsql.sql:162-172	2	只有H2风格的Java类触发器(CREATE TRIGGER ... CALL 'class'), 无PG语法EXECUTE PROCEDURE和RETURNS trigger, 评估见docs第十二节
 plpgsql.cursor	plpgsql.sql:1859-1900	6	PL/pgSQL 游标(DECLARE CURSOR/OPEN/FETCH/CLOSE)与 refcursor 门户都不支持, 评估见docs第十二节
-procedure.out_params_named	create_procedure.sql:199-212	8	不支持命名 OUT 参数占位(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150)

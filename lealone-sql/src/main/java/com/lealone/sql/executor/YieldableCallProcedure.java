@@ -328,6 +328,10 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         Expression[] args = call.getArgs();
         int inputCount = procedure.getInputParameterCount();
         int parameterCount = procedure.getParameterCount();
+        if (procedure.isVariadic()) {
+            evalVariadicArgs(args, parameterCount);
+            return;
+        }
         // 实参覆盖所有参数(含OUT占位)时跳过OUT参数，否则只按入参对应
         boolean overAllParameters = args.length == parameterCount && args.length != inputCount;
         // 有默认值的入参可以省略，所以实参个数是一个区间
@@ -362,6 +366,37 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         inputArgIndexes = new int[inputCount];
         for (int i = 0; i < inputCount; i++) {
             inputArgIndexes[i] = overAllParameters ? procedure.getInputParameterIndex(i) : i;
+        }
+    }
+
+    // VARIADIC过程: 前固定参数按参数列表对应(OUT参数只占位), 余下的实参打包成一个数组
+    private void evalVariadicArgs(Expression[] args, int parameterCount) {
+        int fixedCount = procedure.getFixedParameterCount();
+        if (args.length < fixedCount) {
+            throw DbException.get(ErrorCode.INVALID_PARAMETER_COUNT_2, procedure.getName() + "()",
+                    String.valueOf(args.length), fixedCount + "..*");
+        }
+        argValues = new Value[parameterCount];
+        for (int i = 0; i < fixedCount; i++) {
+            // PostgreSQL的OUT位置的实参只占位、不求值
+            if (procedure.getParameterMode(i) == SqlProcedure.PARAM_OUT) {
+                argValues[i] = ValueNull.INSTANCE;
+            } else {
+                argValues[i] = args[i].getValue(session);
+            }
+        }
+        int componentType = procedure.getVariadicComponentType();
+        int extraCount = args.length - fixedCount;
+        Value[] list = new Value[extraCount];
+        for (int i = 0; i < extraCount; i++) {
+            Value v = args[fixedCount + i].getValue(session);
+            list[i] = v == null || v == ValueNull.INSTANCE ? v : v.convertTo(componentType);
+        }
+        argValues[parameterCount - 1] = ValueArray.get(list);
+        // 入参(含VARIADIC参数)在完整参数列表里的下标
+        inputArgIndexes = new int[procedure.getInputParameterCount()];
+        for (int i = 0; i < inputArgIndexes.length; i++) {
+            inputArgIndexes[i] = procedure.getInputParameterIndex(i);
         }
     }
 

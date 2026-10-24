@@ -5492,8 +5492,20 @@ public class SQLParserBase implements SQLParser {
     }
 
     // 过程参数支持PostgreSQL风格的IN/OUT/INOUT，默认是IN
+    // 把参数列改成数组类型, 原始SQL保留 type[] 的写法
+    private static Column toArrayColumn(Column column, int componentType) {
+        String typeSql = column.getOriginalSQL();
+        if (typeSql == null) {
+            typeSql = DataType.getDataType(componentType).name;
+        }
+        Column arrayColumn = new Column(column.getName(), Value.ARRAY);
+        arrayColumn.setOriginalSQL(typeSql + "[]");
+        return arrayColumn;
+    }
+
     private void parseProcedureParameter(CreateProcedure command, int parameterIndex) {
         int mode = SqlProcedure.PARAM_IN;
+        boolean variadic = false;
         if (readIf("IN")) {
             if (readIf("OUT"))
                 mode = SqlProcedure.PARAM_INOUT;
@@ -5501,9 +5513,8 @@ public class SQLParserBase implements SQLParser {
             mode = SqlProcedure.PARAM_OUT;
         } else if (readIf("INOUT")) {
             mode = SqlProcedure.PARAM_INOUT;
-        } else if (isToken("VARIADIC")) {
-            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                    "VARIADIC parameter in CREATE PROCEDURE");
+        } else if (readIf("VARIADIC")) {
+            variadic = true;
         }
         Column column;
         // PostgreSQL允许参数只写类型不写名字, 这时给一个占位名
@@ -5511,13 +5522,41 @@ public class SQLParserBase implements SQLParser {
             column = parseColumnWithType("$" + parameterIndex);
         } else {
             String parameterName = readAliasIdentifier();
-            column = parseColumnWithType(parameterName);
-            // PostgreSQL也允许把OUT/INOUT写在参数名后面
+            // PostgreSQL也允许把OUT/INOUT/VARIADIC写在参数名后面
             if (readIf("OUT")) {
                 mode = SqlProcedure.PARAM_OUT;
             } else if (readIf("INOUT")) {
                 mode = SqlProcedure.PARAM_INOUT;
+            } else if (readIf("VARIADIC")) {
+                variadic = true;
             }
+            column = parseColumnWithType(parameterName);
+        }
+        // 数组类型: PostgreSQL的 type[] 或 type ARRAY 写法
+        int type = column.getType();
+        int componentType = -1;
+        if (readIf("[")) {
+            read("]");
+            componentType = type;
+            column = toArrayColumn(column, type);
+        } else if (readIf("ARRAY")) {
+            componentType = type;
+            column = toArrayColumn(column, type);
+        }
+        if (variadic) {
+            // 和PostgreSQL一样: VARIADIC必须是最后一个入参, 而且必须是数组类型
+            if (mode != SqlProcedure.PARAM_IN) {
+                throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                        "VARIADIC parameter must be an IN parameter");
+            }
+            if (column.getType() != Value.ARRAY) {
+                throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                        "VARIADIC parameter must be an array");
+            }
+            command.setVariadicParameter(componentType);
+        } else if (command.hasVariadicParameter()) {
+            throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                    "VARIADIC parameter must be the last parameter");
         }
         // DEFAULT <常量表达式>, 省略实参时用它补齐
         String defaultSql = null;
@@ -5672,6 +5711,10 @@ public class SQLParserBase implements SQLParser {
                     mode = SqlProcedure.PARAM_INOUT;
                 } else if (readIf("VARIADIC")) {
                     mode = SqlProcedure.PARAM_IN;
+                }
+                // PostgreSQL允许DROP/ALTER PROCEDURE p(b int)这样带参数名
+                if (hasParameterName()) {
+                    read();
                 }
                 Column column = parseColumnWithType(null);
                 int type = column.getType();
