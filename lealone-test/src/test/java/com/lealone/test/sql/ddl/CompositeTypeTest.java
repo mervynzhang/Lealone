@@ -97,6 +97,20 @@ public class CompositeTypeTest extends SqlTestBase {
                 + "AS $$ BEGIN RETURN c.b; END; $$");
         executeQuery("SELECT comp_arg2(ROW(7, 'q')::comp)");
         assertEquals("q", getStringValue(1));
+        executeUpdate("CREATE OR REPLACE FUNCTION comp_arg_sql(c comp) RETURNS INT LANGUAGE sql "
+                + "AS $$ SELECT (c).a $$");
+        executeQuery("SELECT comp_arg_sql(ROW(9, 'r')::comp)");
+        assertEquals(9, getIntValue(1));
+        executeUpdate("CREATE OR REPLACE FUNCTION comp_arg_sql2(c comp) RETURNS VARCHAR LANGUAGE sql "
+                + "AS $$ SELECT c.b $$");
+        executeQuery("SELECT comp_arg_sql2(ROW(9, 'r')::comp)");
+        assertEquals("r", getStringValue(1));
+        executeUpdate("CREATE OR REPLACE FUNCTION comp_sql_ret(c comp) RETURNS comp LANGUAGE sql "
+                + "AS $$ SELECT c $$");
+        executeQuery("SELECT comp_sql_ret(ROW(10, 'p')::comp)");
+        assertEquals("(10, p)", getStringValue(1));
+        executeQuery("SELECT (comp_sql_ret(ROW(10, 'p')::comp)).b");
+        assertEquals("p", getStringValue(1));
 
         executeUpdate("CREATE OR REPLACE FUNCTION comp_setof() RETURNS SETOF comp LANGUAGE plpgsql "
                 + "AS $$ BEGIN RETURN QUERY SELECT 1, 'a' UNION ALL SELECT 2, 'b'; END; $$");
@@ -140,6 +154,9 @@ public class CompositeTypeTest extends SqlTestBase {
 
         executeUpdate("DROP FUNCTION comp_arg");
         executeUpdate("DROP FUNCTION comp_arg2");
+        executeUpdate("DROP FUNCTION comp_arg_sql");
+        executeUpdate("DROP FUNCTION comp_arg_sql2");
+        executeUpdate("DROP FUNCTION comp_sql_ret");
         executeUpdate("DROP FUNCTION comp_setof");
         executeUpdate("DROP FUNCTION comp_setof_sql");
         executeUpdate("DROP FUNCTION comp_setof_next");

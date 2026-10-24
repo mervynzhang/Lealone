@@ -5606,6 +5606,8 @@ public class SQLParserBase implements SQLParser {
         command.setDeterministic(deterministic);
         command.setStrict(strict);
         command.setLanguage(language);
+        String[] parameterTypeArray = parameterTypes == null ? null
+                : parameterTypes.toArray(new String[parameterTypes.size()]);
         if ("PLPGSQL".equalsIgnoreCase(language)) {
             if (atomicBody) {
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
@@ -5624,7 +5626,7 @@ public class SQLParserBase implements SQLParser {
             for (int i = 0; i < statements.length; i++) {
                 ArrayList<Integer> indexes = Utils.newSmallArrayList();
                 bodySqls[i] = SqlFunctionBodyParser.parseAtomicBody(session, statements[i],
-                        parameterNames, indexes);
+                        parameterNames, indexes, parameterTypeArray);
                 statementParameterIndexes[i] = toIntArray(indexes);
             }
             int last = statements.length - 1;
@@ -5634,7 +5636,7 @@ public class SQLParserBase implements SQLParser {
         } else {
             ArrayList<Integer> bodyParameterIndexes = Utils.newSmallArrayList();
             String bodySql = SqlFunctionBodyParser.parseBody(session, body, parameterNames,
-                    bodyParameterIndexes);
+                    bodyParameterIndexes, parameterTypeArray);
             int[] indexes = new int[bodyParameterIndexes.size()];
             for (int i = 0; i < indexes.length; i++) {
                 indexes[i] = bodyParameterIndexes.get(i);

@@ -10,6 +10,8 @@ import java.util.ArrayList;
 import com.lealone.common.exceptions.DbException;
 import com.lealone.common.util.Utils;
 import com.lealone.db.api.ErrorCode;
+import com.lealone.db.schema.CompositeType;
+import com.lealone.db.schema.Schema;
 import com.lealone.db.session.ServerSession;
 
 /**
@@ -33,21 +35,22 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
      * @return 替换后的函数体
      */
     static String parseBody(ServerSession session, String body, ArrayList<String> parameterNames,
-            ArrayList<Integer> parameterIndexes) {
-        return parse(session, body, parameterNames, parameterIndexes, true);
+            ArrayList<Integer> parameterIndexes, String[] parameterTypes) {
+        return parse(session, body, parameterNames, parameterIndexes, true, parameterTypes);
     }
 
     /**
      * BEGIN ATOMIC函数体里的一条语句：不要求是查询语句，但不允许出现'?'。
      */
     static String parseAtomicBody(ServerSession session, String body,
-            ArrayList<String> parameterNames, ArrayList<Integer> parameterIndexes) {
-        return parse(session, body, parameterNames, parameterIndexes, false);
+            ArrayList<String> parameterNames, ArrayList<Integer> parameterIndexes,
+            String[] parameterTypes) {
+        return parse(session, body, parameterNames, parameterIndexes, false, parameterTypes);
     }
 
     private static String parse(ServerSession session, String body,
             ArrayList<String> parameterNames, ArrayList<Integer> parameterIndexes,
-            boolean singleQuery) {
+            boolean singleQuery, String[] parameterTypes) {
         SqlFunctionBodyParser parser = new SqlFunctionBodyParser(session);
         parser.initialize(body);
         parser.read();
@@ -86,12 +89,21 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
             if (index < 0) {
                 continue;
             }
-            // 限定名(如t.a)中的标识符不是参数引用
-            if (isDotToken(tokens, tokenTypes, i - 1) || isDotToken(tokens, tokenTypes, i + 1)) {
+            // 限定名(如t.a)中的标识符不是参数引用；复合类型参数的c.b要当成字段访问
+            if (isDotToken(tokens, tokenTypes, i - 1)) {
+                continue;
+            }
+            String compositeType = getCompositeTypeSql(session, parameterTypes, index);
+            if (compositeType == null && isDotToken(tokens, tokenTypes, i + 1)) {
                 continue;
             }
             int[] position = positions.get(i);
-            bodySql.append(body, copied, position[0]).append('?');
+            bodySql.append(body, copied, position[0]);
+            // 复合类型参数不能只留一个未知类型的?，否则(c).field无法解析
+            if (compositeType == null)
+                bodySql.append('?');
+            else
+                bodySql.append("(CAST(? AS ").append(compositeType).append("))");
             copied = position[1];
             parameterIndexes.add(index);
         }
@@ -136,6 +148,22 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
                         "? is not allowed in function body");
             }
         }
+    }
+
+    private static String getCompositeTypeSql(ServerSession session, String[] parameterTypes, int index) {
+        if (session == null || parameterTypes == null || index >= parameterTypes.length)
+            return null;
+        String typeName = parameterTypes[index];
+        if (typeName == null || typeName.endsWith("[]"))
+            return null;
+        String schemaName = session.getCurrentSchemaName();
+        if (schemaName == null)
+            return null;
+        Schema schema = session.getDatabase().findSchema(session, schemaName);
+        if (schema == null)
+            return null;
+        CompositeType type = schema.findCompositeType(session, typeName);
+        return type == null ? null : session.getDatabase().quoteIdentifier(type.getName());
     }
 
     private static boolean isDotToken(ArrayList<String> tokens, ArrayList<Integer> tokenTypes, int i) {
