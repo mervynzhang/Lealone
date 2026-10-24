@@ -39,7 +39,7 @@ public class StringFunction extends BuiltInFunction {
             LOWER = 75, UPPER = 76, POSITION = 77, TRIM = 78, STRINGENCODE = 79, STRINGDECODE = 80,
             STRINGTOUTF8 = 81, UTF8TOSTRING = 82, XMLATTR = 83, XMLNODE = 84, XMLCOMMENT = 85,
             XMLCDATA = 86, XMLSTARTDOC = 87, XMLTEXT = 88, REGEXP_REPLACE = 89, RPAD = 90, LPAD = 91,
-            CONCAT_WS = 92;
+            CONCAT_WS = 92, QUOTE_IDENT = 93;
 
     private static final char[] SOUNDEX_INDEX = new char[128];
 
@@ -81,6 +81,7 @@ public class StringFunction extends BuiltInFunction {
         addFunction("INSTR", INSTR, VAR_ARGS, Value.INT);
         addFunction("LTRIM", LTRIM, VAR_ARGS, Value.STRING);
         addFunction("OCTET_LENGTH", OCTET_LENGTH, 1, Value.LONG);
+        addFunction("QUOTE_IDENT", QUOTE_IDENT, 1, Value.STRING);
         addFunction("RAWTOHEX", RAWTOHEX, 1, Value.STRING);
         addFunction("REPEAT", REPEAT, 2, Value.STRING);
         addFunction("REPLACE", REPLACE, VAR_ARGS, Value.STRING);
@@ -141,7 +142,7 @@ public class StringFunction extends BuiltInFunction {
             break;
         }
         case BIT_LENGTH:
-            result = ValueLong.get(16 * length(v));
+            result = ValueLong.get(8 * octetLength(v));
             break;
         case CHAR:
             result = ValueString.get(String.valueOf((char) v.getInt()));
@@ -151,7 +152,10 @@ public class StringFunction extends BuiltInFunction {
             result = ValueLong.get(length(v));
             break;
         case OCTET_LENGTH:
-            result = ValueLong.get(2 * length(v));
+            result = ValueLong.get(octetLength(v));
+            break;
+        case QUOTE_IDENT:
+            result = ValueString.get(StringUtils.quoteIdentifier(v.getString()));
             break;
         case HEXTORAW:
             result = ValueString.get(hexToRaw(v.getString()));
@@ -245,6 +249,40 @@ public class StringFunction extends BuiltInFunction {
             }
         }
         return new String(chars);
+    }
+
+    // 按UTF-8编码计算字节数，不产生临时byte数组
+    // OCTET_LENGTH/BIT_LENGTH 的字节数: 二进制类型就是字节数本身, 文本类型按 UTF-8 编码算。
+    // 二进制类型不能转成字符串再数——ValueBytes/ValueBlob 的 getString() 返回十六进制字符,
+    // 数出来是字节数的两倍(还会把整个 LOB 物化一次)。
+    private static long octetLength(Value v) {
+        switch (v.getType()) {
+        case Value.BYTES:
+        case Value.BLOB:
+        case Value.JAVA_OBJECT:
+            return v.getPrecision();
+        default:
+            return getUtf8Length(v.getString());
+        }
+    }
+
+    private static long getUtf8Length(String s) {
+        long len = 0;
+        for (int i = 0, size = s.length(); i < size; i++) {
+            char c = s.charAt(i);
+            if (c < 0x80) {
+                len += 1;
+            } else if (c < 0x800) {
+                len += 2;
+            } else if (Character.isHighSurrogate(c) && i + 1 < size
+                    && Character.isLowSurrogate(s.charAt(i + 1))) {
+                len += 4;
+                i++;
+            } else {
+                len += 3;
+            }
+        }
+        return len;
     }
 
     private static long length(Value v) {
