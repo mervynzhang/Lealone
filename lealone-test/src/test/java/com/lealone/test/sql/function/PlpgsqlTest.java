@@ -560,6 +560,16 @@ public class PlpgsqlTest extends SqlTestBase {
         executeQuery("SELECT plp_rec_field_set()");
         assertEquals("changed", getStringValue(1));
 
+        // record变量名和聚合函数同名时，函数调用不能被当成record变量
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_func_name() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE sum record;" //
+                + " BEGIN" //
+                + "   SELECT * INTO sum FROM plp_rec_t WHERE id = 1;" //
+                + "   RETURN (SELECT SUM(id) FROM plp_rec_t WHERE id = 1);" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_func_name()");
+        assertEquals(1, getIntValue(1));
+
         // 没有行时%ROWTYPE是一行NULL，字段读取得到NULL
         executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_norow(p INT) RETURNS VARCHAR LANGUAGE plpgsql AS $$"
                 + " DECLARE r plp_rec_t%ROWTYPE;" //
@@ -664,6 +674,12 @@ public class PlpgsqlTest extends SqlTestBase {
                 + " BEGIN j := i + 1; RETURN j * 2; END $$ LANGUAGE plpgsql");
         executeQuery("SELECT plp_out_value(42)");
         assertEquals(86, getIntValue(1));
+
+        // 局部变量遮蔽OUT参数时，返回的仍是OUT参数而不是同名局部变量
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_out_shadow(OUT j INT) AS $$"
+                + " DECLARE j INT := 99; BEGIN RETURN; END $$ LANGUAGE plpgsql");
+        executeQuery("SELECT plp_out_shadow() IS NULL");
+        assertTrue(getBooleanValue(1));
     }
 
     // RETURNS TABLE：RETURN QUERY和RETURN NEXT都往结果集追加行
