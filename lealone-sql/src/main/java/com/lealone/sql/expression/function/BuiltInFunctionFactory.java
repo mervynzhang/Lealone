@@ -22,6 +22,7 @@ public class BuiltInFunctionFactory implements FunctionFactory {
         StringFunction.init();
         SystemFunction.init();
         TableFunction.init();
+        UnnestFunction.init();
     }
 
     @Override
@@ -34,6 +35,8 @@ public class BuiltInFunctionFactory implements FunctionFactory {
             return new DateTimeFunction(database, info);
         if (info.type < TableFunction.TABLE)
             return new SystemFunction(database, info);
-        return new TableFunction(database, info);
+        if (info.type < UnnestFunction.UNNEST)
+            return new TableFunction(database, info);
+        return new UnnestFunction(database, info);
     }
 }

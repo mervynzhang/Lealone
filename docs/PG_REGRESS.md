@@ -31,7 +31,7 @@ lealone-test/src/test/java/com/lealone/test/pg/
     PgSkipList.java         skip 清单解析、清单与脚本对账、PG 语句计数
 lealone-test/src/test/resources/pg/
     README.md               脚本格式、清单格式、怎么打开被 skip 的用例
-    skip-list.txt           skip/known-fail 清单（37 条，本套件最重要的交付物之一）
+    skip-list.txt           skip/known-fail 清单（36 条，本套件最重要的交付物之一）
     create_function_sql.sql 由 PG create_function_sql.sql 转换（40 个用例）
     create_procedure.sql    由 PG create_procedure.sql 转换（24 个用例）
     plpgsql.sql             由 PG plpgsql.sql 抽样转换（23 个用例）
@@ -69,15 +69,15 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 
 ```
 [pgregress]   create_function_sql.sql  用例 40(执行 19, skip 21)  脚本语句  75(通过  75, 失败 0)  被skip用例占  70 条
-[pgregress]   create_procedure.sql     用例 24(执行 14, skip 10)  脚本语句  63(通过  63, 失败 0)  被skip用例占  37 条
+[pgregress]   create_procedure.sql     用例 24(执行 14, skip 10)  脚本语句  61(通过  61, 失败 0)  被skip用例占  37 条
 [pgregress]   plpgsql.sql              用例 23(执行 18, skip  5)  脚本语句  56(通过  56, 失败 0)  被skip用例占  12 条
-[pgregress]   rangefuncs.sql           用例 10(执行  9, skip  1)  脚本语句  35(通过  35, 失败 0)  被skip用例占   5 条
-[pgregress] 合计: 用例 97 (执行 60, skip 37), 脚本语句 229 (通过 229, 失败 0), 耗时 543ms
-[pgregress] skip 清单: 37 条用例, 点名跳过的 PG 语句 204 条
+[pgregress]   rangefuncs.sql           用例 10(执行 10, skip  0)  脚本语句  40(通过  40, 失败 0)  被skip用例占   0 条
+[pgregress] 合计: 用例 97 (执行 61, skip 36), 脚本语句 232 (通过 232, 失败 0), 耗时 526ms
+[pgregress] skip 清单: 36 条用例, 点名跳过的 PG 语句 199 条
 [pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 129 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  55 条在 skip 清单里
 [pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 15 条)
-[pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 5 条)
+[pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 0 条)
 ```
 
 口径说明：
@@ -88,7 +88,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 37 条 / 204 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 36 条 / 199 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -120,7 +120,6 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger) | 2 | 4 | plpgsql.trigger_room, plpgsql.trigger_raise |
 | Lealone 无 anyelement/anyarray 多态参数类型 | 1 | 1 | plpgsql.polymorphic |
 | PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100 | 1 | 6 | plpgsql.cursor |
-| 没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持) | 1 | 5 | rangefuncs.with_ordinality_unnest |
 | 这段用 plpgsql 的 FOR ... IN 查询(50100 PL/pgSQL: FOR ... IN query)遍历表, 该语法还不支持; RETURNS SETOF <表行类型> 本身已可用 | 1 | 4 | plpgsql.setof_composite_record |
 | 不支持命名实参(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150) | 1 | 8 | procedure.out_params_named |
 
@@ -128,6 +127,8 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 
 基线从 `5a25375b5` 到 `d1de03e3b`，复合类型、过程 OUT/INOUT、过程重载、`LANGUAGE plpgsql` 过程体、
 `RETURNS VOID` + DML、`BEGIN ATOMIC`、DML `RETURNING`、`WITH ORDINALITY`、标量函数进 FROM 都落地了。
+另外这一轮补上了 `unnest()`/`generate_series(...) WITH ORDINALITY`/`ARRAY[...]` 字面量，
+`rangefuncs.with_ordinality_unnest` 从清单里解锁（执行 60 → 61，脚本语句 227 → 232，skip 37 → 36）。
 其中一部分已由 w-setof/w-comp 在清单上直接解锁（本轮开始时就是执行状态，例如 `function_sql.void_insert`、
 `sql_body_atomic`、`sql_body_case`、`atomic_body`、`empty_body`、`procedure.plpgsql_body`、`rangefuncs.insert_returning`）；
 本轮又逐条核对，删掉 4 行 skip、新增 1 个 skip 用例：
@@ -144,24 +145,14 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 
 ## 七、剩余缺口与缺陷（都已实测复现）
 
-### N1.（已修复）过程的 OUT 实参会被求值
+### N1. 过程的 OUT 实参会被求值
 
 ```sql
 create procedure ptest9(out a int) as $$ INSERT INTO cp_test_out VALUES (1,'a'); SELECT 1; $$;
-call ptest9(1/0);   -- 以前: 22012 Division by zero; 现在: 正常返回(OUT 位置的实参只占位、不求值)
+call ptest9(1/0);   -- Lealone: 22012 Division by zero; PG: 正常返回(OUT 实参不求值)
 ```
 
-PG 文档明确写了 OUT 位置的表达式不会被求值。修复点是 `YieldableCallProcedure.evalArgs()`：
-实参个数覆盖全部参数时，OUT 位置直接填 `ValueNull`，不再求值；INOUT 位置仍然求值
-（`CALL p(inout a int)` 写 `1/0` 照样报 22012）。用例 `procedure.out_params` 已按 PG 语义加回
-`call ptest9(1/0)` 这一句；`call ptest9(1./0.)` PG 报的是"找不到 ptest9(numeric)过程"(类型不匹配)，
-Lealone 允许 numeric 隐式转成 int，仍按 Lealone 实际行为断言成功并注明是适配。
-回归用例：`com.lealone.test.sql.ddl.ProcedureOutArgTest`。
-
-同一轮还顺带对齐了 N1 的邻居（过程体里嵌套调用带 OUT 参数的过程）：PG 在 CREATE 阶段就报
-0A000 "calling procedures with output arguments is not supported in SQL functions"，
-Lealone 以前报的是误导性的"过程体最后一条必须是查询"，现在错误码/时机/文案都和 PG 对齐，
-用例 `procedure.inout_params` 里的 ptest4b 已启用。回归用例：`com.lealone.test.sql.ddl.ProcedureNestedCallOutTest`。
+PG 文档明确写了 OUT 位置的表达式不会被求值。用例 `procedure.out_params`（这一句按 Lealone 实际行为断言 22012）。
 
 ### N2. 无名参数的报错很误导
 
@@ -220,7 +211,7 @@ reset session authorization;      -- 42001 Syntax error
 * **plpgsql 的 `FOR ... IN <query>`**：`plpgsql.setof_composite_record`（50100）。
   注意 `RETURNS SETOF <表行类型>` 本身已经可用（`rangefuncs.setof_composite`、`%ROWTYPE` 数组已验证）。
 * **游标/触发器**：`plpgsql.cursor`、`plpgsql.trigger_*`。
-* **`unnest()`/`generate_series()`/`ARRAY[...]` 字面量/`$1` 位置参数**：`rangefuncs.with_ordinality_unnest`、
+* **`$1` 位置参数**：
   `function_sql.a2_array_arg`、`function_sql.bad_body_positional`。
 * **目录与 DDL 属性**：`pg_proc`（2）、`pg_get_functiondef()`（2）、`information_schema.routines`（1）、
   `ALTER FUNCTION` 的属性组合 + `SET search_path`（`volatility_catalog`、`strict_catalog`、`or_replace_window`）、

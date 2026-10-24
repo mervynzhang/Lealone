@@ -55,6 +55,5 @@ plpgsql.trigger_room	plpgsql.sql:130-140	2	Lealone 无 CREATE TRIGGER 与触发�
 plpgsql.trigger_raise	plpgsql.sql:162-172	2	Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger)
 plpgsql.polymorphic	plpgsql.sql:1565-1568	1	Lealone 无 anyelement/anyarray 多态参数类型
 plpgsql.cursor	plpgsql.sql:1859-1900	6	PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100
-rangefuncs.with_ordinality_unnest	rangefuncs.sql:13-17	5	没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持)
 plpgsql.setof_composite_record	plpgsql.sql:1487-1512	4	这段用 plpgsql 的 FOR ... IN 查询(50100 PL/pgSQL: FOR ... IN query)遍历表, 该语法还不支持; RETURNS SETOF <表行类型> 本身已可用
 procedure.out_params_named	create_procedure.sql:199-212	8	不支持命名实参(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150)

@@ -44,7 +44,7 @@ import com.lealone.sql.expression.RowVersion;
 import com.lealone.sql.expression.SelectOrderBy;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
-import com.lealone.sql.expression.function.JavaFunction;
+import com.lealone.sql.expression.function.Function;
 import com.lealone.sql.expression.visitor.ExpressionVisitor;
 import com.lealone.sql.expression.visitor.ExpressionVisitorFactory;
 import com.lealone.sql.optimizer.ColumnResolver;
@@ -393,14 +393,11 @@ public class Select extends Query {
             Expression nonAlias = e.getNonAliasExpression();
             // PostgreSQL里setof函数出现在select列表会展开成多行，Lealone不支持这种展开，
             // 这里明确报错，避免把整个结果集当成一个值返回
-            if (nonAlias instanceof JavaFunction) {
-                JavaFunction function = (JavaFunction) nonAlias;
-                if (function.isSetReturning()) {
-                    throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                            "set-returning function " + function.getName()
-                                    + " in select list, use SELECT * FROM " + function.getName()
-                                    + "(...) instead");
-                }
+            if (nonAlias instanceof Function && ((Function) nonAlias).isSetReturning()) {
+                String name = ((Function) nonAlias).getFunctionName();
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "set-returning function " + name + " in select list, use SELECT * FROM "
+                                + name + "(...) instead");
             }
             expressions.set(i, e.optimize(session));
         }

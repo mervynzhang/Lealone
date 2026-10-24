@@ -60,7 +60,7 @@ public class RangeIndex extends IndexBase {
                 // error when converting the value - ignore
             }
         }
-        return new RangeCursor(min, max, step);
+        return new RangeCursor(min, max, step, rangeTable.isWithOrdinality());
     }
 
     @Override
@@ -70,7 +70,14 @@ public class RangeIndex extends IndexBase {
 
     @Override
     public SearchRow findFirstOrLast(ServerSession session, boolean first) {
-        long pos = first ? rangeTable.getMin(session) : rangeTable.getMax(session);
+        long min = rangeTable.getMin(session);
+        long max = rangeTable.getMax(session);
+        long pos = first ? min : max;
+        if (rangeTable.isWithOrdinality()) {
+            long step = rangeTable.getStep(session);
+            long ordinality = step == 0 ? 1 : (pos - min) / step + 1;
+            return new Row(new Value[] { ValueLong.get(pos), ValueLong.get(ordinality) });
+        }
         return new Row(new Value[] { ValueLong.get(pos) });
     }
 
@@ -90,14 +97,17 @@ public class RangeIndex extends IndexBase {
     private static class RangeCursor implements Cursor {
 
         private final long start, end, step;
+        private final boolean withOrdinality;
         private boolean beforeFirst;
         private long current;
+        private long ordinality;
         private Row currentRow;
 
-        RangeCursor(long start, long end, long step) {
+        RangeCursor(long start, long end, long step, boolean withOrdinality) {
             this.start = start;
             this.end = end;
             this.step = step;
+            this.withOrdinality = withOrdinality;
             beforeFirst = true;
         }
 
@@ -111,10 +121,17 @@ public class RangeIndex extends IndexBase {
             if (beforeFirst) {
                 beforeFirst = false;
                 current = start;
+                ordinality = 1;
             } else {
                 current += step;
+                ordinality++;
             }
-            currentRow = new Row(new Value[] { ValueLong.get(current) });
+            if (withOrdinality) {
+                currentRow = new Row(
+                        new Value[] { ValueLong.get(current), ValueLong.get(ordinality) });
+            } else {
+                currentRow = new Row(new Value[] { ValueLong.get(current) });
+            }
             return step > 0 ? current <= end : current >= end;
         }
     }
