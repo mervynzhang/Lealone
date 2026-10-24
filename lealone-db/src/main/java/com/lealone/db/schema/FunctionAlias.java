@@ -282,6 +282,15 @@ public class FunctionAlias extends SchemaObjectBase {
         return deterministic;
     }
 
+    /**
+     * 函数是否返回多行结果(RETURNS SETOF/RETURNS TABLE)。
+     *
+     * @return 默认都返回单值
+     */
+    public boolean isSetReturning() {
+        return false;
+    }
+
     public String getSource() {
         return source;
     }

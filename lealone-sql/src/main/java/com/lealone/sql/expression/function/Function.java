@@ -224,6 +224,15 @@ public abstract class Function extends Expression {
     public abstract boolean isDeterministic();
 
     /**
+     * Whether the function returns multiple rows (a set-returning function).
+     *
+     * @return true if it does
+     */
+    public boolean isSetReturning() {
+        return false;
+    }
+
+    /**
      * Should the return value ResultSet be buffered in a local temporary file?
      *
      * @return true if it should be.

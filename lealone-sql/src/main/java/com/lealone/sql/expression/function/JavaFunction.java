@@ -128,6 +128,11 @@ public class JavaFunction extends Function {
     }
 
     @Override
+    public boolean isSetReturning() {
+        return functionAlias.isSetReturning();
+    }
+
+    @Override
     boolean isBufferResultSetToLocalTemp() {
         return functionAlias.isBufferResultSetToLocalTemp();
     }

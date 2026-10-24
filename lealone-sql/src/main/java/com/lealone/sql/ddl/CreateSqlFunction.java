@@ -26,6 +26,14 @@ public class CreateSqlFunction extends SchemaStatement {
     private String[] parameterTypes;
     private String returnTypeSql;
     private int returnType;
+    // RETURNS SETOF/RETURNS TABLE声明的结果列
+    private boolean returnColumns;
+    private boolean returnsTable;
+    private String[] columnNames;
+    private String[] columnTypeSqls;
+    private int[] columnTypes;
+    private long[] columnPrecisions;
+    private int[] columnScales;
     private String body;
     private String bodySql;
     private int[] bodyParameterIndexes;
@@ -54,6 +62,32 @@ public class CreateSqlFunction extends SchemaStatement {
     public void setReturnType(String returnTypeSql, int returnType) {
         this.returnTypeSql = returnTypeSql;
         this.returnType = returnType;
+    }
+
+    /**
+     * 设置RETURNS SETOF声明的结果列。
+     */
+    public void setSetofReturnType(String columnTypeSql, int columnType, long columnPrecision,
+            int columnScale) {
+        returnColumns = true;
+        columnTypeSqls = new String[] { columnTypeSql };
+        columnTypes = new int[] { columnType };
+        columnPrecisions = new long[] { columnPrecision };
+        columnScales = new int[] { columnScale };
+    }
+
+    /**
+     * 设置RETURNS TABLE声明的结果列。
+     */
+    public void setTableReturnType(String[] columnNames, String[] columnTypeSqls, int[] columnTypes,
+            long[] columnPrecisions, int[] columnScales) {
+        returnColumns = true;
+        returnsTable = true;
+        this.columnNames = columnNames;
+        this.columnTypeSqls = columnTypeSqls;
+        this.columnTypes = columnTypes;
+        this.columnPrecisions = columnPrecisions;
+        this.columnScales = columnScales;
     }
 
     /**
@@ -102,7 +136,12 @@ public class CreateSqlFunction extends SchemaStatement {
         int id = getObjectId();
         SqlFunction function = new SqlFunction(schema, id, functionName);
         function.setParameters(parameterNames, parameterTypes);
-        function.setReturnType(returnTypeSql, returnType);
+        if (returnColumns) {
+            function.setReturnColumns(returnsTable, columnNames, columnTypeSqls, columnTypes,
+                    columnPrecisions, columnScales);
+        } else {
+            function.setReturnType(returnTypeSql, returnType);
+        }
         function.setBody(body, bodySql, bodyParameterIndexes);
         function.setDeterministic(deterministic);
         schema.add(session, function, lock);

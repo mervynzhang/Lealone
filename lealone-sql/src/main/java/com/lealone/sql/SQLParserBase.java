@@ -1866,6 +1866,13 @@ public class SQLParserBase implements SQLParser {
             }
         }
         alias = readFromAlias(alias);
+        if (table instanceof FunctionTable) {
+            // 函数表支持列别名列表，如FROM f(1) t(a, b)
+            String[] functionColumnAliases = readDerivedColumnAliases();
+            if (functionColumnAliases != null) {
+                ((FunctionTable) table).setColumnAliases(functionColumnAliases);
+            }
+        }
         return new TableFilter(session, table, alias, rightsChecked, currentSelect);
     }
 
@@ -5147,12 +5154,49 @@ public class SQLParserBase implements SQLParser {
 
         read("RETURNS");
         if (readIf("SETOF")) {
-            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "RETURNS SETOF");
+            Column returnColumn = parseColumnWithType(null);
+            command.setSetofReturnType(returnColumn.getOriginalSQL(), returnColumn.getType(),
+                    returnColumn.getPrecision(), returnColumn.getScale());
         } else if (readIf("TABLE")) {
-            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "RETURNS TABLE");
+            read("(");
+            ArrayList<String> columnNames = Utils.newSmallArrayList();
+            ArrayList<String> columnTypeSqls = Utils.newSmallArrayList();
+            ArrayList<Integer> columnTypes = Utils.newSmallArrayList();
+            ArrayList<Long> columnPrecisions = Utils.newSmallArrayList();
+            ArrayList<Integer> columnScales = Utils.newSmallArrayList();
+            do {
+                String columnName = readColumnIdentifier();
+                if (isDuplicateParameter(columnNames, columnName)) {
+                    throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                            "duplicate column name: " + columnName);
+                }
+                Column column = parseColumnWithType(null);
+                columnNames.add(columnName);
+                columnTypeSqls.add(column.getOriginalSQL());
+                columnTypes.add(column.getType());
+                columnPrecisions.add(column.getPrecision());
+                columnScales.add(column.getScale());
+            } while (readIf(","));
+            read(")");
+            int columnCount = columnNames.size();
+            String[] columnNameArray = new String[columnCount];
+            String[] columnTypeSqlArray = new String[columnCount];
+            int[] columnTypeArray = new int[columnCount];
+            long[] columnPrecisionArray = new long[columnCount];
+            int[] columnScaleArray = new int[columnCount];
+            for (int i = 0; i < columnCount; i++) {
+                columnNameArray[i] = columnNames.get(i);
+                columnTypeSqlArray[i] = columnTypeSqls.get(i);
+                columnTypeArray[i] = columnTypes.get(i);
+                columnPrecisionArray[i] = columnPrecisions.get(i);
+                columnScaleArray[i] = columnScales.get(i);
+            }
+            command.setTableReturnType(columnNameArray, columnTypeSqlArray, columnTypeArray,
+                    columnPrecisionArray, columnScaleArray);
+        } else {
+            Column returnColumn = parseColumnWithType(null);
+            command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
         }
-        Column returnColumn = parseColumnWithType(null);
-        command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
 
         // LANGUAGE子句和易变性关键字都是可选的，且顺序任意
         boolean deterministic = false;
