@@ -43,6 +43,11 @@ public interface Cursor {
         return get();
     }
 
+    // 索引行里的值是否一定是表里最新的值(二级索引是异步维护的，不能保证)
+    default boolean isSearchRowUpToDate() {
+        return true;
+    }
+
     /**
      * Skip to the next row if one is available.
      *
