@@ -154,14 +154,17 @@ public class AOTransactionMap<K, V> implements TransactionMap<K, V> {
     // 新的方案当存在多个事务时虽然慢了一些，但是实现不用搞得很复杂，能减少错误
     @Override
     public long size() {
-        long undoLogSize = 0;
-        for (AOTransaction t : transaction.transactionEngine.currentTransactions()) {
-            UndoLog ul = t.undoLog;
-            if (ul != null)
-                undoLogSize += ul.size();
+        // 可重复读和串行化事务要看到自己的快照，原表的size包含了快照之后提交的记录，不能用
+        if (transaction.getIsolationLevel() < Transaction.IL_REPEATABLE_READ) {
+            long undoLogSize = 0;
+            for (AOTransaction t : transaction.transactionEngine.currentTransactions()) {
+                UndoLog ul = t.undoLog;
+                if (ul != null)
+                    undoLogSize += ul.size();
+            }
+            if (undoLogSize == 0)
+                return map.size(); // 存在的多个事务都是只读操作时可以安全返回原表的size
         }
-        if (undoLogSize == 0)
-            return map.size(); // 存在的多个事务都是只读操作时可以安全返回原表的size
 
         long size = 0;
         TransactionMapCursor<?, ?> cursor = cursor();
