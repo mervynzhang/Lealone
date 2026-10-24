@@ -307,6 +307,9 @@ public class TriggerObject extends SchemaObjectBase {
         return values;
     }
 
+    // 触发器函数的嵌套深度上限
+    private static final int MAX_TRIGGER_DEPTH = 32;
+
     // 执行PL/pgSQL触发器函数；RETURN NULL取消BEFORE行操作，RETURN NEW/OLD写回新行
     private boolean fireFunctionRow(ServerSession session, Row oldRow, Row newRow,
             boolean beforeAction) {
@@ -320,6 +323,12 @@ public class TriggerObject extends SchemaObjectBase {
         }
         Value[] oldValues = convertToValueList(oldRow);
         Value[] newValues = convertToValueList(newRow);
+        // 触发器函数里再改同一张表会无限递归, 这里加深度上限, 免得直接StackOverflowError
+        if (session.increaseTriggerDepth() > MAX_TRIGGER_DEPTH) {
+            session.decreaseTriggerDepth();
+            throw DbException.get(ErrorCode.GENERAL_ERROR_1,
+                    "trigger recursion depth exceeds " + MAX_TRIGGER_DEPTH);
+        }
         boolean oldAutoCommit = session.isAutoCommit();
         boolean oldDisabled = session.setCommitOrRollbackDisabled(true);
         long identity = session.getLastScopeIdentity();
@@ -348,6 +357,7 @@ public class TriggerObject extends SchemaObjectBase {
             if (!onRollback)
                 throw DbException.convert(e);
         } finally {
+            session.decreaseTriggerDepth();
             session.setLastScopeIdentity(identity);
             session.setCommitOrRollbackDisabled(oldDisabled);
             session.setAutoCommit(oldAutoCommit);

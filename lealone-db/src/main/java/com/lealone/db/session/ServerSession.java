@@ -100,6 +100,7 @@ public class ServerSession extends SessionBase implements InternalSession {
     private User currentUser;
     // SET ROLE之后的当前角色, null表示没切换过(SET ROLE NONE/RESET ROLE恢复成null)
     private RightOwner currentRole;
+    private int triggerDepth; // 触发器函数的嵌套深度, 防止自触发把JVM栈打爆
     private final int id;
     private final ArrayList<Lock> locks = new ArrayList<>();
     private Random random;
@@ -475,6 +476,15 @@ public class ServerSession extends SessionBase implements InternalSession {
     }
 
     // SET ROLE之后的当前角色, null表示做权限检查时用当前用户
+    // 触发器嵌套深度, 超过上限由调用方报错
+    public int increaseTriggerDepth() {
+        return ++triggerDepth;
+    }
+
+    public void decreaseTriggerDepth() {
+        --triggerDepth;
+    }
+
     public RightOwner getCurrentRole() {
         return currentRole;
     }
