@@ -13,7 +13,6 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.db.api.ErrorCode;
@@ -22,7 +21,7 @@ import com.lealone.test.sql.SqlAssertTestBase;
 /**
  * 序列：min/max/cycle/耗尽、cache、DEFAULT 里用序列、并发 nextval。
  * <p>
- * 期望值以 SQL 标准 / H2 语义为准。已确认不符合期望的断言放在 {@code @Ignore("BUG: ...")} 里。
+ * 期望值以 SQL 标准 / H2 语义为准。曾经不符合期望的断言修复后保留为回归用例。
  */
 public class SequenceTest extends SqlAssertTestBase {
 
@@ -145,7 +144,7 @@ public class SequenceTest extends SqlAssertTestBase {
     }
 
     // ------------------------------------------------------------------
-    // 以下为已确认缺陷（期望值按 SQL 标准与 H2 2.4.240 实测）
+    // 以下用例曾经是缺陷，现已修复（期望值按 SQL 标准与 H2 2.4.240 实测）
     // ------------------------------------------------------------------
 
     // 带 CYCLE 的序列到 MAXVALUE 之后回绕到 MINVALUE（H2 行为）
@@ -183,10 +182,7 @@ public class SequenceTest extends SqlAssertTestBase {
         drop("seq_c3");
     }
 
-    // BUG: 不支持标准的 CURRENT VALUE FOR <sequence> 语法。
-    // 期望: SELECT CURRENT VALUE FOR seq 返回最近一次 nextval 的值（H2 行为）；
-    // 实际: 42000 语法错误，只能用 Lealone 私有的 CURRVAL('seq')。
-    @Ignore("BUG: CURRENT VALUE FOR <sequence> is a syntax error (42000); only CURRVAL('seq') works")
+    // 支持标准的 CURRENT VALUE FOR <sequence> 语法，返回最近一次 nextval 的值（H2 行为）
     @Test
     public void currentValueForSyntaxIsSupported() {
         drop("seq_c4");
