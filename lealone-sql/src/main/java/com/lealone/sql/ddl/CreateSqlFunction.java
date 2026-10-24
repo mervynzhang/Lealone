@@ -5,18 +5,24 @@
  */
 package com.lealone.sql.ddl;
 
+import java.util.ArrayList;
+
 import com.lealone.common.exceptions.DbException;
 import com.lealone.db.DbObjectType;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.lock.DbObjectLock;
+import com.lealone.db.result.Result;
 import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
+import com.lealone.sql.PreparedSQLStatement;
 import com.lealone.sql.SQLStatement;
+import com.lealone.sql.expression.Expression;
 import com.lealone.sql.plpgsql.PlpgSqlFunction;
 import com.lealone.sql.plpgsql.PlpgSqlParser;
+import com.lealone.sql.query.Query;
 
 /**
  * This class represents the statement
@@ -158,10 +164,82 @@ public class CreateSqlFunction extends SchemaStatement {
         return false;
     }
 
+    // 只有一个OUT/INOUT参数时它就是标量返回值
+    private int getSingleOutputParameterIndex() {
+        for (int i = 0; i < parameterModes.length; i++) {
+            if (parameterModes[i] != SqlFunction.PARAM_IN) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 建函数时对SQL函数体做最小校验：prepare一次(不执行)，把语法/列名错误提前报出来，
+     * 和PostgreSQL的check_function_bodies一样。标量返回值额外校验列数和常量类型，
+     * setof/table和多个OUT参数的结果列形状在调用时校验。
+     */
+    private void validateSqlBody() {
+        // 数据库启动时回放sys(meta)记录，此时函数体引用的表可能还没建出来，跳过校验
+        if (session.getDatabase().isStarting())
+            return;
+        int outputCount = getOutputParameterCount();
+        int declaredType = Value.UNKNOWN;
+        if (!returnColumns && outputCount <= 1) {
+            if (outputCount == 1) {
+                // 有RETURNS时以RETURNS为准，它和OUT参数类型不一致的情况由SqlFunction.setReturnType报错
+                declaredType = returnTypeSql != null ? returnType
+                        : parameterTypeIds[getSingleOutputParameterIndex()];
+            } else if (returnTypeSql != null) {
+                declaredType = returnType;
+            }
+        }
+        ServerSession nestedSession = session.createNestedSession();
+        nestedSession.setCurrentSchemaName(session.getCurrentSchemaName());
+        PreparedSQLStatement stmt = nestedSession.prepareStatement(bodySql);
+        Result meta = stmt.getMetaData().get();
+        if (meta == null)
+            return;
+        // 只有标量返回值才在建函数时校验结果列的个数和常量类型,
+        // VOID不关心函数体返回什么
+        if (declaredType == Value.UNKNOWN || declaredType == Value.NULL)
+            return;
+        int columnCount = meta.getVisibleColumnCount();
+        if (columnCount != 1) {
+            throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1,
+                    "function body must return one column, but returns " + columnCount);
+        }
+        checkConstantReturnValue(stmt, declaredType);
+    }
+
+    // 函数体返回常量时，提前检查能否转换成声明的返回类型(比如 'not an integer' 不能作为INT返回)
+    private void checkConstantReturnValue(PreparedSQLStatement stmt, int declaredType) {
+        if (!(stmt instanceof Query))
+            return;
+        ArrayList<Expression> expressions = ((Query) stmt).getExpressions();
+        if (expressions == null || expressions.size() != 1)
+            return;
+        Expression expr = expressions.get(0).getNonAliasExpression();
+        if (!expr.isConstant())
+            return;
+        Value v = expr.getValue(session);
+        if (v == null || v.getType() == Value.NULL)
+            return;
+        try {
+            v.convertTo(declaredType);
+        } catch (DbException e) {
+            throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, e,
+                    "function body returns " + v.getSQL() + ", can not convert to the declared type");
+        }
+    }
+
     @Override
     public int update() {
         session.getUser().checkAdmin();
         boolean plpgsql = PlpgSqlFunction.LANGUAGE.equalsIgnoreCase(language);
+        // 已经有同名函数并且加了IF NOT EXISTS时什么都不用做
+        if (!plpgsql && ifNotExists && schema.findFunction(session, functionName) != null)
+            return 0;
         // 先校验语言和函数体，非法时不改动已有的函数
         if (plpgsql) {
             PlpgSqlParser.parse(body);
@@ -172,6 +250,8 @@ public class CreateSqlFunction extends SchemaStatement {
             }
         } else if (!"SQL".equalsIgnoreCase(language)) {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "LANGUAGE " + language);
+        } else {
+            validateSqlBody();
         }
         DbObjectLock lock = schema.tryExclusiveLock(DbObjectType.FUNCTION_ALIAS, session);
         if (lock == null)

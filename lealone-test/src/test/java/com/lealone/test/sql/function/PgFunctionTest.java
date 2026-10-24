@@ -62,9 +62,10 @@ public class PgFunctionTest extends SqlTestBase {
         executeUpdate("CREATE OR REPLACE FUNCTION val(a INT) RETURNS INT AS $$ VALUES (a * 10) $$");
         executeQuery("SELECT val(4)");
         assertEquals(40, getIntValue(1));
-        executeUpdate("CREATE OR REPLACE FUNCTION tab() RETURNS INT AS $$ TABLE pgf_user $$");
+        // TABLE函数体只能有一列，多列的函数体建函数时就会报错
+        executeUpdate("CREATE OR REPLACE FUNCTION tab() RETURNS INT AS $$ TABLE pgf_one $$");
         executeQuery("SELECT tab()");
-        assertEquals(1, getIntValue(1));
+        assertEquals(7, getIntValue(1));
 
         // IMMUTABLE/STABLE等价于deterministic, 默认是VOLATILE
         String immutableSql = getCreateSql("ADD_ONE");
@@ -157,6 +158,9 @@ public class PgFunctionTest extends SqlTestBase {
         executeUpdate("DROP TABLE IF EXISTS pgf_user");
         executeUpdate("CREATE TABLE pgf_user(id INT PRIMARY KEY, name VARCHAR(50))");
         executeUpdate("INSERT INTO pgf_user VALUES(1, 'alice'), (2, 'bob')");
+        executeUpdate("DROP TABLE IF EXISTS pgf_one");
+        executeUpdate("CREATE TABLE pgf_one(id INT)");
+        executeUpdate("INSERT INTO pgf_one VALUES(7)");
     }
 
     // 从SCRIPT的输出里找出指定函数的CREATE FUNCTION语句
