@@ -549,6 +549,17 @@ public class PlpgsqlTest extends SqlTestBase {
         executeQuery("SELECT plp_rec_record(1)");
         assertEquals("alice", getStringValue(1));
 
+        // 给record字段赋值
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_field_set() RETURNS VARCHAR LANGUAGE plpgsql AS $$"
+                + " DECLARE r record;" //
+                + " BEGIN" //
+                + "   SELECT * INTO r FROM plp_rec_t WHERE id = 1;" //
+                + "   r.name := 'changed';" //
+                + "   RETURN r.name;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_field_set()");
+        assertEquals("changed", getStringValue(1));
+
         // 没有行时record未赋值，取字段报55000
         executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_norow(p INT) RETURNS VARCHAR LANGUAGE plpgsql AS $$"
                 + " DECLARE r plp_rec_t%ROWTYPE;" //

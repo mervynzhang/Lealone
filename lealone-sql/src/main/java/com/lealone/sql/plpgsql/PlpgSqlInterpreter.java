@@ -413,16 +413,27 @@ public class PlpgSqlInterpreter {
 
     private void executeAssignment(Assignment node) {
         PlpgSqlVariable variable;
+        Value value = null;
         if (node.qualifier != null) {
             variable = scope.findVariableByLabel(node.qualifier, node.target, node.targetQuoted);
-            if (variable == null)
+            if (variable == null) {
+                // outerblock.param1不是标签时可以给record变量的字段赋值 r.col := ...
+                PlpgSqlVariable record = scope.findVariable(node.qualifier, node.qualifierQuoted);
+                if (record != null && record.isRecord()) {
+                    record.checkCanAssign();
+                    value = sqlExecutor.evalExpression(node.expression, scope);
+                    record.setRecordField(node.target, value);
+                    return;
+                }
                 throw PlpgSqlException.raise("42703",
                         "variable " + node.qualifier + "." + node.target + " does not exist");
+            }
         } else {
             variable = findVariable(node.target, node.targetQuoted);
         }
         variable.checkCanAssign();
-        Value value = sqlExecutor.evalExpression(node.expression, scope);
+        if (value == null)
+            value = sqlExecutor.evalExpression(node.expression, scope);
         variable.setValue(value);
     }
 
