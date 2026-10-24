@@ -5,15 +5,17 @@
  */
 package com.lealone.sql.plpgsql;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import com.lealone.db.api.CursorPortal;
+import com.lealone.db.result.Result;
 import com.lealone.db.value.Value;
 
 /**
- * PL/pgSQL游标的运行时状态。查询结果在OPEN时一次性物化，
- * FETCH只移动位置，不会重新执行查询。
+ * PL/pgSQL游标的运行时状态。OPEN时只执行查询并持有结果(Result)，不把行复制进内存；
+ * 行数超过maxMemoryRows时由LocalResult自己落盘，所以大结果集不会撑爆堆。
+ * 顺序方向(NEXT/FORWARD)一路next()读；回退方向先reset()再前进到目标行，
+ * 缓冲区就是LocalResult本身(可能已落盘)，回退不会额外占用内存。
  */
 public class PlpgSqlCursor implements CursorPortal {
 
@@ -21,11 +23,14 @@ public class PlpgSqlCursor implements CursorPortal {
     private String query;
     private List<String> parameterNames;
     private List<String> parameterTypes;
-    private List<Value[]> rows;
+    // 查询结果，行数超过阈值时LocalResult会把行落到临时文件
+    private Result result;
     private String[] columnNames;
     private int[] columnTypes;
-    // 当前行下标，-1表示在第一行之前，rows.size()表示在最后一行之后
+    // 当前行下标，-1表示在第一行之前，rowCount表示在最后一行之后
     private int position = -1;
+    // 当前行，Result.currentRow()返回的数组在下次next()之前都有效，解释器拿到后立刻用掉
+    private Value[] currentRow;
     private boolean open;
 
     public PlpgSqlCursor(String name) {
@@ -61,10 +66,6 @@ public class PlpgSqlCursor implements CursorPortal {
         return open;
     }
 
-    public List<Value[]> getRows() {
-        return rows;
-    }
-
     public String[] getColumnNames() {
         return columnNames;
     }
@@ -73,37 +74,36 @@ public class PlpgSqlCursor implements CursorPortal {
         return columnTypes;
     }
 
-    public int getPosition() {
-        return position;
-    }
-
-    public void setPosition(int position) {
-        this.position = position;
-    }
-
-    public void open(PlpgSqlSqlExecutor.QueryRows queryRows) {
-        this.rows = queryRows.rows;
-        this.columnNames = queryRows.columnNames;
-        this.columnTypes = queryRows.columnTypes;
+    public void open(Result result, String[] columnNames, int[] columnTypes) {
+        this.result = result;
+        this.columnNames = columnNames;
+        this.columnTypes = columnTypes;
         this.position = -1;
+        this.currentRow = null;
         this.open = true;
     }
 
     public int size() {
-        return rows == null ? 0 : rows.size();
+        if (result == null)
+            return 0;
+        int count = result.getRowCount();
+        return count < 0 ? 0 : count;
     }
 
     public Value[] currentRow() {
-        if (!open || rows == null || position < 0 || position >= rows.size())
-            return null;
-        return rows.get(position);
+        return open ? currentRow : null;
     }
 
     public void close() {
-        this.rows = null;
+        if (result != null) {
+            // 落盘结果持有临时文件，关闭游标时必须释放
+            result.close();
+            result = null;
+        }
         this.columnNames = null;
         this.columnTypes = null;
         this.position = -1;
+        this.currentRow = null;
         this.open = false;
     }
 
@@ -112,46 +112,81 @@ public class PlpgSqlCursor implements CursorPortal {
         close();
     }
 
-    // FETCH的方向，返回这次实际取到的行数
+    // FETCH的方向，返回这次实际经过的行数
     public int move(String direction, int count) {
-        int size = size();
+        if (!open || result == null)
+            return 0;
         String dir = direction == null ? "NEXT" : direction.toUpperCase();
         int old = position;
+        int fetched = 0;
         if ("NEXT".equals(dir) || "FORWARD".equals(dir)) {
-            if (count <= 0)
-                count = 1;
-            position = position + count;
+            fetched = fetchForward(count <= 0 ? 1 : count);
         } else if ("PRIOR".equals(dir) || "BACKWARD".equals(dir)) {
-            if (count <= 0)
-                count = 1;
-            position = position - count;
+            seekTo(position - (count <= 0 ? 1 : count));
         } else if ("FIRST".equals(dir)) {
-            position = size == 0 ? -1 : 0;
+            seekTo(0);
         } else if ("LAST".equals(dir)) {
-            position = size == 0 ? -1 : size - 1;
+            seekTo(size() - 1);
         } else if ("ABSOLUTE".equals(dir)) {
-            position = count >= 0 ? count - 1 : size + count;
+            seekTo(count >= 0 ? count - 1 : size() + count);
         } else if ("RELATIVE".equals(dir)) {
-            position = position + count;
+            seekTo(position + count);
         } else if ("ALL".equals(dir) || "FORWARD_ALL".equals(dir)) {
-            position = size == 0 ? -1 : size - 1;
+            fetched = fetchForward(Integer.MAX_VALUE);
         } else if ("BACKWARD_ALL".equals(dir)) {
-            position = size == 0 ? -1 : 0;
+            seekTo(-1);
         } else {
-            position = position + 1;
+            fetched = fetchForward(1);
         }
-        // 越界时停到第一行之前或者最后一行之后，和PostgreSQL一致
-        if (position < -1)
-            position = -1;
-        if (position > size)
-            position = size;
+        // 顺序方向返回真正取到的行数(FETCH ALL的ROW_COUNT用它)，回退方向返回位置变化量
+        if (fetched > 0)
+            return fetched;
         int moved = position - old;
-        if (moved < 0)
-            moved = -moved;
-        return moved;
+        return moved < 0 ? -moved : moved;
     }
 
-    public List<Value[]> allRows() {
-        return rows == null ? new ArrayList<>() : rows;
+    // 顺序读，走到末尾后停在"最后一行之后"，返回真正取到的行数
+    private int fetchForward(int count) {
+        int fetched = 0;
+        for (int i = 0; i < count; i++) {
+            if (!result.next()) {
+                position = size();
+                currentRow = null;
+                return fetched;
+            }
+            position++;
+            fetched++;
+            currentRow = visibleRow(result.currentRow());
+        }
+        return fetched;
+    }
+
+    // 定位到指定行，-1表示第一行之前；回退时从头重放(LocalResult落盘后同样支持reset)
+    private void seekTo(int target) {
+        if (target < -1)
+            target = -1;
+        int count = size();
+        if (target > count)
+            target = count;
+        if (target < position) {
+            result.reset();
+            position = -1;
+            currentRow = null;
+        }
+        if (target >= 0 && target < count) {
+            fetchForward(target - position);
+        } else {
+            position = target;
+            currentRow = null;
+        }
+    }
+
+    // 结果行可能带排序用的内部列，可见列更少时复制一份，否则直接用结果里的数组(避免逐行分配)
+    private Value[] visibleRow(Value[] row) {
+        if (row == null || columnNames == null || row.length <= columnNames.length)
+            return row;
+        Value[] copy = new Value[columnNames.length];
+        System.arraycopy(row, 0, copy, 0, columnNames.length);
+        return copy;
     }
 }

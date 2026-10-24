@@ -96,6 +96,49 @@ public class PlpgSqlSqlExecutor {
     }
 
     /**
+     * 执行游标查询，只执行一次查询并返回结果本身，不把行复制进内存。
+     * 结果行数超过maxMemoryRows时由LocalResult落盘，调用方(游标)负责close。
+     */
+    public CursorResult queryForCursor(String sql, PlpgSqlVariableResolver resolver) {
+        PreparedSQLStatement statement = prepare(sql, resolver);
+        if (!statement.isQuery()) {
+            statement.close();
+            throw DbException.get(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY);
+        }
+        try {
+            Result result = statement.query(0);
+            if (result == null)
+                return new CursorResult(null, new String[0], new int[0]);
+            int columnCount = result.getVisibleColumnCount();
+            String[] columnNames = new String[columnCount];
+            int[] columnTypes = new int[columnCount];
+            for (int i = 0; i < columnCount; i++) {
+                columnNames[i] = result.getColumnName(i);
+                columnTypes[i] = result.getColumnType(i);
+            }
+            return new CursorResult(result, columnNames, columnTypes);
+        } finally {
+            statement.close();
+        }
+    }
+
+    /**
+     * 游标查询的结果：Result由调用方(游标)持有并负责关闭。
+     */
+    public static class CursorResult {
+
+        public final Result result;
+        public final String[] columnNames;
+        public final int[] columnTypes;
+
+        CursorResult(Result result, String[] columnNames, int[] columnTypes) {
+            this.result = result;
+            this.columnNames = columnNames;
+            this.columnTypes = columnTypes;
+        }
+    }
+
+    /**
      * 执行查询并丢弃结果，PERFORM语句使用；返回读取到的行数。
      */
     public int executeQuery(String sql, PlpgSqlVariableResolver resolver) {

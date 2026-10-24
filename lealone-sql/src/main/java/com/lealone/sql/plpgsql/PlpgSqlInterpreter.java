@@ -103,6 +103,8 @@ public class PlpgSqlInterpreter {
     private final ServerSession session;
     // refcursor用的匿名门户名字里的序号
     private int unnamedPortals;
+    // 本函数里声明的游标，函数返回或抛异常时要关掉(可能持有落盘结果的文件句柄)
+    private List<PlpgSqlCursor> declaredCursors;
     private final Block body;
     private final PlpgSqlResultInfo resultInfo;
     private final int returnType;
@@ -173,8 +175,19 @@ public class PlpgSqlInterpreter {
                 throw PlpgSqlException.raise("42601", "CONTINUE cannot be used outside a loop");
             }
         } finally {
+            closeDeclaredCursors();
             scope = null;
         }
+    }
+
+    // 声明游标不在门户注册表里，函数退出时由解释器自己关闭
+    private void closeDeclaredCursors() {
+        if (declaredCursors == null)
+            return;
+        for (PlpgSqlCursor cursor : declaredCursors) {
+            cursor.close();
+        }
+        declaredCursors = null;
     }
 
     // 函数自然结束或执行RETURN;时按返回形态组装返回值
@@ -427,6 +440,9 @@ public class PlpgSqlInterpreter {
                 cursor.setParameters(declaration.cursorParameterNames,
                         declaration.cursorParameterTypes);
                 variable.setCursorState(cursor);
+                if (declaredCursors == null)
+                    declaredCursors = new ArrayList<>();
+                declaredCursors.add(cursor);
             } else if (isRefcursorType(typeName)) {
                 // refcursor变量的值就是门户名，真正的游标状态放在会话的门户注册表里
                 variable.setRefcursor(true);
@@ -1101,18 +1117,18 @@ public class PlpgSqlInterpreter {
             if (query == null)
                 throw PlpgSqlException.raise("55000",
                         "cursor " + variable.getName() + " has no query");
-            PlpgSqlSqlExecutor.QueryRows rows = sqlExecutor.queryWithColumns(query,
-                    openCursorArguments(cursor, node), 0);
-            cursor.open(rows);
+            PlpgSqlSqlExecutor.CursorResult queryResult = sqlExecutor.queryForCursor(query,
+                    openCursorArguments(cursor, node));
+            cursor.open(queryResult.result, queryResult.columnNames, queryResult.columnTypes);
             return;
         }
         if (node.query == null)
             throw PlpgSqlException.raise("55000",
                     "cursor " + variable.getName() + " can only be opened with a query");
         String portalName = unnamedPortalName(variable);
-        PlpgSqlSqlExecutor.QueryRows rows = sqlExecutor.queryWithColumns(node.query, scope, 0);
+        PlpgSqlSqlExecutor.CursorResult queryResult = sqlExecutor.queryForCursor(node.query, scope);
         PlpgSqlCursor cursor = new PlpgSqlCursor(portalName);
-        cursor.open(rows);
+        cursor.open(queryResult.result, queryResult.columnNames, queryResult.columnTypes);
         getPortalMap().put(portalName, cursor);
         // constant refcursor可以带初始门户名, 打开时门户名没变就不算给常量赋值
         if (!variable.isConstant() || !portalName.equals(variable.getValue().getString())) {
