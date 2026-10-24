@@ -3,7 +3,8 @@
 本文件是**持续更新**的修复记录：复审 `review/mervyn-consolidated` 的 88 个提交后确认的问题，
 以及后续每个修复提交"解决什么问题、怎么验证"。
 
-审阅入口：[REVIEW_FIXES_SUMMARY.md](REVIEW_FIXES_SUMMARY.md)（按严重度整理的"问题/验证/风险"总览与合入建议）。
+审阅入口：[REVIEW_FIXES_SUMMARY.md](REVIEW_FIXES_SUMMARY.md)（按严重度分类的提交清单、判定不改的项、SLT 方言差异表、合入建议）。
+本表按**时间顺序**记录（编号即记录顺序，不代表严重度）。
 
 约定（与提交规范一致）：
 
