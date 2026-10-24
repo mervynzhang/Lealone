@@ -8,6 +8,7 @@ package com.lealone.sql.ddl;
 import java.util.ArrayList;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.db.Database;
 import com.lealone.db.DbObjectType;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.lock.DbObjectLock;
@@ -565,6 +566,7 @@ public class CreateSqlFunction extends SchemaStatement {
             checkRoutineKind();
         }
         // 只替换参数类型相同的重载，其它重载保持不变
+        ArrayList<Database.RightSnapshot> rightsSnapshot = null;
         FunctionAlias old = findSameSignature();
         if (old == null && isNameUsedByAlias()) {
             // 名字被Java别名占用时保持原来的行为: 不加OR REPLACE就报已存在
@@ -577,6 +579,9 @@ public class CreateSqlFunction extends SchemaStatement {
             if (!orReplace) {
                 throw DbException.get(ErrorCode.FUNCTION_ALIAS_ALREADY_EXISTS_1, functionName);
             }
+            // 和PostgreSQL一样，CREATE OR REPLACE不改变授权：先把旧函数上的授权记下来，
+            // 新函数建好后再原样还原(含0权限的"显式REVOKE"标记)
+            rightsSnapshot = session.getDatabase().getRightsSnapshot(old);
             // 先删掉旧的函数再创建新的，同一个事务里完成
             schema.remove(session, old, lock);
         }
@@ -623,6 +628,9 @@ public class CreateSqlFunction extends SchemaStatement {
         function.setStrict(strict);
         applyAttributes(function);
         schema.add(session, function, lock);
+        if (rightsSnapshot != null) {
+            session.getDatabase().restoreRights(session, function, rightsSnapshot, lock);
+        }
         return 0;
     }
 }
