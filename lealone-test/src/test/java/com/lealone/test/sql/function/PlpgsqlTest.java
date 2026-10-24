@@ -929,6 +929,14 @@ public class PlpgsqlTest extends SqlTestBase {
         assertTrue(getBooleanValue(1));
     }
 
+    // 自定义复合类型没有用户类型体系，明确报不支持
+    @Test
+    public void testCreateCompositeTypeUnsupported() throws Exception {
+        executeUpdateThanAssertErrorCode(
+                "CREATE TYPE plp_ct AS (a INT, b VARCHAR)",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+    }
+
     // RETURNS RECORD由OUT参数定义返回行，支持SELECT *和复合字段访问
     @Test
     public void testReturnsRecord() throws Exception {

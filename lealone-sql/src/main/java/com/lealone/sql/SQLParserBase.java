@@ -4963,6 +4963,10 @@ public class SQLParserBase implements SQLParser {
         CreateUserDataType command = new CreateUserDataType(session, getSchema());
         command.setTypeName(name);
         read("AS");
+        if (isToken("(")) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "CREATE TYPE ... AS (composite type)");
+        }
         Column col = parseColumnForTable("VALUE", true);
         if (readIf("CHECK")) {
             Expression expr = readExpression();
