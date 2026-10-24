@@ -61,7 +61,7 @@ public class ConcurrencyCheckpointTest extends TestBase {
     // same load, but each worker uses an explicit transaction per update
     // ------------------------------------------------------------------
 
-    @Ignore("已知bug: 显式事务加上并发checkpoint时，等锁的会话可能永远不返回(客户端一直等应答)")
+    @Ignore("已知bug: 热点行更新后，通过二级索引读到的值会过期(索引维护的顺序问题，和挂死无关)")
     @Test(timeout = 180000)
     public void updateStressExplicitTransactions() throws Exception {
         updateStress(unique("concexplicit"), false);
@@ -169,7 +169,6 @@ public class ConcurrencyCheckpointTest extends TestBase {
     // page-split stressor: sequential inserts + low-end deletes + checkpoints
     // ------------------------------------------------------------------
 
-    @Ignore("已知bug: 页分裂期间二级索引会丢行或者留下多余的索引记录")
     @Test(timeout = 180000)
     public void pageSplitStress() throws Exception {
         String db = unique("concpagesplit");
