@@ -168,10 +168,6 @@ public class PredicateLogicTest extends SqlAssertTestBase {
         assertQueryTrue("SELECT NOT (NULL AND FALSE)");
     }
 
-    // BUG: 行值全为 NULL 时 IS NULL 应为 TRUE（SQL:1999 起行值构造器语义，H2 返回 true）。
-    // 期望: (NULL,NULL) IS NULL = true, (NULL,NULL) IS NOT NULL = false；
-    // 实际: false / true，即 Lealone 把行值当成"非 NULL 的复合值"。
-    @Ignore("BUG: (NULL,NULL) IS NULL returns false, should be true (H2: true)")
     @Test
     public void rowValueIsNull() {
         assertQueryTrue("SELECT (NULL, NULL) IS NULL");

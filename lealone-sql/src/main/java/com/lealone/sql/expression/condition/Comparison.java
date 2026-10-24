@@ -14,10 +14,12 @@ import com.lealone.db.Database;
 import com.lealone.db.SysProperties;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueNull;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.ExpressionColumn;
+import com.lealone.sql.expression.ExpressionList;
 import com.lealone.sql.expression.Parameter;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.visitor.ExpressionVisitor;
@@ -236,10 +238,10 @@ public class Comparison extends Condition {
             boolean result;
             switch (compareType) {
             case IS_NULL:
-                result = l == ValueNull.INSTANCE;
+                result = isNull(l);
                 break;
             case IS_NOT_NULL:
-                result = !(l == ValueNull.INSTANCE);
+                result = !isNull(l);
                 break;
             default:
                 throw DbException.getInternalError("type=" + compareType);
@@ -263,6 +265,24 @@ public class Comparison extends Condition {
         r = r.convertTo(dataType);
         boolean result = compareNotNull(database, l, r, compareType);
         return ValueBoolean.get(result);
+    }
+
+    /**
+     * 判断值是否 IS NULL。行值构造器 (a, b) 在所有字段都是 NULL 时才整体视为 NULL。
+     */
+    private boolean isNull(Value v) {
+        if (v == ValueNull.INSTANCE) {
+            return true;
+        }
+        if (!(left instanceof ExpressionList) || !(v instanceof ValueArray)) {
+            return false;
+        }
+        for (Value e : ((ValueArray) v).getList()) {
+            if (e != ValueNull.INSTANCE) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
