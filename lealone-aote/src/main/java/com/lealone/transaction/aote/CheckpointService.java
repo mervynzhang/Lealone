@@ -309,7 +309,7 @@ public class CheckpointService implements Runnable {
                 }
                 if (needSave) {
                     long t1 = System.currentTimeMillis();
-                    if (!isClosing)
+                    if (!isClosing && workingThread != null) // SYNC时在调用线程上保存，没有workingThread
                         workingThread.setName("Saving-" + map.getName());
                     map.setLastTransactionId(lastTransactionId);
                     try {
