@@ -35,8 +35,10 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
      * @return 替换后的函数体
      */
     static String parseBody(ServerSession session, String body, ArrayList<String> parameterNames,
-            ArrayList<Integer> parameterIndexes, String[] parameterTypes) {
-        return parse(session, body, parameterNames, parameterIndexes, true, parameterTypes);
+            ArrayList<Integer> parameterIndexes, String[] parameterTypes,
+            int[] inputParameterIndexes) {
+        return parse(session, body, parameterNames, parameterIndexes, true, parameterTypes,
+                inputParameterIndexes);
     }
 
     /**
@@ -44,13 +46,14 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
      */
     static String parseAtomicBody(ServerSession session, String body,
             ArrayList<String> parameterNames, ArrayList<Integer> parameterIndexes,
-            String[] parameterTypes) {
-        return parse(session, body, parameterNames, parameterIndexes, false, parameterTypes);
+            String[] parameterTypes, int[] inputParameterIndexes) {
+        return parse(session, body, parameterNames, parameterIndexes, false, parameterTypes,
+                inputParameterIndexes);
     }
 
     private static String parse(ServerSession session, String body,
             ArrayList<String> parameterNames, ArrayList<Integer> parameterIndexes,
-            boolean singleQuery, String[] parameterTypes) {
+            boolean singleQuery, String[] parameterTypes, int[] inputParameterIndexes) {
         SqlFunctionBodyParser parser = new SqlFunctionBodyParser(session);
         parser.initialize(body);
         parser.read();
@@ -82,6 +85,22 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
         StringBuilder bodySql = new StringBuilder(body.length());
         int copied = 0; // 已经拷贝到bodySql的函数体位置
         for (int i = 0; i < size; i++) {
+            // PostgreSQL的位置参数: $是PARAMETER token, 后面紧跟数字token
+            if (tokenTypes.get(i) == PARAMETER && "$".equals(tokens.get(i))
+                    && isPositionalParameter(body, tokenTypes, positions, i)) {
+                int n = Integer.parseInt(getTokenText(body, positions, i + 1));
+                if (n < 1 || n > inputParameterIndexes.length) {
+                    // 和PostgreSQL一样: 引用了不存在的位置参数时在CREATE阶段就报错
+                    throw DbException.get(ErrorCode.SYNTAX_ERROR_1, "there is no parameter $" + n);
+                }
+                int[] position = positions.get(i);
+                bodySql.append(body, copied, position[0]);
+                bodySql.append('?');
+                copied = positions.get(i + 1)[1];
+                parameterIndexes.add(inputParameterIndexes[n - 1]);
+                i++; // 跳过数字token
+                continue;
+            }
             if (tokenTypes.get(i) != IDENTIFIER) {
                 continue;
             }
@@ -113,6 +132,29 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
 
     // 单语句函数体: 只能是查询、DML或者DDL/utility语句，并且不允许出现分号和'?';
     // 是不是查询语句、返回类型对不对，由CreateSqlFunction.validateSqlBody在建函数时校验
+    // $1这种位置参数: $和数字两个token必须紧挨着
+    private static boolean isPositionalParameter(String body, ArrayList<Integer> tokenTypes,
+            ArrayList<int[]> positions, int i) {
+        if (i + 1 >= positions.size() || tokenTypes.get(i + 1) != VALUE) {
+            return false;
+        }
+        String number = getTokenText(body, positions, i + 1);
+        if (number.isEmpty()) {
+            return false;
+        }
+        for (int j = 0; j < number.length(); j++) {
+            if (number.charAt(j) < '0' || number.charAt(j) > '9') {
+                return false;
+            }
+        }
+        return positions.get(i)[1] == positions.get(i + 1)[0];
+    }
+
+    private static String getTokenText(String body, ArrayList<int[]> positions, int i) {
+        int[] position = positions.get(i);
+        return body.substring(position[0], position[1]);
+    }
+
     private static void checkBody(ArrayList<String> tokens, ArrayList<Integer> tokenTypes) {
         String firstToken = tokens.get(0);
         if (!isSupportedBodyStart(firstToken)) {
@@ -124,7 +166,7 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                         "function body must be a single query");
             }
-            if (tokenTypes.get(i) == PARAMETER) {
+            if (tokenTypes.get(i) == PARAMETER && !"$".equals(tokens.get(i))) {
                 // 函数体里的'?'会和参数名替换出来的'?'混淆，直接拒绝
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                         "? is not allowed in function body");
@@ -146,7 +188,7 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
     private static void checkNoParameterToken(ArrayList<String> tokens,
             ArrayList<Integer> tokenTypes) {
         for (int i = 0, size = tokens.size(); i < size; i++) {
-            if (tokenTypes.get(i) == PARAMETER) {
+            if (tokenTypes.get(i) == PARAMETER && !"$".equals(tokens.get(i))) {
                 // 函数体里的'?'会和参数名替换出来的'?'混淆，直接拒绝
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                         "? is not allowed in function body");

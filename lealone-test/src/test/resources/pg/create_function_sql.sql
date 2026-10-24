@@ -65,11 +65,18 @@ select functest_A_1(null, '2020-01-01') r;
 
 -- @case function_sql.a2_array_arg
 -- @pg create_function_sql.sql:25-26
--- 缺失: 数组参数本身已经支持, 但这条还依赖 $1 位置参数和 ARRAY[...] 字面量
-create function functest_A_2(a text[]) returns int language sql
-    as 'select a[1]::int';
--- @pg 调用在 :35: select functest_A_2(ARRAY['1','2','3']);
--- PG 期望: 1
+-- 适配: 无名参数和 $1 位置参数都是 PG 原样; 只有调用处的 ARRAY['1','2','3']
+--       改成 Lealone 的 ('1','2','3') 数组字面量(见 :35)
+create function functest_A_2(text[]) returns int language sql
+    as 'select $1[1]::int';
+> update count: 0
+
+-- @pg 调用在 :35
+select functest_A_2(('1','2','3')) r;
+> R
+> -
+> 1
+> rows: 1
 
 -- @case function_sql.a3_no_args
 -- @pg create_function_sql.sql:27-28
@@ -89,10 +96,7 @@ select functest_A_3() r;
 -- 适配: PG 查 pg_proc 并用 regproc/regtype 转换 oid;
 --       Lealone 的等价只读目录是 INFORMATION_SCHEMA.PG_PROC, 类型列直接是文本,
 --       也没有 regproc 类型, 所以按 proname 过滤, 去掉全部 ::regproc/::regtype 转换。
---       A_2 在 a2_array_arg 用例里因为 $1 位置参数被 skip, 这里补建一份(只用于目录检查)。
-create function functest_A_2(a text[]) returns int language sql
-    as 'select 1';
-> update count: 0
+--       A_2 由 a2_array_arg 用例建好(无名参数 + $1 位置参数已支持), 这里不再补建。
 select proname, prorettype, proargtypes from information_schema.pg_proc
        where proname in ('FUNCTEST_A_1', 'FUNCTEST_A_2', 'FUNCTEST_A_3')
        order by proname;
@@ -894,14 +898,14 @@ select twice_inc(11, 22) r;
 -- @pg create_function_sql.sql:465-466
 -- 适配: PG 报 42804, Lealone 建函数时校验常量返回类型报 22018, 都是 CREATE 时拒绝;
 --       另外去掉函数体末尾的分号(Lealone 函数体不允许分号)
-create function test1 (a int) returns int language sql
+create function test1 (int) returns int language sql
     as 'select ''not an integer''';
 > exception 22018
 
 -- @case function_sql.bad_body_keyword
 -- @pg create_function_sql.sql:468-469
 -- 适配: PG 报语法错误 42601, Lealone 报 50100(函数体必须是 SELECT/VALUES/TABLE), 都是拒绝
-create function test1 (a int) returns int language sql
+create function test1 (int) returns int language sql
     as 'not even SQL';
 > exception 50100
 
@@ -909,28 +913,29 @@ create function test1 (a int) returns int language sql
 -- @pg create_function_sql.sql:471-472
 -- 适配: PG 报 42804, Lealone 建函数时校验结果列数报 22018, 都是 CREATE 时拒绝;
 --       另外去掉函数体末尾的分号(Lealone 函数体不允许分号)
-create function test1 (a int) returns int language sql
+create function test1 (int) returns int language sql
     as 'select 1, 2, 3';
 > exception 22018
 
 -- @case function_sql.bad_body_positional
 -- @pg create_function_sql.sql:474-475
--- 缺失: Lealone 不支持 $1/$2 位置参数(参数必须命名), PG 这里报 42P02
-create function test1 (a int) returns int language sql
-    as 'select $2;';
--- PG 期望: CREATE 时报 "there is no parameter $2"
+-- 适配: $2 引用了不存在的位置参数, 和 PG 一样在 CREATE 阶段拒绝; 去掉函数体末尾的分号
+--       PG 报 42P02("there is no parameter $2"), Lealone 报 42000(消息里同样是 "there is no parameter $2")
+create function test1 (int) returns int language sql
+    as 'select $2';
+> exception 42000
 
 -- @case function_sql.bad_body_two_strings
 -- @pg create_function_sql.sql:477-478
 -- 适配: PG 报 42601(只能有一个 AS 字符串), Lealone 报 50100, 都是拒绝
-create function test1 (a int) returns int language sql
+create function test1 (int) returns int language sql
     as 'a', 'b';
 > exception 50100
 
 -- @case function_sql.bad_body_empty
 -- @pg create_function_sql.sql:480-481
 -- 适配: PG 报 42P13(函数体为空), Lealone 报 42000, 都是拒绝
-create function test1 (a int) returns int language sql
+create function test1 (int) returns int language sql
     as '';
 > exception 42000
 

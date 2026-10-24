@@ -5442,8 +5442,8 @@ public class SQLParserBase implements SQLParser {
                     "VARIADIC parameter in CREATE PROCEDURE");
         }
         Column column;
-        // OUT/INOUT参数可以只写类型不写名字
-        if (mode != SqlProcedure.PARAM_IN && isDataTypeName(currentToken)) {
+        // PostgreSQL允许参数只写类型不写名字, 这时给一个占位名
+        if (isDataTypeName(currentToken)) {
             column = parseColumnWithType("$" + parameterIndex);
         } else {
             String parameterName = readAliasIdentifier();
@@ -5671,8 +5671,8 @@ public class SQLParserBase implements SQLParser {
                 }
                 String parameterName;
                 Column column;
-                // OUT/INOUT/VARIADIC参数可以只写类型不写名字(名字只用于在函数体里引用)
-                if ((mode != SqlFunction.PARAM_IN || isVariadic) && isDataTypeName(currentToken)) {
+                // PostgreSQL允许参数只写类型不写名字(用$1/$2按位置引用), 这时给一个占位名
+                if (isDataTypeName(currentToken)) {
                     parameterName = "$" + parameterIndex;
                     column = parseColumnWithType(null);
                 } else {
@@ -5852,6 +5852,16 @@ public class SQLParserBase implements SQLParser {
         command.setLanguage(language);
         String[] parameterTypeArray = parameterTypes == null ? null
                 : parameterTypes.toArray(new String[parameterTypes.size()]);
+        // 位置参数$1/$2按入参(IN/INOUT)的顺序编号, 记下每个入参在完整参数列表里的下标
+        ArrayList<Integer> inputParameterIndexList = Utils.newSmallArrayList();
+        if (parameterModes != null) {
+            for (int i = 0; i < parameterModes.size(); i++) {
+                if (parameterModes.get(i) != SqlFunction.PARAM_OUT) {
+                    inputParameterIndexList.add(i);
+                }
+            }
+        }
+        int[] inputParameterIndexes = toIntArray(inputParameterIndexList);
         if ("PLPGSQL".equalsIgnoreCase(language)) {
             if (atomicBody) {
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
@@ -5870,7 +5880,7 @@ public class SQLParserBase implements SQLParser {
             for (int i = 0; i < statements.length; i++) {
                 ArrayList<Integer> indexes = Utils.newSmallArrayList();
                 bodySqls[i] = SqlFunctionBodyParser.parseAtomicBody(session, statements[i],
-                        parameterNames, indexes, parameterTypeArray);
+                        parameterNames, indexes, parameterTypeArray, inputParameterIndexes);
                 statementParameterIndexes[i] = toIntArray(indexes);
             }
             int last = statements.length - 1;
@@ -5887,7 +5897,7 @@ public class SQLParserBase implements SQLParser {
                 for (int i = 0; i < statements.length; i++) {
                     ArrayList<Integer> indexes = Utils.newSmallArrayList();
                     bodySqls[i] = SqlFunctionBodyParser.parseAtomicBody(session, statements[i],
-                            parameterNames, indexes, parameterTypeArray);
+                            parameterNames, indexes, parameterTypeArray, inputParameterIndexes);
                     statementParameterIndexes[i] = toIntArray(indexes);
                 }
                 int last = statements.length - 1;
@@ -5898,7 +5908,7 @@ public class SQLParserBase implements SQLParser {
                 // 单语句函数体: 去掉结尾的分号后再解析
                 String single = statements.length == 1 ? statements[0] : body;
                 String bodySql = SqlFunctionBodyParser.parseBody(session, single, parameterNames,
-                        bodyParameterIndexes, parameterTypeArray);
+                        bodyParameterIndexes, parameterTypeArray, inputParameterIndexes);
                 int[] indexes = new int[bodyParameterIndexes.size()];
                 for (int i = 0; i < indexes.length; i++) {
                     indexes[i] = bodyParameterIndexes.get(i);
