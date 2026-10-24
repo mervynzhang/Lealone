@@ -362,7 +362,8 @@ public class BTreeStorage {
         chunkCompactor.clearUnusedChunkPages();
 
         c.setLastTransactionId(map.getLastTransactionId());
-        c.setLastRedoLogPos(lastRedoLogPos);
+        // append模式写的是lastChunk自己，没有上一个chunk的RedoLog尾部，记录自身大小会让恢复时读错chunk
+        c.setLastRedoLogPos(appendMode ? -1 : lastRedoLogPos);
         c.setLastUnusedChunk(lastUnusedChunk);
 
         c.write(chunkBody, chunkManager, appendMode);
@@ -392,7 +393,8 @@ public class BTreeStorage {
                 } else {
                     // 倒数第三个chunk的redo log可以删除了
                     Chunk thirdLastChunk = chunkManager.findThirdLastChunk();
-                    if (thirdLastChunk != null) {
+                    // chunk序号有空洞时可能返回上一个lastChunk，它的RedoLog尾部还被新的lastChunk引用
+                    if (thirdLastChunk != null && thirdLastChunk != lastChunk) {
                         thirdLastChunk.removeRedoLogAndRemovedPages(map);
                     }
                 }
@@ -441,12 +443,15 @@ public class BTreeStorage {
                     Chunk secondLastChunk = chunkManager.findChunk(seq - 1);
                     if (secondLastChunk != null) {
                         int size2 = (int) (secondLastChunk.size() - c.getLastRedoLogPos());
-                        int capacity = size1 + size2;
-                        buffer = ByteBuffer.allocate(capacity);
-                        buffer.limit(size2);
-                        secondLastChunk.fileStorage.readFully(c.getLastRedoLogPos(), size2, buffer);
-                        buffer.position(size2);
-                        buffer.limit(capacity);
+                        // 记录的偏移可能已越界(chunk被截断或文件重建)，此时没有可读的RedoLog尾部
+                        if (size2 > 0) {
+                            int capacity = size1 + size2;
+                            buffer = ByteBuffer.allocate(capacity);
+                            buffer.limit(size2);
+                            secondLastChunk.fileStorage.readFully(c.getLastRedoLogPos(), size2, buffer);
+                            buffer.position(size2);
+                            buffer.limit(capacity);
+                        }
                     }
                 }
                 if (size1 <= 0) {
