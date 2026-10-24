@@ -69,9 +69,9 @@ public class PlpgSqlFunction extends SqlFunction {
             columnPrecisions = getReturnColumnPrecisions();
             columnScales = getReturnColumnScales();
         }
-        return new PlpgSqlResultInfo(getName(), returnType, setReturning, returnsTable,
-                parameterModes, outputIndexes, columnNames, columnTypes, columnPrecisions,
-                columnScales);
+        return new PlpgSqlResultInfo(getName(), returnType, isReturnsRecord(), setReturning,
+                returnsTable, parameterModes, outputIndexes, columnNames, columnTypes,
+                columnPrecisions, columnScales);
     }
 
     @Override

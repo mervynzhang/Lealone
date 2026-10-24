@@ -16,6 +16,7 @@ import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueNull;
 import com.lealone.db.value.ValueResultSet;
 import com.lealone.sql.LealoneSQLParser;
@@ -83,6 +84,18 @@ public class CompositeFieldExpression extends Expression {
         Value value = base.getValue(session);
         if (value == null || value == ValueNull.INSTANCE)
             return ValueNull.INSTANCE;
+        if (value.getType() == Value.ARRAY) {
+            // 多OUT/RETURNS RECORD的record值用ValueArray表示
+            Value[] list = ((ValueArray) value).getList();
+            if (fieldIndex >= list.length)
+                return ValueNull.INSTANCE;
+            Value fieldValue = list[fieldIndex];
+            if (fieldValue == null || fieldValue == ValueNull.INSTANCE)
+                return ValueNull.INSTANCE;
+            if (type != Value.UNKNOWN && fieldValue.getType() != type)
+                return fieldValue.convertTo(type);
+            return fieldValue;
+        }
         if (value.getType() != Value.RESULT_SET) {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                     "composite field access requires a row-returning function: " + base.getSQL());

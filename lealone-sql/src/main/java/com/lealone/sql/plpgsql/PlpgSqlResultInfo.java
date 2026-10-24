@@ -6,13 +6,15 @@
 package com.lealone.sql.plpgsql;
 
 /**
- * PL/pgSQL函数的返回形态：标量、VOID、多个OUT参数组成的一行，
+ * PL/pgSQL函数的返回形态：标量、VOID、RETURNS RECORD或多个OUT参数组成的一行，
  * 或者RETURNS SETOF/RETURNS TABLE声明的结果集。
  */
 public class PlpgSqlResultInfo {
 
     public final String functionName;
     public final int returnType;
+    // RETURNS RECORD(OUT参数组成一行record)
+    public final boolean returnsRecord;
     // RETURNS SETOF/RETURNS TABLE
     public final boolean setReturning;
     public final boolean returnsTable;
@@ -25,11 +27,13 @@ public class PlpgSqlResultInfo {
     public final long[] columnPrecisions;
     public final int[] columnScales;
 
-    public PlpgSqlResultInfo(String functionName, int returnType, boolean setReturning,
-            boolean returnsTable, int[] parameterModes, int[] outputIndexes, String[] columnNames,
-            int[] columnTypes, long[] columnPrecisions, int[] columnScales) {
+    public PlpgSqlResultInfo(String functionName, int returnType, boolean returnsRecord,
+            boolean setReturning, boolean returnsTable, int[] parameterModes, int[] outputIndexes,
+            String[] columnNames, int[] columnTypes, long[] columnPrecisions,
+            int[] columnScales) {
         this.functionName = functionName;
         this.returnType = returnType;
+        this.returnsRecord = returnsRecord;
         this.setReturning = setReturning;
         this.returnsTable = returnsTable;
         this.parameterModes = parameterModes;
