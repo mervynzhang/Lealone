@@ -17,6 +17,7 @@ import org.junit.Test;
 
 import com.lealone.client.jdbc.JdbcResultSet;
 import com.lealone.client.jdbc.JdbcStatement;
+import com.lealone.db.api.ErrorCode;
 
 public class JdbcStatementTest extends ClientTestBase {
 
@@ -36,6 +37,34 @@ public class JdbcStatementTest extends ClientTestBase {
         testCancel();
         testQueryTimeout();
         testGeneratedKeys();
+        testClosedStatement();
+    }
+
+    void testClosedStatement() throws Exception {
+        Connection conn = getConnection();
+        JdbcStatement stmt = (JdbcStatement) conn.createStatement();
+        stmt.executeQuery("SELECT 1");
+        stmt.close();
+        try {
+            // 语句已经关闭，必须抛SQLException而不是NPE
+            stmt.executeQuery("SELECT 1");
+            fail();
+        } catch (SQLException e) {
+            assertJdbcErrorCode(e, ErrorCode.OBJECT_CLOSED);
+        }
+        // 约束违反同样必须能被catch(SQLException)捕获
+        JdbcStatement s = (JdbcStatement) conn.createStatement();
+        s.executeUpdate("CREATE TABLE IF NOT EXISTS closed_stmt (id int primary key)");
+        s.executeUpdate("DELETE FROM closed_stmt");
+        s.executeUpdate("INSERT INTO closed_stmt VALUES(1)");
+        try {
+            s.executeUpdate("INSERT INTO closed_stmt VALUES(1)");
+            fail();
+        } catch (SQLException e) {
+            assertJdbcErrorCode(e, ErrorCode.DUPLICATE_KEY_1);
+        } finally {
+            conn.close();
+        }
     }
 
     void testException() throws Exception {

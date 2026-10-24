@@ -292,6 +292,13 @@ public class TestBase extends Assert {
         // p(e.getMessage());
     }
 
+    /** JDBC层断言：异常必须能被catch(SQLException)捕获，且错误码一致 */
+    public static void assertJdbcErrorCode(Throwable e, int expectedErrorCode) {
+        assertTrue("expected SQLException but got " + e.getClass().getName(),
+                e instanceof SQLException);
+        assertEquals(expectedErrorCode, ((SQLException) e).getErrorCode());
+    }
+
     public static void assertErrorCode(Exception e, int errorCode) {
         Throwable cause = e instanceof SQLException ? e : e.getCause();
         assertTrue(cause instanceof SQLException);
