@@ -13,7 +13,6 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.db.api.ErrorCode;
@@ -22,7 +21,7 @@ import com.lealone.test.sql.SqlAssertTestBase;
 /**
  * 序列：min/max/cycle/耗尽、cache、DEFAULT 里用序列、并发 nextval。
  * <p>
- * 期望值以 SQL 标准 / H2 语义为准。已确认不符合期望的断言放在 {@code @Ignore("BUG: ...")} 里。
+ * 期望值以 SQL 标准 / H2 语义为准。曾经不符合期望的断言修复后保留为回归用例。
  */
 public class SequenceTest extends SqlAssertTestBase {
 
@@ -145,13 +144,10 @@ public class SequenceTest extends SqlAssertTestBase {
     }
 
     // ------------------------------------------------------------------
-    // 以下为已确认缺陷（期望值按 SQL 标准与 H2 2.4.240 实测）
+    // 以下用例曾经是缺陷，现已修复（期望值按 SQL 标准与 H2 2.4.240 实测）
     // ------------------------------------------------------------------
 
-    // BUG: 带 CYCLE 的序列到 MAXVALUE 之后不回绕，而是抛 90009 SEQUENCE_ATTRIBUTES_INVALID。
-    // 期望: 1,2,3 之后回到 1（H2 行为）；实际: 第 4 次 NEXTVAL 报
-    // "Unable to create or alter sequence ... invalid attributes (start value "4", max value "3")"。
-    @Ignore("BUG: CYCLE does not wrap around; Nth+1 NEXTVAL fails with 90009 instead of returning MINVALUE")
+    // 带 CYCLE 的序列到 MAXVALUE 之后回绕到 MINVALUE（H2 行为）
     @Test
     public void cycleWrapsAtBoundary() {
         drop("seq_c1");
@@ -163,9 +159,7 @@ public class SequenceTest extends SqlAssertTestBase {
         drop("seq_c1");
     }
 
-    // BUG: 不带 CYCLE 的序列耗尽时错误码是 90009（属性非法），而不是 90006 SEQUENCE_EXHAUSTED。
-    // 期望: 90006 "Sequence has run out of numbers"（H2 行为）；实际: 90009。
-    @Ignore("BUG: exhausted sequence raises 90009 SEQUENCE_ATTRIBUTES_INVALID instead of 90006 SEQUENCE_EXHAUSTED")
+    // 不带 CYCLE 的序列耗尽时报 90006 SEQUENCE_EXHAUSTED（H2 行为）
     @Test
     public void exhaustedSequenceErrorCode() {
         drop("seq_c2");
@@ -177,10 +171,8 @@ public class SequenceTest extends SqlAssertTestBase {
         drop("seq_c2");
     }
 
-    // BUG: 只容纳两个值的序列（MINVALUE 1 MAXVALUE 2）在 CREATE 时就被拒绝。
-    // 期望: 可以创建，nextval 依次返回 1、2，第 3 次才耗尽（H2 行为）；
-    // 实际: 90009，因为 Sequence.isValid 要求 abs(increment) < maxValue - minValue（应该允许 <=）。
-    @Ignore("BUG: CREATE SEQUENCE with MINVALUE 1 MAXVALUE 2 is rejected by an over-strict range check")
+    // 只容纳两个值的序列（MINVALUE 1 MAXVALUE 2）可以创建，nextval 依次返回 1、2（H2 行为），
+    // 因为 abs(increment) <= maxValue - minValue 就是合法的
     @Test
     public void twoValueRangeIsAllowed() {
         drop("seq_c3");
@@ -190,10 +182,7 @@ public class SequenceTest extends SqlAssertTestBase {
         drop("seq_c3");
     }
 
-    // BUG: 不支持标准的 CURRENT VALUE FOR <sequence> 语法。
-    // 期望: SELECT CURRENT VALUE FOR seq 返回最近一次 nextval 的值（H2 行为）；
-    // 实际: 42000 语法错误，只能用 Lealone 私有的 CURRVAL('seq')。
-    @Ignore("BUG: CURRENT VALUE FOR <sequence> is a syntax error (42000); only CURRVAL('seq') works")
+    // 支持标准的 CURRENT VALUE FOR <sequence> 语法，返回最近一次 nextval 的值（H2 行为）
     @Test
     public void currentValueForSyntaxIsSupported() {
         drop("seq_c4");

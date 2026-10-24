@@ -2611,15 +2611,20 @@ public class SQLParserBase implements SQLParser {
         } else if (readIf("CURRVAL")) {
             Sequence sequence = findSequence(schema, objectName);
             if (sequence != null) {
-                Function function = Function.getFunction(database, "CURRVAL");
-                function.setParameter(0,
-                        ValueExpression.get(ValueString.get(sequence.getSchema().getName())));
-                function.setParameter(1, ValueExpression.get(ValueString.get(sequence.getName())));
-                function.doneWithParameters();
-                return function;
+                return getCurrentValueFor(sequence);
             }
         }
         return null;
+    }
+
+    // CURRENT VALUE FOR <sequence> 和 CURRVAL('sequence') 都转换成 CURRVAL 函数
+    private Expression getCurrentValueFor(Sequence sequence) {
+        Function function = Function.getFunction(database, "CURRVAL");
+        function.setParameter(0,
+                ValueExpression.get(ValueString.get(sequence.getSchema().getName())));
+        function.setParameter(1, ValueExpression.get(ValueString.get(sequence.getName())));
+        function.doneWithParameters();
+        return function;
     }
 
     protected Expression readTermObjectDot(String objectName) {
@@ -2764,7 +2769,10 @@ public class SQLParserBase implements SQLParser {
                 } else if (equalsToken("SESSION_USER", name)) {
                     r = readFunctionWithoutParameters("USER");
                 } else if (equalsToken("CURRENT", name)) {
-                    if (readIf("TIMESTAMP")) {
+                    if (readIf("VALUE")) {
+                        read("FOR");
+                        r = getCurrentValueFor(readSequence());
+                    } else if (readIf("TIMESTAMP")) {
                         r = readFunctionWithoutParameters("CURRENT_TIMESTAMP");
                     } else if (readIf("TIME")) {
                         r = readFunctionWithoutParameters("CURRENT_TIME");
