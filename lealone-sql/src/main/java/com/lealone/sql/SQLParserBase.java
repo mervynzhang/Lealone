@@ -5232,7 +5232,45 @@ public class SQLParserBase implements SQLParser {
         command.setProcedureName(procedureName);
         ifExists = readIfExists(ifExists);
         command.setIfExists(ifExists);
+        parseDropProcedureArguments(command);
         return command;
+    }
+
+    // 读取DROP PROCEDURE name(类型列表)里的参数，每个参数前面可以写IN/OUT/INOUT
+    private void parseDropProcedureArguments(DropProcedure command) {
+        if (!readIf("(")) {
+            return;
+        }
+        ArrayList<Integer> typeIds = Utils.newSmallArrayList();
+        ArrayList<Integer> modes = Utils.newSmallArrayList();
+        if (!readIf(")")) {
+            do {
+                // -1表示这一位没写参数模式，匹配时不区分IN/OUT；显式写IN时是PARAM_IN(0)
+                int mode = -1;
+                if (readIf("IN")) {
+                    mode = readIf("OUT") ? SqlProcedure.PARAM_INOUT : SqlProcedure.PARAM_IN;
+                } else if (readIf("OUT")) {
+                    mode = SqlProcedure.PARAM_OUT;
+                } else if (readIf("INOUT")) {
+                    mode = SqlProcedure.PARAM_INOUT;
+                } else if (readIf("VARIADIC")) {
+                    mode = SqlProcedure.PARAM_IN;
+                }
+                Column column = parseColumnWithType(null);
+                int type = column.getType();
+                if (readIf("[")) {
+                    read("]");
+                    type = Value.ARRAY;
+                } else if (readIf("ARRAY")) {
+                    type = Value.ARRAY;
+                }
+                typeIds.add(type);
+                modes.add(mode);
+            } while (readIf(","));
+            read(")");
+        }
+        command.setArgumentTypeIds(toIntArray(typeIds));
+        command.setArgumentModes(toIntArray(modes));
     }
 
     protected CreateFunctionAlias parseCreateFunctionAlias(boolean force) {

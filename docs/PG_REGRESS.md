@@ -68,14 +68,14 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 19, skip 21)  脚本语句  75(通过  75, 失败 0)  被skip用例占  70 条
-[pgregress]   create_procedure.sql     用例 23(执行 11, skip 12)  脚本语句  37(通过  37, 失败 0)  被skip用例占  55 条
+[pgregress]   create_function_sql.sql  用例 40(执行 16, skip 24)  脚本语句  58(通过  58, 失败 0)  被skip用例占  86 条
+[pgregress]   create_procedure.sql     用例 22(执行  9, skip 13)  脚本语句  38(通过  38, 失败 0)  被skip用例占  54 条
 [pgregress]   plpgsql.sql              用例 23(执行 17, skip  6)  脚本语句  52(通过  52, 失败 0)  被skip用例占  16 条
 [pgregress]   rangefuncs.sql           用例 10(执行  8, skip  2)  脚本语句  31(通过  31, 失败 0)  被skip用例占   8 条
-[pgregress] 合计: 用例 96 (执行 55, skip 41), 脚本语句 195 (通过 195, 失败 0), 耗时 525ms
-[pgregress] skip 清单: 41 条用例, 点名跳过的 PG 语句 236 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 129 条在 skip 清单里
-[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  76 条在 skip 清单里
+[pgregress] 合计: 用例 95 (执行 50, skip 45), 脚本语句 179 (通过 179, 失败 0), 耗时 468ms
+[pgregress] skip 清单: 45 条用例, 点名跳过的 PG 语句 250 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 146 条在 skip 清单里
+[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  73 条在 skip 清单里
 [pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 21 条)
 [pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 10 条)
 ```
@@ -88,7 +88,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 41 条 / 236 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 45 条 / 250 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -105,10 +105,9 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 anyarray/anyelement 多态类型 | 3 | 15 | function_sql.sql_body_polymorphic, function_sql.anyarray_setof, procedure.polymorphic |
 | Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD | 1 | 3 | function_sql.sql_body_tempseq |
 | Lealone 没有 information_schema.routines 等视图 | 1 | 19 | function_sql.information_schema |
-| 存储过程不支持按参数类型重载(CREATE FUNCTION 已支持, 见 docs/PG_FUNCTION.md 第五节) | 1 | 11 | procedure.ambiguous_drop |
 | Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转 | 1 | 3 | function_sql.or_replace_window |
 | Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN | 1 | 10 | function_sql.setof_inline |
-| Lealone 函数体只允许单条查询(不支持 INSERT ... RETURNING) | 1 | 6 | function_sql.void_insert |
+| 函数体只支持带RETURNING的DML(voidtest3 是不带RETURNING的INSERT) | 1 | 6 | function_sql.void_insert |
 | Lealone 函数体只允许单条查询(不支持 DDL) | 1 | 8 | function_sql.ddl_in_body |
 | Lealone 无 CREATE OPERATOR CLASS/分区操作符类 | 1 | 6 | function_sql.partition_ops |
 | Lealone 不支持 $1/$2 位置参数 | 1 | 1 | function_sql.bad_body_positional |
@@ -127,12 +126,11 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger) | 2 | 4 | plpgsql.trigger_room, plpgsql.trigger_raise |
 | Lealone 无 anyelement/anyarray 多态参数类型 | 1 | 1 | plpgsql.polymorphic |
 | PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100 | 1 | 6 | plpgsql.cursor |
-| DML 的 INSERT/UPDATE ... RETURNING ... INTO record 不支持(Lealone 引擎没有 DML RETURNING), record 变量本身可用 | 1 | 2 | plpgsql.record |
 | RETURNS RECORD 复合返回类型不支持, 且 leaker_1 用 (f(x)).field 取复合返回值的字段 | 1 | 6 | plpgsql.out_params_exception |
 | Lealone 无 SETOF <表行类型>, 也不支持 $1 位置参数 | 1 | 5 | rangefuncs.setof_composite |
-| WITH ORDINALITY 报 42000 语法错, 且没有 unnest()/generate_series() | 1 | 8 | rangefuncs.with_ordinality |
-| Lealone 函数体只允许单条查询, 不支持 INSERT ... RETURNING | 1 | 8 | rangefuncs.insert_returning |
+| 没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持) | 1 | 5 | rangefuncs.with_ordinality_unnest |
 | RETURNS SETOF <表行类型> 不支持(只支持标量 setof 与 RETURNS TABLE) | 1 | 4 | plpgsql.setof_composite_record |
+
 
 ## 六、这一轮刷新：解锁了什么
 
@@ -140,6 +138,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 逐条核对后删掉 7 行 skip（`function_sql.setof`、`procedure.collation`、`plpgsql.found`、`plpgsql.perform`、
 `plpgsql.out_assign`、`plpgsql.multi_out`、`plpgsql.for_loop_setof`），新增 5 个用例（4 个执行 + 1 个 skip）：
 执行用例 34 → 45，脚本语句 112 → 142（+30），skip 清单 55 → 49 条。
+之后又解锁 `procedure.ambiguous_drop`：执行用例 49 → 50，脚本语句 167 → 179（+12），skip 清单 46 → 45 条。
 
 | 用例 | 之前 | 现在 | 靠什么能力 |
 | --- | --- | --- | --- |
@@ -153,6 +152,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | `function_sql.setof` | skip（generate_series + select 列表展开） | 执行 2 条语句 | body 换成 `SYSTEM_RANGE` + `SELECT * FROM f()` |
 | `function_sql.strict` | 已执行（缺 F_2） | 执行 13 条语句 | 补上 `CALLED ON NULL INPUT` |
 | `procedure.collation` | skip（CALL 结果集拿不到） | 执行 2 条语句 | `CALL` 结果集 + 过程体 `SELECT ? = ?` |
+| `procedure.ambiguous_drop` | skip（过程同名唯一，不能重载） | 执行 12 条语句 | 过程按参数类型重载 + `DROP PROCEDURE name(类型/模式)`（见 docs/PROCEDURE.md） |
 | `function_sql.overload` | skip（不支持按参数类型重载） | 执行 8 条语句 | `CREATE/DROP FUNCTION` 按参数类型重载（见 docs/PG_FUNCTION.md 第五节） |
 
 新加的用例（都是 PG 原文段落）：
@@ -306,22 +306,3 @@ call pe();                                     -- 42000 Syntax error "BEGIN ATOM
    * 游标 → `plpgsql.cursor` 1 条；`WITH ORDINALITY` → `rangefuncs.with_ordinality` 1 条。
 4. **补齐 PG 覆盖面**：`plpgsql.sql` 按段登记（尤其是游标、`RETURN QUERY EXECUTE`、`CASE` 语句）；
    `rangefuncs.sql` 里 `WITH ORDINALITY` 落地后再补；`portals.sql` 如果以后支持游标再纳入。
-
-## 七、这一轮刷新：VOID函数体、PL/pgSQL过程体、BEGIN ATOMIC
-
-三件事一起做，解锁 6 个用例（1 个新增），执行用例 49 → 55，脚本语句 167 → 195，
-skip 清单 46 → 41 条：
-
-| 用例 | 之前 | 现在 | 靠什么能力 |
-| --- | --- | --- | --- |
-| `function_sql.void_insert` | skip（函数体只支持带 RETURNING 的 DML） | 执行 6 条语句 | `RETURNS VOID` 的函数体允许普通 INSERT/UPDATE/DELETE |
-| `function_sql.sql_body_atomic` | skip（无 BEGIN ATOMIC 多语句体） | 执行 12 条语句 | `BEGIN ATOMIC ... END` 函数体 + 脚本切分器支持块内分号 |
-| `function_sql.sql_body_case` | skip（无 BEGIN ATOMIC 体） | 执行 5 条语句 | 同上，另验证块内 `CASE ... END` 不打乱切分 |
-| `procedure.atomic_body` | skip（过程体不支持 BEGIN ATOMIC） | 执行 5 条语句 | `BEGIN ATOMIC` 过程体 |
-| `procedure.empty_body` | skip（过程体不能为空） | 执行 3 条语句 | 空的 `BEGIN ATOMIC` 块 = 什么都不做的过程 |
-| `procedure.plpgsql_body`（新增） | - | 执行 12 条语句 | `CREATE PROCEDURE ... LANGUAGE plpgsql` + OUT/INOUT |
-
-脚本切分器（`PgRegressRunner`）之前按"行尾有分号"切语句，`BEGIN ATOMIC ...; ...; END;` 会被切断。
-现在 `runStatements()` 把当前行并入缓冲区后再判断，并用 `countOpenBlocks()` 统计
-`BEGIN ATOMIC ... END` / `CASE ... END` 的嵌套层数（字符串常量、`$$`字符串、双引号标识符、
-行注释和块注释里的关键字都不算），层数为 0 且行尾是分号才当成一条语句结束。

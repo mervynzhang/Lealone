@@ -248,16 +248,45 @@ call ptest11(null, 11, 12, 13);
 
 -- @case procedure.ambiguous_drop
 -- @pg create_procedure.sql:216-232
--- 缺失: 同 procedure.overload, Lealone 的过程按名字唯一, 没有"按参数列表区分重载"导致的 DROP 歧义
+-- 适配: 过程体用 ? 按位置引用参数; 两个重载的入参个数不同(OUT版本2个入参, IN版本3个入参),
+--       DROP不带签名或者两个重载都能匹配时报903152, 用IN/OUT模式可以精确指定
+create procedure ptest10(out a int, in b int, in c int)
+language sql as 'select ? - ?';
+> update count: 0
+
 create procedure ptest10(in a int, in b int, in c int)
-language sql as $$ select a + b - c $$;
-drop procedure ptest10;                 -- PG 期望: 失败(有重载)
-drop procedure ptest10(int, int, int);  -- PG 期望: 失败(仍有重载)
+language sql as 'select ? + ? - ?';
+> update count: 0
+
+drop procedure ptest10;
+> exception 90152
+
+drop procedure ptest10(int, int, int);
+> exception 90152
+
 begin;
+> update count: 0
+
 drop procedure ptest10(out int, int, int);
-drop procedure ptest10(int, int, int);  -- PG 期望: 成功
+> update count: 0
+
+drop procedure ptest10(int, int, int);
+> update count: 0
+
 rollback;
--- PG 期望: 只有按参数类型精确匹配的 DROP 才能成功
+> update count: 0
+
+begin;
+> update count: 0
+
+drop procedure ptest10(in int, int, int);
+> update count: 0
+
+drop procedure ptest10(int, int, int);
+> update count: 0
+
+rollback;
+> update count: 0
 
 -- ---------------------------------------------------------------------------
 -- 各种错误用例

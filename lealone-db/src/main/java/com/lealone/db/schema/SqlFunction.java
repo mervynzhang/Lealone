@@ -422,14 +422,18 @@ public class SqlFunction extends FunctionAlias {
         return score;
     }
 
-    private static int getTypeMatch(int argumentType, int parameterType) {
+    /**
+     * 计算一个实参类型和一个参数类型的匹配程度，过程和函数共用同一套规则。
+     */
+    public static int getTypeMatch(int argumentType, int parameterType) {
         if (argumentType == parameterType) {
             return MATCH_EXACT;
         }
         // 实参没有类型(NULL或者字符串字面量)时由参数类型决定，
         // 和PostgreSQL一样优先选字符串类型的重载
         if (argumentType == Value.UNKNOWN || argumentType == Value.NULL) {
-            return DataType.isStringType(parameterType) ? MATCH_IMPLICIT : MATCH_UNTYPED;
+            // PostgreSQL的text在Lealone里映射成CLOB，所以CLOB按字符串类型对待
+            return isStringLikeType(parameterType) ? MATCH_IMPLICIT : MATCH_UNTYPED;
         }
         if (parameterType == Value.UNKNOWN || parameterType == Value.NULL) {
             return MATCH_UNTYPED;
@@ -450,8 +454,8 @@ public class SqlFunction extends FunctionAlias {
         if (fromType == toType) {
             return true;
         }
-        // 字符串类型之间可以隐式转换，比如VARCHAR到CHAR
-        if (DataType.isStringType(fromType) && DataType.isStringType(toType)) {
+        // 字符串类型之间可以隐式转换，比如VARCHAR到CHAR；PostgreSQL的text映射成CLOB，也归到这一类
+        if (isStringLikeType(fromType) && isStringLikeType(toType)) {
             return true;
         }
         // DECIMAL在Lealone里还兼作"数值类型还没推导出来"的默认类型(比如函数体里没类型的
@@ -480,6 +484,10 @@ public class SqlFunction extends FunctionAlias {
         default:
             return false;
         }
+    }
+
+    private static boolean isStringLikeType(int type) {
+        return DataType.isStringType(type) || type == Value.CLOB;
     }
 
     private static boolean isIntegerType(int type) {

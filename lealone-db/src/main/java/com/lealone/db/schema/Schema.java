@@ -173,7 +173,7 @@ public class Schema extends DbObjectBase {
     }
 
     /**
-     * 对象在schema里的存放key。函数支持按参数类型重载，同名不同参数类型的函数用不同的key，
+     * 对象在schema里的存放key。函数和存储过程支持按参数类型重载，同名不同参数类型的对象用不同的key，
      * 其它对象类型仍然只用名字做key。
      */
     private static String getDbObjectKey(SchemaObject obj) {
@@ -183,6 +183,8 @@ public class Schema extends DbObjectBase {
     private static String getDbObjectKey(SchemaObject obj, String name) {
         if (obj instanceof SqlFunction) {
             return ((SqlFunction) obj).getOverloadKey(name);
+        } else if (obj instanceof SqlProcedure) {
+            return ((SqlProcedure) obj).getOverloadKey(name);
         }
         return name;
     }
@@ -540,13 +542,41 @@ public class Schema extends DbObjectBase {
 
     /**
      * Try to find a stored procedure with this name. This method returns
-     * null if no object with this name exists.
+     * null if no object with this name exists. 同名过程有多个重载时返回其中一个，
+     * 需要区分重载时用{@link #findProcedures}。
      *
      * @param procedureName the object name
      * @return the object or null
      */
     public SqlProcedure findProcedure(ServerSession session, String procedureName) {
-        return find(DbObjectType.PROCEDURE, session, procedureName);
+        ArrayList<SqlProcedure> list = findProcedures(session, procedureName);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    /**
+     * 找出同名的所有过程(按参数类型重载)，按对象id排序，保证每次的消解结果一致。
+     *
+     * @param procedureName the procedure name
+     * @return 可能为空的名字相同的过程列表
+     */
+    public ArrayList<SqlProcedure> findProcedures(ServerSession session, String procedureName) {
+        ArrayList<SqlProcedure> list = new ArrayList<>();
+        for (DbObject obj : dbObjectsArray[DbObjectType.PROCEDURE.value].findAll(session)) {
+            if (procedureName.equalsIgnoreCase(obj.getName())) {
+                list.add((SqlProcedure) obj);
+            }
+        }
+        for (int i = 1; i < list.size(); i++) {
+            SqlProcedure p = list.get(i);
+            int id = p.getId();
+            int j = i - 1;
+            while (j >= 0 && list.get(j).getId() > id) {
+                list.set(j + 1, list.get(j));
+                j--;
+            }
+            list.set(j + 1, p);
+        }
+        return list;
     }
 
     public ArrayList<SqlProcedure> getAllProcedures() {
@@ -742,6 +772,18 @@ public class Schema extends DbObjectBase {
             throw DbException.get(ErrorCode.TRIGGER_NOT_FOUND_1, name);
         }
         return triggerObject;
+    }
+
+    public SqlProcedure getProcedure(ServerSession session, String name) {
+        ArrayList<SqlProcedure> list = findProcedures(session, name);
+        if (list.isEmpty()) {
+            throw DbException.get(ErrorCode.PROCEDURE_NOT_FOUND_1, name);
+        }
+        if (list.size() > 1) {
+            // 同名过程有多个重载，看不出要操作的是哪一个
+            throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, name);
+        }
+        return list.get(0);
     }
 
     public FunctionAlias getFunction(ServerSession session, String name) {

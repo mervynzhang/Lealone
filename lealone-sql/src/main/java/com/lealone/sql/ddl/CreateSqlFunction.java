@@ -290,7 +290,7 @@ public class CreateSqlFunction extends SchemaStatement {
         nestedSession.setCurrentSchemaName(session.getCurrentSchemaName());
         PreparedSQLStatement stmt = nestedSession.prepareStatement(bodySql);
         // DML函数体必须带RETURNING才能当查询用;
-        // RETURNS VOID是例外, 普通DML也可以当函数体, 执行完返回NULL
+        // RETURNS VOID是例外: 普通DML和BEGIN ATOMIC体都可以, 执行完返回NULL
         if (!stmt.isQuery()) {
             if (declaredType == Value.NULL)
                 return;

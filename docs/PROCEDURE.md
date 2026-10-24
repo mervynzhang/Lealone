@@ -14,10 +14,6 @@ CREATE PROCEDURE [IF NOT EXISTS] [schema.]name([IN|OUT|INOUT] p1 INT, ...)
     [LANGUAGE SQL]
     BEGIN ATOMIC SQL1; SQL2; END;        -- SQL标准的函数体, 可以有多条语句
 
-CREATE PROCEDURE [IF NOT EXISTS] [schema.]name([IN|OUT|INOUT] p1 INT, ...)
-    LANGUAGE plpgsql
-    AS $$ BEGIN ... END $$;              -- PL/pgSQL过程体, OUT/INOUT就是里面的变量
-
 CALL name(实参...);
 DROP PROCEDURE [IF EXISTS] [schema.]name;
 ```
@@ -59,19 +55,36 @@ CALL p2();  -- 返回一行 (30)
 - **OUT/INOUT**：有 `OUT`/`INOUT` 参数时，`CALL` 总是返回一行，列名就是参数名，
   列类型是参数的声明类型；值来自过程体**最后一条查询**的第一行（按列位置对应 `OUT`/`INOUT` 参数）。
   实参可以只给入参（`IN`/`INOUT`），也可以像 PostgreSQL 那样给 `OUT` 参数写 `NULL` 占位。
-- **过程体语言**：支持 `LANGUAGE SQL`（默认值，写不写都一样）和 `LANGUAGE plpgsql`。
-- **PL/pgSQL过程体**：`OUT`/`INOUT` 参数就是 PL/pgSQL 里的变量，过程体自己给它们赋值，
-  `CALL` 照样返回一行（列名/列类型来自参数声明）；过程体里可以写变量声明、`IF`、`LOOP`、
-  `RAISE` 等 PL/pgSQL语句，和 `CREATE FUNCTION ... LANGUAGE plpgsql` 是同一套解释器。
-  `RETURN;` 提前结束时也会把当前的 `OUT`/`INOUT` 值返回。
-- **执行模型（重要）**：PL/pgSQL过程体是**同步解释执行**的——`YieldableCallProcedure` 在
-  `startInternal()` 里直接跑 `PlpgSqlInterpreter`，解释器内部的SQL走既有的
-  `PlpgSqlSqlExecutor` → `statement.query()` → `StatementBase.syncExecute()`，
-  即"协作式等待"（等锁时用 `Thread.sleep(1)` 自旋、并驱动调度器执行别的语句）。
-  它**不是** `CALL` 过程体那种 yieldable 链：SQL过程体是每条语句一个子 yieldable 串起来的。
-  这和 `CREATE FUNCTION ... LANGUAGE plpgsql` 的执行方式完全一致（函数体也走这条同步路径）。
+- **过程体语言**：只支持 `LANGUAGE SQL`（默认值，写不写都一样）。
 - **不是函数**：过程不能出现在表达式里，`SELECT sp_ins(1, 2)` 报 `FUNCTION_NOT_FOUND_1`。
 - **持久化**：过程体随 schema 元数据一起持久化，重开库后仍可用。
+
+### 按参数类型重载
+
+同名过程可以按**入参**类型重载，`OUT` 参数不参与签名；消解规则和函数重载完全一样
+（复用 `SqlFunction.getTypeMatch` / `isImplicitConvertible` 那张矩阵）：完全匹配优先，
+其次是可以隐式转换的类型，字符串字面量/NULL 按参数类型解析，并列时报 90152。
+
+```sql
+create procedure p(a int) as 'insert into t values(?, null)';
+create procedure p(a varchar) as 'insert into t values(null, ?)';
+call p(1);              -- int 版本
+call p('x');            -- varchar 版本
+call p(null);           -- 字符串版本(NULL优先按字符串类型解析)
+drop procedure p(int);  -- 只删 int 版本
+call p(1);              -- 90022(FUNCTION_NOT_FOUND_1): int 到 varchar 不是隐式转换
+call p('x');            -- varchar 版本还在
+```
+
+- `CREATE PROCEDURE IF NOT EXISTS` 只跳过入参签名相同的；不同参数类型仍然创建。
+  同签名重复创建报 `PROCEDURE_ALREADY_EXISTS_1`(90150)。
+- `DROP PROCEDURE p(类型列表)` 按**完整参数列表**（含 `OUT` 参数位置）匹配，
+  `IN`/`OUT`/`INOUT` 可以用来区分入参签名相同、只是 `OUT` 不同的重载；
+  不写类型列表或者两个重载都能匹配时报 90152。
+- 过程对象在 schema 里的 key 是 `名字(入参类型id...)`，`SCRIPT` 和重启回放走同一条
+  `Schema.add`，所以所有重载都能保留；`getDropSQL()` 带完整签名和参数模式，脚本回放不会歧义。
+- 限制：数组参数只按 `ARRAY` 类型 id 匹配，不区分元素类型；`varchar(10)` 这类 typmod
+  不参与比较；不支持 `VARIADIC` 参数。
 
 ## 三、实测行为
 
@@ -87,14 +100,17 @@ CALL p2();  -- 返回一行 (30)
 | 过程体第二条语句违反主键 | 抛 `DUPLICATE_KEY_1`，且**第一条语句的插入已回滚** |
 | 过程体里写 `COMMIT` | 抛 `FEATURE_NOT_SUPPORTED: transaction statement in procedure` |
 | `SELECT` 里调用过程 | 抛 `FUNCTION_NOT_FOUND_1` |
-| 重名创建 | 抛 `PROCEDURE_ALREADY_EXISTS_1` |
+| 同签名重复创建 | 抛 `PROCEDURE_ALREADY_EXISTS_1`；不同参数类型可以共存 |
+| 同名不同参数类型的过程 | `CALL p(1)`/`CALL p('x')` 分别走 int/varchar 版本；`CALL p(NULL)` 优先字符串版本 |
+| `DROP PROCEDURE p(INT)` | 只删 int 版本，varchar 版本还在；没有匹配的签名时报 90151，`IF EXISTS` 时不报错 |
+| 不写签名的 `DROP PROCEDURE p` | 只有一个重载时能删；多个重载时报 90152 |
+| 用 `IN`/`OUT` 模式区分重载 | `DROP PROCEDURE p(OUT INT, INT)` 只删带 OUT 参数的那个重载 |
 | `OUT`/`INOUT` 参数 | `CALL p(3, 'a')` 返回一行 `(6, 'a!')`，列名/类型来自参数声明 |
 | 实参个数 | 只给入参或给全部参数（`OUT` 位写 `NULL`）都行，其它个数抛 `INVALID_PARAMETER_COUNT_2` |
 | 有 `OUT` 参数但过程体最后一条不是查询 | 建过程时就抛 `FEATURE_NOT_SUPPORTED`，不会留到调用时才报错 |
 | `BEGIN ATOMIC` 多条语句 | 顺序执行，最后一条查询作为结果（`CALL` 返回 `(30)`，前面的插入都生效） |
 | 空的 `BEGIN ATOMIC` 块 | 建过程成功，`CALL` 什么都不做，更新数 0 |
-| `LANGUAGE plpgsql` 的过程体 | 可建可 `CALL`，`OUT`/`INOUT` 由过程体赋值，`CALL` 返回一行（同步解释执行，见限制 8） |
-| `LANGUAGE plpgsql` + `BEGIN ATOMIC` | 建过程时抛 `FEATURE_NOT_SUPPORTED`（PL/pgSQL只有 `BEGIN ... END` 块） |
+| `LANGUAGE plpgsql` 的过程体 | 建过程时就抛 `FEATURE_NOT_SUPPORTED`（见限制 8） |
 | `SCRIPT` / 关库重开 | `CREATE PROCEDURE`（含 `OUT/INOUT`、`BEGIN ATOMIC`）会出现在 `SCRIPT` 里并能回放 |
 | `DROP PROCEDURE` / `DROP PROCEDURE IF EXISTS` | 正常；删除后 `CALL` 抛 `PROCEDURE_NOT_FOUND_1` |
 | 关闭重开库后 `CALL` 同一过程 | 仍可用 |
@@ -112,17 +128,19 @@ CALL p2();  -- 返回一行 (30)
    `DEFAULT` 参数值、命名实参（`p(b => 1)`）、`CREATE OR REPLACE PROCEDURE`。
 6. **未验证**：集群 / 复制模式下过程的行为；`statement` 级复制的确定性校验。
 7. 过程体按字面切分后逐条 `prepareStatement`，每条语句都会走一次会话级语句缓存。
-8. **PL/pgSQL过程体是同步执行**：`CALL` 一个 plpgsql 过程时，`YieldableCallProcedure`
-   会在线程里同步跑完整个解释器（`PlpgSqlInterpreter`），解释器内部的SQL用
-   `StatementBase.syncExecute()` 协作式等待。这跟 SQL 过程体"每条语句一个子 yieldable"的模型不同，
-   而是和 `CREATE FUNCTION ... LANGUAGE plpgsql` 保持一致：plpgsql 函数体本来就这么执行。
-   副作用：长时间运行或大量等锁的 plpgsql 过程体会占住当前调度线程，和 plpgsql 函数一样。
-   plpgsql 过程体不支持 `BEGIN ATOMIC`（建过程时报 `FEATURE_NOT_SUPPORTED`）。
+8. **PL/pgSQL过程体不支持**：`CREATE PROCEDURE ... LANGUAGE plpgsql` 在**建过程时**就报
+   `FEATURE_NOT_SUPPORTED`。原因是过程走的是 `YieldableCallProcedure` 的异步链，
+   而 PL/pgSQL解释器目前只能同步执行（`PlpgSqlSqlExecutor` 内部用 `statement.query()`），
+   把它塞进 CALL 链会引入阻塞等待，所以这一轮明确拒绝而不是留下"建成功、调用才炸"的半成品。
+   `CREATE FUNCTION ... LANGUAGE plpgsql` 不受影响（函数本来就走同步执行路径）。
 9. **OUT/INOUT值的来源**：只认过程体最后一条查询的第一行；列数少于 `OUT/INOUT` 参数个数时报
    `DATA_CONVERSION_ERROR_1`，多出来的列被忽略；查询返回 0 行时 `OUT/INOUT` 值全是 `NULL`。
 10. **`BEGIN ATOMIC` 里的语句**：只支持普通SQL语句（`SELECT/INSERT/UPDATE/DELETE/CALL/...`），
    里面的语句在 `CREATE` 时就会被解析（`SELECT * FROM 不存在的表` 建过程时就报错）；
     不支持 `IF`/`LOOP`/`CASE` 过程式语句，也不支持嵌套 `BEGIN ATOMIC`。
+11. **重载签名**：只看入参的 `Value` 类型 id，不区分数组元素类型和 `varchar(10)`/`numeric(10,2)`
+   这类 typmod；`DROP` 的完整参数列表匹配也不区分 `VARCHAR(10)` 和 `VARCHAR`，
+   并且类型列表里**不能写参数名**（`DROP PROCEDURE p(IN a INT)` 会报语法错，写 `IN INT` 可以）。
 
 ## 五、实现结构
 
@@ -159,11 +177,11 @@ CALL p2();  -- 返回一行 (30)
   执行时 `SqlFunction.executeAtomicBody()` 顺序执行、最后一条查询的结果作为返回值；
   过程体直接复用原来的语句串执行路径。`LealoneSQLParser.splitStatements()` 是两者共用的拆分工具。
 - **SCRIPT**：`GenScript` 之前没有遍历 `DbObjectType.PROCEDURE`，`SCRIPT`/备份会丢过程定义，已补上。
-- **PL/pgSQL过程体**：`SqlProcedure` 增加了 `language`（`isPlpgSql()`），`getCreateSQL()` 在非SQL语言时
-  输出 `LANGUAGE plpgsql`；`YieldableCallProcedure` 在 `startInternal()` 里判断是 plpgsql 就直接跑
-  `PlpgSqlInterpreter`（`executePlpgSqlBody()`），`PlpgSqlResultInfo` 增加了一个 `procedure` 标志，
-  让"有OUT/INOUT参数时就返回一行record(ValueArray)"对过程也成立（函数是"多个OUT参数才返回record"）。
-  过程体的解释结果在 `buildPlpgSqlOutputResult()` 里按参数类型转换后组成 `CALL` 的结果行。
+- **按参数类型重载**：`Schema.getDbObjectKey()` 对 `SqlProcedure` 返回 `名字(入参类型id...)`，
+  `Schema.findProcedures()` 按名字取候选集合；`CallProcedure` 在 `prepare()` 里用
+  `SqlProcedure.getMatchScore()`（内部调用 `SqlFunction.getTypeMatch`）消解重载；
+  `DropProcedure`/`SQLParserBase.parseDropProcedure()` 支持 `name(类型列表)` 和 `IN/OUT/INOUT`
+  模式，按完整参数列表匹配；`SqlProcedure.getDropSQL()` 输出带签名的 DROP，保证 `SCRIPT` 回放不歧义。
 
 ## 六、为什么用嵌套 session
 
@@ -179,8 +197,8 @@ CALL p2();  -- 返回一行 (30)
 
 ## 七、回归
 
-`StoredProcedureTest`、`ProcedureOutParamTest`（OUT/INOUT）、`AtomicBodyTest`（BEGIN ATOMIC）、
-`ScriptRoundTripTest`、`PgRegressTest`、`PgFunction*Test`、`Plpgsql*Test` 等回归全绿，
-具体用例数见交付说明。
+`StoredProcedureTest`、`ProcedureOutParamTest`（OUT/INOUT）、`ProcedureOverloadTest`（按参数类型重载）、
+`AtomicBodyTest`（BEGIN ATOMIC）、`ScriptRoundTripTest`、`PgRegressTest`、`PgFunction*Test`、
+`Plpgsql*Test` 等回归全绿，具体用例数见交付说明。
 
 跑测试前记得 `rm -rf lealone-test/target/test-data`。
