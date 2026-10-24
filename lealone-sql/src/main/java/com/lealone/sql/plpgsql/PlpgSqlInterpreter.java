@@ -1,0 +1,473 @@
+/*
+ * Copyright Lealone Database Group.
+ * Licensed under the Server Side Public License, v 1.
+ * Initial Developer: zhh
+ */
+package com.lealone.sql.plpgsql;
+
+import java.util.List;
+
+import com.lealone.common.exceptions.DbException;
+import com.lealone.db.session.ServerSession;
+import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueInt;
+import com.lealone.db.value.ValueNull;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Assignment;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Block;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Branch;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Continue;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Declaration;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Exit;
+import com.lealone.sql.plpgsql.PlpgSqlAst.For;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Handler;
+import com.lealone.sql.plpgsql.PlpgSqlAst.If;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Loop;
+import com.lealone.sql.plpgsql.PlpgSqlAst.NestedBlock;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Node;
+import com.lealone.sql.plpgsql.PlpgSqlAst.NullStatement;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Perform;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Raise;
+import com.lealone.sql.plpgsql.PlpgSqlAst.Return;
+import com.lealone.sql.plpgsql.PlpgSqlAst.SqlExec;
+import com.lealone.sql.plpgsql.PlpgSqlAst.While;
+
+/**
+ * PL/pgSQL语法树的解释执行器。
+ * 每个函数调用创建一个实例，内部使用嵌套session执行SQL，
+ * 变量保存在PlpgSqlScope作用域链里。
+ */
+public class PlpgSqlInterpreter {
+
+    // 这三个异常用来实现RETURN/EXIT/CONTINUE的控制流跳转
+    private static class ReturnSignal extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        final Value value;
+
+        ReturnSignal(Value value) {
+            super(null, null, false, false);
+            this.value = value;
+        }
+    }
+
+    private static class ExitSignal extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        final String label;
+
+        ExitSignal(String label) {
+            super(null, null, false, false);
+            this.label = label;
+        }
+    }
+
+    private static class ContinueSignal extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        final String label;
+
+        ContinueSignal(String label) {
+            super(null, null, false, false);
+            this.label = label;
+        }
+    }
+
+    private final ServerSession session;
+    private final Block body;
+    private final int returnType;
+    private final PlpgSqlSqlExecutor sqlExecutor;
+
+    private PlpgSqlScope scope;
+    // 正在被EXCEPTION handler处理的异常，RAISE;用它重新抛出
+    private RuntimeException currentException;
+
+    public PlpgSqlInterpreter(ServerSession session, Block body, int returnType) {
+        this.session = session;
+        this.body = body;
+        this.returnType = returnType;
+        this.sqlExecutor = new PlpgSqlSqlExecutor(session);
+    }
+
+    /**
+     * 执行函数体，返回RETURN语句的值；没有RETURN时返回NULL。
+     */
+    public Value execute(String[] parameterNames, String[] parameterTypes,
+            Value[] parameterValues) {
+        PlpgSqlScope parameterScope = new PlpgSqlScope(null);
+        scope = parameterScope;
+        try {
+            declareParameters(parameterNames, parameterTypes, parameterValues);
+            try {
+                executeBlock(body);
+                // 非void函数执行到结尾还没有RETURN，PostgreSQL会报错
+                if (returnType != Value.UNKNOWN && returnType != Value.NULL)
+                    throw PlpgSqlException.raise("2F005",
+                            "control reached end of function without RETURN");
+                return ValueNull.INSTANCE;
+            } catch (ReturnSignal signal) {
+                return signal.value;
+            }
+        } finally {
+            scope = null;
+        }
+    }
+
+    private void declareParameters(String[] parameterNames, String[] parameterTypes,
+            Value[] parameterValues) {
+        if (parameterNames == null)
+            return;
+        for (int i = 0; i < parameterNames.length; i++) {
+            PlpgSqlVariable variable = new PlpgSqlVariable(parameterNames[i], false, false, false);
+            int type = Value.UNKNOWN;
+            if (parameterTypes != null && i < parameterTypes.length)
+                type = resolveType(parameterTypes[i]);
+            variable.setType(type);
+            Value value = parameterValues != null && i < parameterValues.length
+                    ? parameterValues[i]
+                    : ValueNull.INSTANCE;
+            variable.setInitialValue(value);
+            scope.declare(variable);
+        }
+    }
+
+    private void executeBlock(Block block) {
+        PlpgSqlScope blockScope = new PlpgSqlScope(scope);
+        scope = blockScope;
+        try {
+            declareVariables(block);
+            try {
+                executeStatements(block.statements);
+            } catch (ExitSignal signal) {
+                // 带标签的块可以被EXIT label直接退出
+                if (block.label != null && block.label.equalsIgnoreCase(signal.label))
+                    return;
+                throw signal;
+            } catch (ContinueSignal signal) {
+                throw signal;
+            } catch (ReturnSignal signal) {
+                throw signal;
+            } catch (PlpgSqlException e) {
+                if (!handleException(block, e))
+                    throw e;
+            } catch (DbException e) {
+                if (!handleException(block, e))
+                    throw e;
+            }
+        } finally {
+            scope = blockScope.getParent();
+        }
+    }
+
+    private void declareVariables(Block block) {
+        for (Declaration declaration : block.declarations) {
+            PlpgSqlVariable variable = new PlpgSqlVariable(declaration.name,
+                    declaration.nameQuoted, declaration.constant, declaration.notNull);
+            variable.setType(resolveType(declaration.typeName));
+            scope.declare(variable);
+            if (declaration.defaultExpression != null) {
+                Value value = sqlExecutor.evalExpression(declaration.defaultExpression, scope);
+                variable.setInitialValue(value);
+            }
+        }
+    }
+
+    private int resolveType(String typeName) {
+        try {
+            return sqlExecutor.resolveType(typeName);
+        } catch (DbException e) {
+            throw e;
+        }
+    }
+
+    private boolean handleException(Block block, RuntimeException e) {
+        if (block.handlers.isEmpty())
+            return false;
+        String sqlState = PlpgSqlCondition.getSqlState(e);
+        for (Handler handler : block.handlers) {
+            if (PlpgSqlCondition.matches(handler.conditions, sqlState)) {
+                RuntimeException oldException = currentException;
+                currentException = e;
+                try {
+                    executeStatements(handler.statements);
+                } finally {
+                    currentException = oldException;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void executeStatements(List<Node> statements) {
+        for (Node statement : statements)
+            executeStatement(statement);
+    }
+
+    private void executeStatement(Node node) {
+        if (node instanceof NestedBlock) {
+            executeBlock(((NestedBlock) node).block);
+        } else if (node instanceof Assignment) {
+            executeAssignment((Assignment) node);
+        } else if (node instanceof If) {
+            executeIf((If) node);
+        } else if (node instanceof Return) {
+            executeReturn((Return) node);
+        } else if (node instanceof SqlExec) {
+            executeSql((SqlExec) node);
+        } else if (node instanceof Perform) {
+            executePerform((Perform) node);
+        } else if (node instanceof Loop) {
+            executeLoop((Loop) node);
+        } else if (node instanceof While) {
+            executeWhile((While) node);
+        } else if (node instanceof For) {
+            executeFor((For) node);
+        } else if (node instanceof Exit) {
+            executeExit((Exit) node);
+        } else if (node instanceof Continue) {
+            executeContinue((Continue) node);
+        } else if (node instanceof Raise) {
+            executeRaise((Raise) node);
+        } else if (node instanceof NullStatement) {
+            // NULL语句什么也不做
+        } else {
+            throw DbException
+                    .getInternalError("unknown PL/pgSQL node: " + node.getClass().getName());
+        }
+    }
+
+    private void executeAssignment(Assignment node) {
+        PlpgSqlVariable variable = findVariable(node.target, node.targetQuoted);
+        variable.checkCanAssign();
+        Value value = sqlExecutor.evalExpression(node.expression, scope);
+        variable.setValue(value);
+    }
+
+    private void executeIf(If node) {
+        for (Branch branch : node.branches) {
+            if (evalCondition(branch.condition)) {
+                executeStatements(branch.statements);
+                return;
+            }
+        }
+        executeStatements(node.elseStatements);
+    }
+
+    private boolean evalCondition(String condition) {
+        Value value = sqlExecutor.evalExpression(condition, scope);
+        return value.getBoolean();
+    }
+
+    private void executeReturn(Return node) {
+        if (node.expression == null) {
+            if (returnType != Value.UNKNOWN && returnType != Value.NULL)
+                throw PlpgSqlException.raise("2F005",
+                        "RETURN; cannot be used in a function returning a value");
+            throw new ReturnSignal(ValueNull.INSTANCE);
+        }
+        if (returnType == Value.NULL)
+            throw PlpgSqlException.raise("2F005",
+                    "RETURN cannot have a parameter in function with void return type");
+        Value value = sqlExecutor.evalExpression(node.expression, scope);
+        if (returnType != Value.UNKNOWN)
+            value = value.convertTo(returnType);
+        throw new ReturnSignal(value);
+    }
+
+    private void executeSql(SqlExec node) {
+        PlpgSqlSqlExecutor.SelectInto selectInto = PlpgSqlSqlExecutor.splitSelectInto(node.sql);
+        if (selectInto != null)
+            executeSelectInto(selectInto);
+        else
+            sqlExecutor.execute(node.sql, scope);
+    }
+
+    private void executeSelectInto(PlpgSqlSqlExecutor.SelectInto selectInto) {
+        List<Value[]> rows = sqlExecutor.query(selectInto.query, scope, 2);
+        if (rows.isEmpty()) {
+            if (selectInto.strict)
+                throw PlpgSqlException.noDataFound();
+            for (String target : selectInto.targets)
+                findVariable(target, false).setValue(ValueNull.INSTANCE);
+            return;
+        }
+        if (selectInto.strict && rows.size() > 1)
+            throw PlpgSqlException.tooManyRows();
+        Value[] row = rows.get(0);
+        if (row.length != selectInto.targets.length)
+            throw PlpgSqlException.raise("42804",
+                    "SELECT INTO has " + row.length + " columns but " + selectInto.targets.length
+                            + " variables");
+        for (int i = 0; i < row.length; i++)
+            findVariable(selectInto.targets[i], false).setValue(row[i]);
+    }
+
+    private void executePerform(Perform node) {
+        String query = node.query.trim();
+        String firstWord = firstWord(query);
+        if (!("SELECT".equalsIgnoreCase(firstWord) || "WITH".equalsIgnoreCase(firstWord)
+                || "VALUES".equalsIgnoreCase(firstWord) || "TABLE".equalsIgnoreCase(firstWord)))
+            query = "SELECT " + query;
+        sqlExecutor.executeQuery(query, scope);
+    }
+
+    private static String firstWord(String sql) {
+        int i = 0;
+        while (i < sql.length() && Character.isWhitespace(sql.charAt(i)))
+            i++;
+        int start = i;
+        while (i < sql.length()
+                && (Character.isLetterOrDigit(sql.charAt(i)) || sql.charAt(i) == '_'))
+            i++;
+        return sql.substring(start, i);
+    }
+
+    private void executeLoop(Loop node) {
+        while (true) {
+            try {
+                executeStatements(node.statements);
+            } catch (ContinueSignal signal) {
+                if (matchesLoopLabel(node.label, signal.label))
+                    continue;
+                throw signal;
+            } catch (ExitSignal signal) {
+                if (matchesLoopLabel(node.label, signal.label))
+                    return;
+                throw signal;
+            }
+        }
+    }
+
+    private void executeWhile(While node) {
+        while (evalCondition(node.condition)) {
+            try {
+                executeStatements(node.statements);
+            } catch (ContinueSignal signal) {
+                if (matchesLoopLabel(node.label, signal.label))
+                    continue;
+                throw signal;
+            } catch (ExitSignal signal) {
+                if (matchesLoopLabel(node.label, signal.label))
+                    return;
+                throw signal;
+            }
+        }
+    }
+
+    private void executeFor(For node) {
+        // 循环上下界和步长只在进入循环时求值一次，此时还看不到循环变量
+        int start = sqlExecutor.evalExpression(node.startExpression, scope).getInt();
+        int end = sqlExecutor.evalExpression(node.endExpression, scope).getInt();
+        int step = node.stepExpression == null ? 1
+                : Math.abs(sqlExecutor.evalExpression(node.stepExpression, scope).getInt());
+        if (step == 0)
+            throw PlpgSqlException.raise("22023", "FOR loop step cannot be zero");
+
+        PlpgSqlScope loopScope = new PlpgSqlScope(scope);
+        PlpgSqlScope oldScope = scope;
+        scope = loopScope;
+        try {
+            PlpgSqlVariable variable = new PlpgSqlVariable(node.variable, node.variableQuoted,
+                    false, false);
+            variable.setType(Value.INT);
+            loopScope.declare(variable);
+            // REVERSE表示从end往start倒着数
+            int from = node.reverse ? end : start;
+            int to = node.reverse ? start : end;
+            int delta = node.reverse ? -step : step;
+            for (int i = from; delta > 0 ? i <= to : i >= to; i += delta) {
+                variable.setValue(ValueInt.get(i));
+                try {
+                    executeStatements(node.statements);
+                } catch (ContinueSignal signal) {
+                    if (matchesLoopLabel(node.label, signal.label))
+                        continue;
+                    throw signal;
+                } catch (ExitSignal signal) {
+                    if (matchesLoopLabel(node.label, signal.label))
+                        return;
+                    throw signal;
+                }
+            }
+        } finally {
+            scope = oldScope;
+        }
+    }
+
+    private static boolean matchesLoopLabel(String loopLabel, String signalLabel) {
+        if (signalLabel == null)
+            return true;
+        return loopLabel != null && loopLabel.equalsIgnoreCase(signalLabel);
+    }
+
+    private void executeExit(Exit node) {
+        if (node.condition != null && !evalCondition(node.condition))
+            return;
+        throw new ExitSignal(node.label);
+    }
+
+    private void executeContinue(Continue node) {
+        if (node.condition != null && !evalCondition(node.condition))
+            return;
+        throw new ContinueSignal(node.label);
+    }
+
+    private void executeRaise(Raise node) {
+        if (node.level == null) {
+            // RAISE; 在EXCEPTION handler里重新抛出当前异常
+            if (currentException == null)
+                throw PlpgSqlException.raise("P0001", "RAISE without active exception");
+            throw currentException;
+        }
+        String message = formatMessage(node);
+        String level = node.level.toUpperCase();
+        if ("EXCEPTION".equals(level)) {
+            String sqlState = node.sqlState == null ? PlpgSqlException.DEFAULT_SQL_STATE
+                    : node.sqlState;
+            throw new PlpgSqlException(sqlState, message);
+        }
+        // NOTICE/WARNING/INFO/LOG/DEBUG只输出，不中断执行
+        System.out.println(level + ":  " + message);
+    }
+
+    private String formatMessage(Raise node) {
+        String message = node.message == null ? "" : node.message;
+        if (node.arguments.isEmpty())
+            return message;
+        StringBuilder buff = new StringBuilder(message.length());
+        int argIndex = 0;
+        for (int i = 0; i < message.length(); i++) {
+            char c = message.charAt(i);
+            if (c == '%') {
+                if (i + 1 < message.length() && message.charAt(i + 1) == '%') {
+                    buff.append('%');
+                    i++;
+                } else if (argIndex < node.arguments.size()) {
+                    Value value = sqlExecutor.evalExpression(node.arguments.get(argIndex++), scope);
+                    buff.append(valueToString(value));
+                } else {
+                    buff.append('%');
+                }
+            } else {
+                buff.append(c);
+            }
+        }
+        return buff.toString();
+    }
+
+    private static String valueToString(Value value) {
+        if (value == null || value == ValueNull.INSTANCE)
+            return "<NULL>";
+        return value.getString();
+    }
+
+    private PlpgSqlVariable findVariable(String name, boolean quoted) {
+        PlpgSqlVariable variable = scope.findVariable(name, quoted);
+        if (variable == null)
+            throw PlpgSqlException.raise("42703", "variable " + name + " does not exist");
+        return variable;
+    }
+}
