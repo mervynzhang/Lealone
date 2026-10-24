@@ -322,7 +322,15 @@ public class Operation extends Expression {
             DbException.throwInternalError("type=" + opType);
         }
         if (left.isConstant() && (right == null || right.isConstant())) {
-            return ValueExpression.get(getValue(session));
+            try {
+                return ValueExpression.get(getValue(session));
+            } catch (DbException e) {
+                // 常量折叠时数据类错误是正常的(CASE/COALESCE 里不会被求值的分支有除以0/转换失败)，
+                // 这时保留原来的表达式，等真正执行到再报错。
+                // 但内部错误这类必须抛出去: 静默吞掉会把真缺陷藏起来。
+                if (!DbException.isDataException(e))
+                    throw e;
+            }
         }
         return this;
     }

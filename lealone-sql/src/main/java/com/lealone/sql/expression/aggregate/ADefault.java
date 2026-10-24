@@ -33,6 +33,9 @@ public class ADefault extends BuiltInAggregate {
             if (dataType == Value.BOOLEAN) {
                 // example: sum(id > 3) (count the rows)
                 dataType = Value.LONG;
+            } else if (dataType == Value.NULL || dataType == Value.UNKNOWN) {
+                // sum(null)的结果是null，参数类型未知时用decimal，不报错
+                dataType = Value.DECIMAL;
             } else if (!DataType.supportsAdd(dataType)) {
                 throw DbException.get(ErrorCode.SUM_OR_AVG_ON_WRONG_DATATYPE_1, getSQL());
             } else {
@@ -40,7 +43,9 @@ public class ADefault extends BuiltInAggregate {
             }
             break;
         case AVG:
-            if (!DataType.supportsAdd(dataType)) {
+            if (dataType == Value.NULL || dataType == Value.UNKNOWN) {
+                dataType = Value.DECIMAL;
+            } else if (!DataType.supportsAdd(dataType)) {
                 throw DbException.get(ErrorCode.SUM_OR_AVG_ON_WRONG_DATATYPE_1, getSQL());
             }
             break;
