@@ -16,6 +16,7 @@
 |---|---|---|---|---|
 | 1 | 关联子查询只在最内层与外层关联时，中间层子查询结果被跨外层行复用，返回上一行的过期值（静默错数据） | `CorrelatedVisitor` 展开嵌套子查询，并把嵌套查询自己的 `TableFilter` 并入"自己的列"集合 | 新增 `CorrelatedSubqueryTest` 4 例；回退本改动后正好两条嵌套用例变红（`expected:<2> but was:<1>`），两条对照仍绿 | 已修复 |
 | 2 | 异步提交回调在事务已结束时会丢失（语句挂死），重复提交时会重复执行（客户端收到两次响应） | `undoLog == null` 时补调 `asyncCommitComplete()`；`asyncCommitComplete()` 先取走 `asyncTask` 再置空，保证恰好一次 | 新增 `AsyncCommitCallbackTest` 2 例；去掉补调 → 30s 超时"没有回调"；去掉取走置空 → `expected:<1> but was:<2>` | 已修复 |
+| 23 | `CheckpointDurabilityTest` 失败时（断言先于清理执行）会遗留"已关闭但仍注册在 `LealoneDatabase` 的库 + 复制出来的隔离目录 + 备份包"，同一 JVM 里后续用例再动这些目录时，后台检查点会对着已删除的目录反复报错 → 整个套件偶发红 | 新增 `@After cleanupLeftovers()`：无条件关闭残留库、删除隔离目录/库目录/备份包 | 正常路径 4/4 通过且残留 0 项；把期望值临时改成错误值制造失败后，残留同样是 **0 项**（修复前会留下 `_iso` 目录与 zip） | 已修复 |
 | 22 | **索引异步构建期静默漏行（P0，本批修复自己引入的回归）**：`CREATE INDEX` 是异步的，构建期 `StandardSecondaryIndex.find()` 返回 `SsiBuildingCursor`（已建索引段 + 主表尾段）。`8135c4023` 为省一次主表读去掉了 `next()` 里的 `row = null`，前提是"每条索引项都由 `getIndexKey` 清缓存"，但**主表尾段不经过 `getIndexKey`** → 尾段每行都返回第一条尾段行的 `Row`；`17ccd63a3` 的 QFlat 又按 `getCurrentKey()` 去重 → 尾段除第一行外全被当重复行丢掉 → 查询**静默少行** | `StandardSecondaryIndexCursor`：缓存行带 `rowKey`，`get()` 发现 rowKey 变化就重读；新增 `setCachedRow()`，主表尾段直接复用该 Row（不额外读主表，保住覆盖索引优化）；`getIndexKey` 重置 rowKey | 新增 `IndexBuildingScanTest`（embedded、6 万行、建索引后连查 1500 次）：回退修复并 install 后 `expected:<60> but was:<1>`，修复后 3/3 通过。真实现场 `select4.test`（2832 条查询）：回退版 8 次跑出 1 次 `+1 FAIL`，修复后 **10/10 全绿** | 已修复 |
 | 21 | `SltGateStatementTest` 在进程内起嵌入式库跑 SltRunner，会改变同一 JVM 里嵌入式引擎的状态，把既有的持久化缺陷（第 26 项）触发成普通套件的偶发红 | 与 `SltTest` 一致：只在 `-Pslt`/`-Dslt.run=true` 下运行；同样补上"用完关闭并删除自己创建的库"、`@AfterClass` 跳过时不做清理 | 普通模式 `Skipped: 1`，`-Pslt` 模式通过；普通全量套件恢复确定性（见第 20 项后的验证） | 已修复（临时隔离，P0 修好后移回普通套件） |
 | 20 | `CheckpointService.save` 的 `try/catch` 在**循环外**：任意一个 `StorageMap` 保存失败（例如它所属数据库的存储目录已被删除）就会中止**整轮**检查点，后面所有数据库的脏页都不落盘，而对应的 redo log 随后可能被截断 → 重启后丢更新 | 改成逐个 map 隔离（整个 map 处理体 try/catch + 日志），失败的 map 自己的 redo log 不会被截断，重启按 redo 重放 | 由 `SltGateStatementTest` + 全量套件驱动：修复前全量 2/2 红（`CheckpointDurabilityTest.testBackupThenUpdate` 期望 `2000,100` 实得 `2000,0`），修复后首轮绿；**仍有残留偶发**，见下条 | 已修复（缩小爆炸半径；残留另记） |
@@ -62,7 +63,7 @@
 | # | 问题 | 位置 |
 |---|---|---|
 | 22 | SLT 门禁**仍然可以被"同文件替换"绕过**：baseline 只比"每文件失败计数"，同一文件里"修好 A、坏掉 B"仍然 PASS | `SltBaseline.java:156-159` | 需把 baseline 从计数改为失败签名集合 |
-| 26 | **重启后丢更新（P0，未完全定位）**：全量套件里 `CheckpointDurabilityTest.testBackupThenUpdate` 期望 `2000,100`、实得 `2000,0`（行在、100 条更新没了）。日志抓到 `Failed to execute save: Directory does not exist: .../db_47/t_47_0`，即某个已失效数据库在后台检查点里抛异常。修掉"单 map 失败中止整轮"后仍有约 1/2 概率复现 | `CheckpointService.save` + 关闭路径 | **待查**：怀疑关闭路径/异步 checkpt 与 `close(false)` 存在竞争，导致 `ckptdurA` 的更新在 redo 截断前没有被保存。已给 `SltGateStatementTest` 补上关闭并删除其遗留库（消除一个噪声源） |
+| 26 | **重启后丢更新（潜伏，观测条件已消除）**：全量套件里 `CheckpointDurabilityTest.testBackupThenUpdate` 期望 `2000,100` 实得 `2000,0`（行在、100 条更新没了）；日志抓到 `Failed to execute save: Directory does not exist: .../db_47/t_47_0`（某个已失效数据库在后台检查点里抛异常）。触发条件已定位为"同一 JVM 里前面有用例遗留了开着的库、而它的存储目录后来被删掉"；把那个用例（`SltGateStatementTest`）移出普通套件后，全量套件恢复确定性（360 项 × 2 轮全绿） | `CheckpointService.save`（已修"单 map 失败中止整轮"）、`Database.close`、后台检查点与关闭的竞争 | **已排除的假设**：① 多一个嵌入式库在场（8/8 正确，含显式 `close(false)`）；② CPU 高负载放大竞争窗口（单跑 6/6 绿）；③ `close(false)` 异步不刷盘（代码确认是同步 `table.close` + `Storage.close`）。**仍待查**：后台检查点与 `Database.close` 的竞争（需要"遗留库"这一前置条件） |
 | 25 | ~~SLT 门禁偶发、原始代码同样复现~~ **更正：这是本批两个修复叠加引入的回归，不是既有缺陷**（原结论基于未 install 的对照，见第 23 条方法论警示）。已作为第 22 条修复 | — | — |
 | 24 | 测试不 hermetic：不清理 `target/test-data` 再跑会有 131 errors；跑套件会改写被跟踪的 `orm/generated/*.java` | `TestBase.java:51`、`SqlTestBase` 默认库 |
 
@@ -80,6 +81,7 @@
 
 | 项 | 复审建议 | 实测结论 |
 |---|---|---|
+| `AOTransactionMap` 每条 UPDATE/DELETE 多一次 `map.put`（建议改成按 key 标脏叶子页） | 用 `StorageMap.markDirty` 替代 `map.put` | **未证实，未采纳**：2 万行 × 3 轮（4 个二级索引）更新基准，基线 `202/102/112 ms`、变体 `181/103/101 ms`、`186/109/92 ms` —— 稳态差异在噪声内。原因：`put` 命中已存在的 key 与 `gotoLeafPage` 标脏做的是同一次 B 树搜索，省不掉；反而 `markDirty` 少了 `PageListener` 重绑，动了脏页跟踪的正确性风险。 |
 | `StatementBase.syncExecute` 等待循环"100 次全调度 pump/ms 白烧一个核" | 改成 1 次 pump + 1ms | **未证实，未采纳**。两个场景实测（4 线程争抢同一行的 1200 次更新；以及"持锁者闲置 2 秒"的纯等待场景）：等待期间进程 CPU 都是 ~150 ms / 2 秒（约占单核 7%），改与不改的 CPU 与墙钟差异都在噪声内（墙钟甚至偶有变差）。原因是每次 pump 在无活可干时开销很小，且当前等待主要走 `scheduler.await()` 而不是这个自旋循环。**结论：这不是热路径瓶颈，改它属于无收益改动。**
 
 | 提交 | 结论 |
