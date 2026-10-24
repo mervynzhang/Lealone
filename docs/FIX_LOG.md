@@ -16,6 +16,7 @@
 |---|---|---|---|---|
 | 1 | 关联子查询只在最内层与外层关联时，中间层子查询结果被跨外层行复用，返回上一行的过期值（静默错数据） | `CorrelatedVisitor` 展开嵌套子查询，并把嵌套查询自己的 `TableFilter` 并入"自己的列"集合 | 新增 `CorrelatedSubqueryTest` 4 例；回退本改动后正好两条嵌套用例变红（`expected:<2> but was:<1>`），两条对照仍绿 | 已修复 |
 | 2 | 异步提交回调在事务已结束时会丢失（语句挂死），重复提交时会重复执行（客户端收到两次响应） | `undoLog == null` 时补调 `asyncCommitComplete()`；`asyncCommitComplete()` 先取走 `asyncTask` 再置空，保证恰好一次 | 新增 `AsyncCommitCallbackTest` 2 例；去掉补调 → 30s 超时"没有回调"；去掉取走置空 → `expected:<1> but was:<2>` | 已修复 |
+| 22 | **索引异步构建期静默漏行（P0，本批修复自己引入的回归）**：`CREATE INDEX` 是异步的，构建期 `StandardSecondaryIndex.find()` 返回 `SsiBuildingCursor`（已建索引段 + 主表尾段）。`8135c4023` 为省一次主表读去掉了 `next()` 里的 `row = null`，前提是"每条索引项都由 `getIndexKey` 清缓存"，但**主表尾段不经过 `getIndexKey`** → 尾段每行都返回第一条尾段行的 `Row`；`17ccd63a3` 的 QFlat 又按 `getCurrentKey()` 去重 → 尾段除第一行外全被当重复行丢掉 → 查询**静默少行** | `StandardSecondaryIndexCursor`：缓存行带 `rowKey`，`get()` 发现 rowKey 变化就重读；新增 `setCachedRow()`，主表尾段直接复用该 Row（不额外读主表，保住覆盖索引优化）；`getIndexKey` 重置 rowKey | 新增 `IndexBuildingScanTest`（embedded、6 万行、建索引后连查 1500 次）：回退修复并 install 后 `expected:<60> but was:<1>`，修复后 3/3 通过。真实现场 `select4.test`（2832 条查询）：回退版 8 次跑出 1 次 `+1 FAIL`，修复后 **10/10 全绿** | 已修复 |
 | 21 | `SltGateStatementTest` 在进程内起嵌入式库跑 SltRunner，会改变同一 JVM 里嵌入式引擎的状态，把既有的持久化缺陷（第 26 项）触发成普通套件的偶发红 | 与 `SltTest` 一致：只在 `-Pslt`/`-Dslt.run=true` 下运行；同样补上"用完关闭并删除自己创建的库"、`@AfterClass` 跳过时不做清理 | 普通模式 `Skipped: 1`，`-Pslt` 模式通过；普通全量套件恢复确定性（见第 20 项后的验证） | 已修复（临时隔离，P0 修好后移回普通套件） |
 | 20 | `CheckpointService.save` 的 `try/catch` 在**循环外**：任意一个 `StorageMap` 保存失败（例如它所属数据库的存储目录已被删除）就会中止**整轮**检查点，后面所有数据库的脏页都不落盘，而对应的 redo log 随后可能被截断 → 重启后丢更新 | 改成逐个 map 隔离（整个 map 处理体 try/catch + 日志），失败的 map 自己的 redo log 不会被截断，重启按 redo 重放 | 由 `SltGateStatementTest` + 全量套件驱动：修复前全量 2/2 红（`CheckpointDurabilityTest.testBackupThenUpdate` 期望 `2000,100` 实得 `2000,0`），修复后首轮绿；**仍有残留偶发**，见下条 | 已修复（缩小爆炸半径；残留另记） |
 | 19 | SLT 回归门禁把 `kind=="statement"` 的失败**排除在外**：脚本里的 DDL/DML 坏掉时门禁依然 PASS（例如 `CREATE INDEX` 写错列名），只有 query 失败才计数 | `Failure.gated()` 改为对所有失败返回 true | 新增 `SltGateStatementTest`：临时脚本里放一条必然失败的 `statement ok`，断言它被记录、`gatedFail>0`、`delta>0`；回退 `gated()` 后该用例变红。精选集 27 个文件在更严格门禁下仍是 PASS（3 次中 2 次，见下条偶发） | 已修复 |
@@ -62,8 +63,18 @@
 |---|---|---|
 | 22 | SLT 门禁**仍然可以被"同文件替换"绕过**：baseline 只比"每文件失败计数"，同一文件里"修好 A、坏掉 B"仍然 PASS | `SltBaseline.java:156-159` | 需把 baseline 从计数改为失败签名集合 |
 | 26 | **重启后丢更新（P0，未完全定位）**：全量套件里 `CheckpointDurabilityTest.testBackupThenUpdate` 期望 `2000,100`、实得 `2000,0`（行在、100 条更新没了）。日志抓到 `Failed to execute save: Directory does not exist: .../db_47/t_47_0`，即某个已失效数据库在后台检查点里抛异常。修掉"单 map 失败中止整轮"后仍有约 1/2 概率复现 | `CheckpointService.save` + 关闭路径 | **待查**：怀疑关闭路径/异步 checkpt 与 `close(false)` 存在竞争，导致 `ckptdurA` 的更新在 redo 截断前没有被保存。已给 `SltGateStatementTest` 补上关闭并删除其遗留库（消除一个噪声源） |
-| 25 | **SLT 门禁偶发，根因是引擎返回不确定的错误结果**：单跑 `select4.test`（2832 条查询）实测 6 次里 1 次失败、8 次里 1 次失败，每次失败的查询**不是同一条**（已观察到第 6947 行与第 6119 行两条不同的 UNION/EXCEPT 链），失败类型都是 `hash_mismatch` 且**行数不一致**（预期 19 实际 28 / 预期 28 实际 19），不是顺序差异。原始代码同样复现，与门禁改动无关 | 例：`select4.test:6119` 的 6 段 `UNION/EXCEPT` 链 + `WHERE NOT (x IN (...))`，表 t1/t3/t4/t5/t6/t8/t9 各 1000 行、每表 5 个索引 | **待查（已派专项调查）**：疑似索引扫描在 `NOT IN`/`EXCEPT` 路径上偶发漏行/多行，属于 P0 级（查询结果不确定）；门禁偶发会掩盖真回归 |
+| 25 | ~~SLT 门禁偶发、原始代码同样复现~~ **更正：这是本批两个修复叠加引入的回归，不是既有缺陷**（原结论基于未 install 的对照，见第 23 条方法论警示）。已作为第 22 条修复 | — | — |
 | 24 | 测试不 hermetic：不清理 `target/test-data` 再跑会有 131 errors；跑套件会改写被跟踪的 `orm/generated/*.java` | `TestBase.java:51`、`SqlTestBase` 默认库 |
+
+## 二半、方法论警示（验证时踩过的坑，必须记住）
+
+| 坑 | 现象 | 正确做法 |
+|---|---|---|
+| **兄弟模块从 `/root/.m2` 解析，不用工作树里的 `target/classes`**（第 23 条） | `mvn -o -pl lealone-test test` 只重编 lealone-test，`lealone-db`/`lealone-aote` 等**加载的是已 install 的 jar**。于是"回退源码但不 install"会让用例**假通过**（实测：回退 `StandardSecondaryIndex` 后不 install，`IndexBuildingScanTest` 依然绿；install 之后才 `expected:<60> but was:<1>`） | 做红/绿对照时**必须**先 `mvn -o -q -DskipTests install`（或加 `-am`），否则得出的"原始代码也复现/也通过"结论不可信 |
+| `SqlTestBase` 的 `executeQuery(String)` 已经调过一次 `rs.next()`（第 24 条） | 再调 `rs.next()` 会跳过第一行，表现为 `expected:<1> but was:<2>` 之类的诡异断言 | 直接用当前 `rs`，或 `closeResultSet()` 后自己重开 |
+| `mvn clean` 在离线环境不可用 | 残留 `target/classes` 造成假红/假绿 | `rm -rf lealone-*/target` 代替 |
+| 共享 `target/test-data` 不清理 | 跨用例库污染，出现 `Wrong user name or password [28000-0]` 等 131 个错误 | 每次跑套件前 `rm -rf lealone-test/target/test-data` |
+| 循环重跑同一条 SQL 会命中会话级语句/结果缓存 | 探针测不到真正执行（以为"稳定正确"） | 先 `SET QUERY_CACHE_SIZE 0` |
 
 ## 三、判定为"问题不成立或收益未证实"（不动）
 
