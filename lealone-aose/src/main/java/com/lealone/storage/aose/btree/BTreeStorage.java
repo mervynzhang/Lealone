@@ -410,9 +410,10 @@ public class BTreeStorage {
                         chunkManager.removeUnusedChunk(chunk);
                 } else {
                     // 倒数第三个chunk的redo log可以删除了
+                    // 按序号取 maxSeq-2 的chunk, 序号有空洞时返回null;
+                    // 它不可能等于lastChunk(序号不同), 所以只需要判空
                     Chunk thirdLastChunk = chunkManager.findThirdLastChunk();
-                    // chunk序号有空洞时可能返回上一个lastChunk，它的RedoLog尾部还被新的lastChunk引用
-                    if (thirdLastChunk != null && thirdLastChunk != lastChunk) {
+                    if (thirdLastChunk != null) {
                         thirdLastChunk.removeRedoLogAndRemovedPages(map);
                     }
                 }
