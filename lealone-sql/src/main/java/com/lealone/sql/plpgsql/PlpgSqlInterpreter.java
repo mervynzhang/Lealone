@@ -634,14 +634,18 @@ public class PlpgSqlInterpreter {
             PlpgSqlVariable recordVariable = findVariable(selectInto.targets[0], false);
             if (recordVariable.isRecord()) {
                 if (rows.isEmpty()) {
-                    if (selectInto.strict)
+                    if (selectInto.strict) {
+                        setFound(false);
                         throw PlpgSqlException.noDataFound();
+                    }
                     recordVariable.invalidateRecord(queryRows.columnNames, queryRows.columnTypes);
                     setFound(false);
                     return;
                 }
-                if (selectInto.strict && rows.size() > 1)
+                if (selectInto.strict && rows.size() > 1) {
+                    setFound(true);
                     throw PlpgSqlException.tooManyRows();
+                }
                 recordVariable.checkCanAssign();
                 recordVariable.assignRecord(queryRows.columnNames, queryRows.columnTypes,
                         rows.get(0));
@@ -650,8 +654,10 @@ public class PlpgSqlInterpreter {
             }
         }
         if (rows.isEmpty()) {
-            if (selectInto.strict)
+            if (selectInto.strict) {
+                setFound(false);
                 throw PlpgSqlException.noDataFound();
+            }
             for (String target : selectInto.targets) {
                 PlpgSqlVariable variable = findVariable(target, false);
                 variable.checkCanAssign();
@@ -660,8 +666,10 @@ public class PlpgSqlInterpreter {
             setFound(false);
             return;
         }
-        if (selectInto.strict && rows.size() > 1)
+        if (selectInto.strict && rows.size() > 1) {
+            setFound(true);
             throw PlpgSqlException.tooManyRows();
+        }
         Value[] row = rows.get(0);
         if (row.length != selectInto.targets.length)
             throw PlpgSqlException.raise("42804",
