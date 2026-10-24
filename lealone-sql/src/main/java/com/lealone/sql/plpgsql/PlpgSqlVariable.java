@@ -32,6 +32,8 @@ public class PlpgSqlVariable {
     private boolean recordAssigned;
     // RETURNS TABLE的结果列变量，RETURN QUERY里同名标识符优先按查询的列解析
     private boolean tableColumn;
+    // tab%ROWTYPE声明的行类型，字段结构固定；plain record每次赋值可以换行结构
+    private boolean rowTypeDeclared;
 
     public PlpgSqlVariable(String name, boolean nameQuoted, boolean constant, boolean notNull) {
         this.name = name;
@@ -87,20 +89,46 @@ public class PlpgSqlVariable {
         this.record = record;
     }
 
+    public boolean isRowTypeDeclared() {
+        return rowTypeDeclared;
+    }
+
+    public void setRowTypeDeclared(boolean rowTypeDeclared) {
+        this.rowTypeDeclared = rowTypeDeclared;
+    }
+
     public void declareRecordFields(String[] fieldNames, int[] fieldTypes) {
         this.record = true;
         this.recordFieldNames = fieldNames.clone();
         this.recordFieldTypes = fieldTypes.clone();
         this.recordFieldValues = new Value[fieldNames.length];
-        for (int i = 0; i < this.recordFieldValues.length; i++)
-            this.recordFieldValues[i] = ValueNull.INSTANCE;
+        resetRecordValues();
         this.recordAssigned = false;
+    }
+
+    // %ROWTYPE声明后字段就是全NULL的一行
+    public void markRecordAssigned() {
+        if (recordFieldValues == null)
+            return;
+        resetRecordValues();
+        this.recordAssigned = true;
+    }
+
+    private void resetRecordValues() {
+        for (int i = 0; i < recordFieldValues.length; i++)
+            recordFieldValues[i] = ValueNull.INSTANCE;
     }
 
     // SELECT INTO一整行到record变量
     public void assignRecord(String[] fieldNames, int[] fieldTypes, Value[] values) {
-        if (this.recordFieldNames == null)
-            declareRecordFields(fieldNames, fieldTypes);
+        if (!rowTypeDeclared) {
+            // plain record每次赋值都按查询结果重新绑定行结构
+            this.record = true;
+            this.recordFieldNames = fieldNames.clone();
+            this.recordFieldTypes = fieldTypes.clone();
+            this.recordFieldValues = new Value[fieldNames.length];
+            resetRecordValues();
+        }
         if (values.length != this.recordFieldNames.length)
             throw PlpgSqlException.raise("42804",
                     "SELECT INTO record " + name + " has " + values.length + " columns but "
@@ -114,11 +142,20 @@ public class PlpgSqlVariable {
         this.recordAssigned = true;
     }
 
-    // 查询没有行时把record标记成未赋值，字段定义保持不变
+    // 查询没有行时把record的字段都置NULL；%ROWTYPE和已知查询结构都仍是一行NULL
     public void invalidateRecord(String[] fieldNames, int[] fieldTypes) {
-        if (this.recordFieldNames == null && fieldNames != null)
-            declareRecordFields(fieldNames, fieldTypes);
-        this.recordAssigned = false;
+        if (!rowTypeDeclared && fieldNames != null) {
+            this.record = true;
+            this.recordFieldNames = fieldNames.clone();
+            this.recordFieldTypes = fieldTypes.clone();
+            this.recordFieldValues = new Value[fieldNames.length];
+        }
+        if (recordFieldValues != null) {
+            resetRecordValues();
+            this.recordAssigned = true;
+        } else {
+            this.recordAssigned = false;
+        }
     }
 
     public Value getRecordField(String fieldName) {
@@ -167,7 +204,12 @@ public class PlpgSqlVariable {
             value = ValueNull.INSTANCE;
         if (record) {
             if (value == ValueNull.INSTANCE) {
-                recordAssigned = false;
+                if (rowTypeDeclared && recordFieldValues != null) {
+                    resetRecordValues();
+                    recordAssigned = true;
+                } else {
+                    recordAssigned = false;
+                }
                 return;
             }
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
@@ -184,7 +226,12 @@ public class PlpgSqlVariable {
         if (value == null)
             value = ValueNull.INSTANCE;
         if (record) {
-            recordAssigned = false;
+            if (rowTypeDeclared && recordFieldValues != null) {
+                resetRecordValues();
+                recordAssigned = true;
+            } else {
+                recordAssigned = false;
+            }
             return;
         }
         if (type != Value.UNKNOWN)

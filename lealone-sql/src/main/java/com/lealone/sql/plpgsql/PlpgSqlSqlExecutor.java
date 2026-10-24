@@ -158,8 +158,9 @@ public class PlpgSqlSqlExecutor {
         if (type.isEmpty())
             return Value.UNKNOWN;
         // record/%ROWTYPE不是标量类型，不能拼成CAST(NULL AS ...)
-        String compactType = type.replaceAll("\\s+", "").toLowerCase();
-        if (compactType.equals("record") || compactType.endsWith("%rowtype"))
+        String compactType = compactTypeName(type).toLowerCase();
+        if (compactType.equals("record") || compactType.startsWith("record[")
+                || compactType.contains("%rowtype"))
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                     "PL/pgSQL record/%ROWTYPE type is not a scalar type: " + typeName);
         Integer cached = typeCache.get(type);
@@ -191,7 +192,7 @@ public class PlpgSqlSqlExecutor {
      */
     public QueryRows resolveRowType(String typeName) {
         String type = typeName == null ? "" : typeName.trim();
-        String compact = type.replaceAll("\\s+", "");
+        String compact = compactTypeName(type);
         if (!compact.toLowerCase().endsWith("%rowtype"))
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                     "PL/pgSQL unsupported row type: " + typeName);
@@ -205,6 +206,28 @@ public class PlpgSqlSqlExecutor {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                     "PL/pgSQL unsupported row type " + typeName + ": " + e.getMessage());
         }
+    }
+
+    // 去掉类型文本里的空白，但保留引号内的空白（"my tab"%ROWTYPE）
+    static String compactTypeName(String typeName) {
+        StringBuilder buff = new StringBuilder(typeName.length());
+        boolean singleQuoted = false;
+        boolean doubleQuoted = false;
+        for (int i = 0; i < typeName.length(); i++) {
+            char c = typeName.charAt(i);
+            if (c == '\'' && !doubleQuoted) {
+                singleQuoted = !singleQuoted;
+                buff.append(c);
+            } else if (c == '"' && !singleQuoted) {
+                doubleQuoted = !doubleQuoted;
+                buff.append(c);
+            } else if (Character.isWhitespace(c) && !singleQuoted && !doubleQuoted) {
+                // 跳过引号外的空白
+            } else {
+                buff.append(c);
+            }
+        }
+        return buff.toString();
     }
 
     private int queryColumnType(String sql) {
@@ -409,11 +432,11 @@ public class PlpgSqlSqlExecutor {
         protected Expression readTerm() {
             if (currentTokenType == IDENTIFIER && resolver != null) {
                 PlpgSqlVariable variable = resolver.findVariable(currentToken, currentTokenQuoted);
-                if (variable != null && variable.isRecord() && nextChar() != '.')
-                    throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                            "PL/pgSQL record variable " + variable.getName()
-                                    + " can only be used as record.field");
                 if (variable != null && canSubstitute()) {
+                    if (variable.isRecord())
+                        throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                                "PL/pgSQL record variable " + variable.getName()
+                                        + " can only be used as record.field");
                     read();
                     return ValueExpression.get(variable.getValue());
                 }
@@ -435,30 +458,23 @@ public class PlpgSqlSqlExecutor {
                     String fieldName = readColumnIdentifier();
                     return ValueExpression.get(variable.getRecordField(fieldName));
                 }
-                if (resolver.hasLabel(lastIdentifier)) {
-                    String name = readColumnIdentifier();
+                if (resolver.hasLabel(lastIdentifier) && currentTokenType == IDENTIFIER) {
+                    // 只有label.var真的解析到变量时才替换，否则回落到SQL的alias.col/schema.table
+                    String name = currentToken;
+                    boolean quoted = currentTokenQuoted;
                     PlpgSqlVariable qualified = resolver.findVariableByLabel(lastIdentifier, name,
-                            false);
-                    if (qualified == null)
-                        throw DbException.get(ErrorCode.COLUMN_NOT_FOUND_1,
-                                lastIdentifier + "." + name);
-                    if (qualified.isRecord())
-                        throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                                "PL/pgSQL qualified record field: " + lastIdentifier + "."
-                                        + name);
-                    return ValueExpression.get(qualified.getValue());
+                            quoted);
+                    if (qualified != null) {
+                        read();
+                        if (qualified.isRecord())
+                            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                                    "PL/pgSQL qualified record field: " + lastIdentifier + "."
+                                            + name);
+                        return ValueExpression.get(qualified.getValue());
+                    }
                 }
             }
             return super.readTermObjectDot(objectName);
-        }
-
-        // 当前token后面的第一个非空白字符
-        private char nextChar() {
-            int i = parseIndex;
-            char[] chars = sqlCommandChars;
-            while (i < chars.length && Character.isWhitespace(chars[i]))
-                i++;
-            return i < chars.length ? chars[i] : 0;
         }
 
         // 看当前token后面的第一个非空白字符，判断它是不是限定名、函数调用或字面量前缀
