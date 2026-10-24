@@ -321,6 +321,9 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         private final ServerSession session;
         private SearchRow searchRow;
         private Row row;
+        // 单条语句/单个游标内"rowKey -> 首次见到时的索引列值"，必须是不可变的列值数组，
+        // 不能缓存Row对象(行是原地更新的，缓存对象本身会被改掉，等于没有快照)
+        private HashMap<Long, Value[]> rowSnapshots;
 
         public StandardSecondaryIndexCursor(ServerSession session) {
             this.session = session;
@@ -352,7 +355,9 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         @Override
         public boolean next() {
             searchRow = nextSearchRow();
-            row = null; // 延迟构建
+            // 不能在这里把 row 清空: nextSearchRow 校验索引项时(见 isRowStillMatching)已经把这一行的
+            // 主表记录读出来了, 清空会让随后 get() 再读一次同一个主表行, 覆盖索引查询的读放大直接翻倍。
+            // 每条索引项开始校验时 getIndexKey 都会自己清 row, 所以这里不清也不会读到上一条的行。
             return searchRow != null;
         }
 
@@ -364,6 +369,8 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         }
 
         protected IndexKey getIndexKey(TransactionMapCursor<IndexKey, IndexKey> tmCursor) {
+            // 每条索引项都必须用它自己对应的主表行来校验，不能复用上一条的缓存
+            row = null;
             IndexKey current = tmCursor.getKey();
             // 索引项可能是墓碑(正在被删)或残留的孤儿项，只有主表行当前值还等于它时才返回，
             // 否则该行会通过更新后的索引项再产出一次，同一个rowKey会返回两次
@@ -378,12 +385,25 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
 
         // 主表行当前的索引列值是否还等于这条索引项保存的值
         private boolean isRowStillMatching(IndexKey indexKey) {
-            Row row = table.getRow(session, indexKey.getKey());
-            if (row == null)
+            long rowKey = indexKey.getKey();
+            if (rowSnapshots == null)
+                rowSnapshots = new HashMap<>();
+            Value[] currentColumns;
+            if (rowSnapshots.containsKey(rowKey)) {
+                // 同一rowKey在本次扫描里已经见过，沿用第一次见到时的列值，
+                // 避免扫描期间该行被更新后，旧索引项和新索引项都通过校验而输出两次
+                currentColumns = rowSnapshots.get(rowKey);
+            } else {
+                // 复用游标里缓存的这一行，避免和后续TableFilter取值时重复读一次主表
+                if (row == null)
+                    row = table.getRow(session, rowKey);
+                IndexKey currentKey = row == null ? null : convertToKey(row);
+                currentColumns = currentKey == null ? null : currentKey.getColumns();
+                rowSnapshots.put(rowKey, currentColumns);
+            }
+            if (currentColumns == null)
                 return false;
-            IndexKey currentKey = convertToKey(row);
             Value[] oldColumns = indexKey.getColumns();
-            Value[] currentColumns = currentKey.getColumns();
             if (oldColumns == null || currentColumns == null
                     || oldColumns.length != currentColumns.length)
                 return false;
@@ -411,17 +431,18 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
 
         @Override
         protected SearchRow nextSearchRow() {
-            SearchRow searchRow;
-            if (tmCursor.next()) {
+            while (tmCursor.next()) {
                 IndexKey current = getIndexKey(tmCursor);
-                searchRow = createSearchRow(current);
-                if (searchRow != null && last != null && compareRows(searchRow, last) > 0) {
-                    searchRow = null;
-                }
-            } else {
-                searchRow = null;
+                if (current == null)
+                    continue; // 不匹配的索引项要跳过，不能直接结束扫描(会漏行)
+                SearchRow searchRow = createSearchRow(current);
+                if (searchRow == null)
+                    continue;
+                if (last != null && compareRows(searchRow, last) > 0)
+                    return null;
+                return searchRow;
             }
-            return searchRow;
+            return null;
         }
     }
 
