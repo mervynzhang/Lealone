@@ -2,6 +2,13 @@
 # Columns: file <TAB> expected non-allowlisted QUERY failures <TAB> observed total query failures (informational).
 # Regenerate with: mvn -o test -pl lealone-test -Pslt -Dtest=SltTest -Dslt.updateBaseline=true
 # Only query failures are gated; 'statement' records are executed but never counted.
+#
+# --- AVG over integer columns now yields a floating type (H2-compatible) ----------------
+# AVG(BYTE/SHORT/INT) returns DOUBLE and AVG(BIGINT) returns DECIMAL, as in H2; the type
+# change propagates to the enclosing expression, so a division next to AVG becomes floating
+# point instead of integer division. The oracle of this suite is SQLite, which is dynamically
+# typed and still divides the integer value -81 by 14 as integers. All 11 extra failures below
+# were re-checked against H2 2.4.240: Lealone and H2 produce the same value.
 select1.test	0	0
 select2.test	0	0
 select3.test	0	0
@@ -11,21 +18,21 @@ evidence/slt_lang_createview.test	0	0
 evidence/slt_lang_dropview.test	0	0
 random/expr/slt_good_1.test	0	0
 random/expr/slt_good_2.test	0	0
-random/expr/slt_good_4.test	0	0
+random/expr/slt_good_4.test	1	1
 random/expr/slt_good_5.test	0	0
-random/expr/slt_good_19.test	0	0
-random/expr/slt_good_21.test	0	0
+random/expr/slt_good_19.test	1	1
+random/expr/slt_good_21.test	1	1
 random/expr/slt_good_32.test	0	0
 random/expr/slt_good_37.test	0	0
 random/expr/slt_good_43.test	0	0
 random/expr/slt_good_54.test	0	0
-random/expr/slt_good_60.test	0	0
+random/expr/slt_good_60.test	2	2
 random/expr/slt_good_65.test	0	0
 random/expr/slt_good_73.test	0	0
 random/expr/slt_good_76.test	0	0
 random/expr/slt_good_87.test	0	0
-random/expr/slt_good_91.test	1	1
-random/expr/slt_good_96.test	0	1
+random/expr/slt_good_91.test	2	2
+random/expr/slt_good_96.test	2	3
 random/expr/slt_good_98.test	0	0
 random/expr/slt_good_106.test	0	1
-random/expr/slt_good_109.test	0	0
+random/expr/slt_good_109.test	3	3
