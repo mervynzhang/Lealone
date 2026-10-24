@@ -35,6 +35,8 @@ public class ConditionInSelect extends Condition {
     private final boolean all;
     private final int compareType;
     private SubQueryResult rows;
+    // 是否是关联子查询，关联子查询的结果不能重复使用
+    private boolean correlated;
 
     public ConditionInSelect(Database database, Expression left, Query query, boolean all,
             int compareType) {
@@ -55,13 +57,26 @@ public class ConditionInSelect extends Condition {
 
     @Override
     public Value getValue(ServerSession session) {
+        query.setSession(session);
+        if (correlated) {
+            // 关联子查询的结果依赖于外层查询的当前行，每一行都必须重新执行子查询
+            SubQueryResult r = new SubQueryResult(query, 0);
+            try {
+                return getValue(r, session);
+            } finally {
+                r.close();
+            }
+        }
         if (rows == null) {
-            query.setSession(session);
             rows = new SubQueryResult(query, 0);
             session.addTemporaryResult(rows);
         } else {
             rows.reset();
         }
+        return getValue(rows, session);
+    }
+
+    private Value getValue(SubQueryResult rows, ServerSession session) {
         Value l = left.getValue(session);
         if (rows.getRowCount() == 0) {
             return ValueBoolean.get(all);
@@ -123,6 +138,7 @@ public class ConditionInSelect extends Condition {
         if (query.getColumnCount() != 1) {
             throw DbException.get(ErrorCode.SUBQUERY_IS_NOT_SINGLE_COLUMN);
         }
+        correlated = query.isCorrelated();
         // Can not optimize: the data may change
         return this;
     }
