@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 
 import com.lealone.client.jdbc.JdbcResultSet;
+import com.lealone.common.exceptions.DbException;
 import com.lealone.client.jdbc.JdbcStatement;
 import com.lealone.db.api.ErrorCode;
 
@@ -39,6 +40,22 @@ public class JdbcStatementTest extends ClientTestBase {
         testGeneratedKeys();
         testClosedStatement();
         testExecuteException();
+        testAsyncExceptionContract();
+    }
+
+    void testAsyncExceptionContract() throws Exception {
+        Connection conn = getConnection();
+        JdbcStatement s = (JdbcStatement) conn.createStatement();
+        try {
+            // 异步接口的Future.get()不声明检查异常，但cause必须是SQLException
+            s.executeAsync("SELECT * FROM no_such_table_for_async").get();
+            fail();
+        } catch (DbException e) {
+            SQLException se = e.getSQLException();
+            assertEquals(ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1, se.getErrorCode());
+        } finally {
+            conn.close();
+        }
     }
 
     void testExecuteException() throws Exception {
