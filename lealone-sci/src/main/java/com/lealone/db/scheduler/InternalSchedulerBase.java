@@ -5,6 +5,8 @@
  */
 package com.lealone.db.scheduler;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReferenceArray;
@@ -173,6 +175,8 @@ public abstract class InternalSchedulerBase extends SchedulerBase implements Int
     // --------------------- 跟 SchedulerTaskManager 相关 ---------------------
 
     protected final LinkableList<SchedulerTaskManagerWrapper> taskManagers = new LinkableList<>();
+    // 客户端线程和调度线程都会往taskManagers里加任务，链表本身不是线程安全的
+    protected final Object taskManagersLock = new Object();
 
     // SchedulerTaskManager需要传递给多个Scheduler，需要包装成SchedulerTaskManagerWrapper
     // 如果SchedulerTaskManager直接继承自LinkableBase，多个Scheduler修改它的next会有并发问题
@@ -192,41 +196,57 @@ public abstract class InternalSchedulerBase extends SchedulerBase implements Int
     }
 
     protected void gcCompletedTasks() {
-        if (taskManagers.isEmpty())
-            return;
-        while (taskManagers.getHead() != null) {
-            int size = taskManagers.size();
-            SchedulerTaskManagerWrapper task = taskManagers.getHead();
-            SchedulerTaskManagerWrapper last = null;
-            while (task != null) {
-                try {
-                    if (!task.gcCompletedTasks(this)) {
-                        last = task;
-                        task = task.next;
-                        continue;
-                    }
-                    task = task.next;
-                    if (last == null)
-                        taskManagers.setHead(task);
-                    else
-                        last.next = task;
-                } catch (Throwable t) {
-                    handleException("Failed to gc completed task: " + task, t);
+        List<SchedulerTaskManagerWrapper> tasks;
+        while (true) {
+            synchronized (taskManagersLock) {
+                if (taskManagers.isEmpty())
+                    return;
+                tasks = new ArrayList<>();
+                for (SchedulerTaskManagerWrapper t = taskManagers.getHead(); t != null;) {
+                    tasks.add(t);
+                    SchedulerTaskManagerWrapper next = t.next;
+                    t.next = null;
+                    t = next;
                 }
-                taskManagers.decrementSize();
-            }
-            if (taskManagers.getHead() == null)
+                taskManagers.setHead(null);
                 taskManagers.setTail(null);
-            else
-                taskManagers.setTail(last);
-            if (size == taskManagers.size())
-                break;
+            }
+            List<SchedulerTaskManagerWrapper> remains = new ArrayList<>();
+            for (SchedulerTaskManagerWrapper t : tasks) {
+                boolean completed = false;
+                try {
+                    // 不能持锁回调，否则会跟调用addTaskManager时持有的其他锁形成死锁
+                    completed = t.gcCompletedTasks(this);
+                } catch (Throwable e) {
+                    handleException("Failed to gc completed task: " + t, e);
+                }
+                if (!completed)
+                    remains.add(t);
+            }
+            if (remains.isEmpty())
+                return;
+            synchronized (taskManagersLock) {
+                for (int i = 0, size = remains.size(); i < size; i++)
+                    remains.get(i).next = i + 1 < size ? remains.get(i + 1) : null;
+                SchedulerTaskManagerWrapper tail = taskManagers.getTail();
+                if (tail == null)
+                    taskManagers.setHead(remains.get(0));
+                else
+                    tail.next = remains.get(0);
+                taskManagers.setTail(remains.get(remains.size() - 1));
+            }
+            // 这一轮没有处理掉任何任务，不需要再扫一遍
+            if (remains.size() == tasks.size())
+                return;
         }
     }
 
     @Override
     public void addTaskManager(SchedulerTaskManager taskManager) {
-        taskManagers.add(new SchedulerTaskManagerWrapper(taskManager));
+        SchedulerTaskManagerWrapper wrapper = new SchedulerTaskManagerWrapper(taskManager);
+        synchronized (taskManagersLock) {
+            taskManagers.add(wrapper);
+        }
     }
 
     // --------------------- 实现 SQLStatement 相关的代码 ---------------------
