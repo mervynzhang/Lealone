@@ -49,6 +49,13 @@
 - **现状**：自 `closeIfNeeded`/`removeSession`（第 39/42 项）修好之后，全量套件**连续 6 轮全绿**，诊断日志一次都没触发 —— 原先它能被复现出来，很可能正是那些"库没真正关闭"的状态造成的。保留诊断，若再现可直接定位到表。
 - 已尝试但**未采纳**的改法：在 `RowType.read` 读页面时统一补 handler（无法构造出"不加这个改动就失败"的用例，按"未验证不改"放弃）；`ShutdownDatabase`/`LealoneDatabase.gc` 的 `getSessionCount()` 判据（SHUTDOWN 的执行会话本身就还在，改判据无法证明必要）。
 
+## 1.5 新发现的 P0（本轮未修，已固定复现）
+
+| # | 问题 | 复现 | 状态 |
+|---|---|---|---|
+| 52 | **一次失败的 `CREATE TRIGGER` 之后，同一连接上的事务回滚静默失效（P0 丢数据）**：`BEGIN; DELETE ...; ROLLBACK;` 之后数据不恢复（另一连接验证过：删除未提交，说明事务在起作用，只是 undo 记录丢了）。同样流程换成"失败的 `CREATE TABLE`"或普通 DML 都正常，所以问题在 `CreateTrigger.update()` 的失败路径（`TriggerObject.setTriggerClassName` 抛异常，位于 `lock.addHandler(...)`/`schema.add(...)` 之前，留下了半初始化的状态） | `FailedDdlBreaksRollbackTest`（`@Ignore` 标注，去掉即可看到失败） | **待修复** |
+| 51 | **级联删除在事务里回滚后子行永久丢失（P0 丢数据）**：`ON DELETE CASCADE` 级联删掉的子行没有 undo 记录，事务回滚时父行恢复、子行不恢复。对照实验：不带外键的普通删除在同一事务里回滚正常，所以问题在级联路径（`ConstraintReferential.updateWithSkipCheck` → `PreparedSQLStatement.update()` 同步执行，与普通 DML 的 undo 记录方式不同） | `CascadeDeleteRollbackTest`（`@Ignore` 标注，去掉即可看到失败）：建父子表+级联外键 → `BEGIN; DELETE FROM p WHERE id=1; ROLLBACK;` → 期望子行恢复，实际丢失（另一连接验证过：事务未提交时外部看不到删除，说明删除确实在事务内，只是 undo 记录缺失） | **待修复** |
+
 ## 二、待修复（按优先级）
 
 ### P0 静默错数据 / 打崩 / 丢数据
