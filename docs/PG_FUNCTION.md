@@ -9,6 +9,10 @@
 本文档已包含参数机制：`OUT`/`INOUT` 参数、`STRICT`、`VARIADIC`、调用期类型转换，
 以及“按参数类型重载”的评估结论（见第五节）。
 
+第三轮（R3）补上了 PostgreSQL 的函数 DDL 属性：`ALTER FUNCTION`、`SECURITY DEFINER`/`INVOKER`、
+`CALLED ON NULL INPUT`、`COST`/`ROWS`/`SET`/`LEAKPROOF`/`WINDOW`、`DROP FUNCTION` 的参数类型列表、
+`COMMENT ON FUNCTION`。每条属性的支持程度见 2.8 节，DDL 都能通过 SCRIPT 原样回放。
+
 ## 一、支持的语法
 
 ```sql
@@ -17,10 +21,27 @@ CREATE [OR REPLACE] FUNCTION [IF NOT EXISTS] [schema.]name(
     [RETURNS type                      -- 有OUT/INOUT参数时可以省略
     | RETURNS SETOF type
     | RETURNS TABLE(col1 type, col2 type, ...)]
-    [LANGUAGE SQL]
+    [LANGUAGE SQL | plpgsql]
     [IMMUTABLE | STABLE | VOLATILE]
-    [STRICT | RETURNS NULL ON NULL INPUT]
+    [STRICT | CALLED ON NULL INPUT | RETURNS NULL ON NULL INPUT]
+    [SECURITY DEFINER | SECURITY INVOKER]
+    [LEAKPROOF | NOT LEAKPROOF]
+    [WINDOW]
+    [COST n] [ROWS n]
+    [SET configuration_parameter { TO | = } value] ...
+    [OWNER TO user]                    -- Lealone扩展, 见2.8节
     AS $$ body $$;
+
+ALTER FUNCTION [IF EXISTS] [schema.]name[(type, ...)] 动作;
+    -- 动作可以是(每次一句):
+    --   IMMUTABLE | STABLE | VOLATILE
+    --   STRICT | CALLED ON NULL INPUT | RETURNS NULL ON NULL INPUT
+    --   SECURITY DEFINER | SECURITY INVOKER | LEAKPROOF | NOT LEAKPROOF | WINDOW
+    --   COST n | ROWS n
+    --   SET configuration_parameter { TO | = } value | RESET configuration_parameter | RESET ALL
+    --   RENAME TO new_name | OWNER TO new_owner
+
+COMMENT ON FUNCTION [schema.]name[(type, ...)] IS 'text';
 
 DROP FUNCTION [IF EXISTS] [schema.]name[(type, ...)];
 ```
@@ -137,6 +158,24 @@ SELECT var_count(1, 2, 3);  -- 3
 18. **函数体里的表名按调用方当前的 schema 解析**（嵌套连接在 schema 不是 `PUBLIC` 时会先 `USE` 一下调用方的 schema）。
     函数名本身仍按 Lealone 既有规则解析：未限定名只查 session 当前 schema。
 
+2.8 **函数属性**（`CREATE FUNCTION` 与 `ALTER FUNCTION` 共用一套解析和持久化）:
+
+| 属性 | 支持程度 | 说明 |
+| --- | --- | --- |
+| `IMMUTABLE` / `STABLE` / `VOLATILE` | 完整 | `IMMUTABLE`/`STABLE` 都是 `deterministic=true`，默认 `VOLATILE`；持久化时**原样保留**用户写的关键字（上一版把 `STABLE` 归一化成 `IMMUTABLE`） |
+| `STRICT` / `RETURNS NULL ON NULL INPUT` / `CALLED ON NULL INPUT` | 完整 | 两种写法都等价于 `STRICT`（任一入参为 NULL 时不执行函数体），`CALLED ON NULL INPUT` 是显式写出来的默认行为；DDL 里一定写出 `STRICT` 或 `CALLED ON NULL INPUT` 之一，所以重启后语义不变 |
+| `SECURITY DEFINER` / `SECURITY INVOKER` | 完整 | `DEFINER` 时函数体用一个**属主身份的嵌套会话**执行（SQL 函数体和 PL/pgSQL 函数体都支持），`INVOKER`（默认）用调用者身份；属主默认是创建者，DDL 里同时持久化 `SECURITY DEFINER` 和 `OWNER TO`，重启后仍然生效 |
+| `OWNER TO user` | 只影响 DEFINER 的执行身份 | Lealone 没有函数级的 ownership/EXECUTE 权限，属主唯一的作用是 `SECURITY DEFINER` 时以谁的身份执行；用户必须存在，否则报 `USER_NOT_FOUND_1`。为了能回放，`OWNER TO` 写成 `AS` 之后的 Lealone 扩展子句 |
+| `LEAKPROOF` / `NOT LEAKPROOF` | 只解析 + 持久化 | Lealone 没有泄露证明（leakproof）机制，不生效；`NOT LEAKPROOF` 只是把标记清掉（PG 默认值） |
+| `WINDOW` | 只解析 + 持久化 | Lealone 没有窗口函数框架，标记不生效；保留是为了 PG 的 DDL 能过 |
+| `COST n` / `ROWS n` | 只解析 + 持久化 | 优化器不使用这两个提示（`JavaFunction.getCost()` 仍按固定值算）；`ROWS` 在 PostgreSQL 里只对 SETOF 有意义，这里不做校验 |
+| `SET configuration_parameter = value` | 只解析 + 持久化 | **不会**真的在嵌套会话里执行这个 SET（避免 `work_mem` 这类 Lealone 不认识的参数直接报错），`SET search_path` 也不改变 schema 解析；`RESET name` / `RESET ALL` 只是把条目从列表里删掉。没加引号的标识符值会按 Lealone 的规则大写（如 `s1` → `S1`） |
+| `DROP FUNCTION name(type, ...)` | 完整（无重载） | 参数类型参与签名校验：类型/个数对不上就报 `FUNCTION_NOT_FOUND_1`（90022，消息里带实际签名），`IF EXISTS` 时不报错。只比较类型，忽略 `varchar(10)` 这类 typmod；没有类型列表时按名字删除 |
+| `COMMENT ON FUNCTION name[(type)] IS '...'` | 完整 | 复用既有的 COMMENT 机制（`COMMENT ON ALIAS` 也能读写同一份注释），持久化成 `COMMENT ON ALIAS ...` |
+
+`ALTER FUNCTION` 的对象是 `SqlFunction`（含 PL/pgSQL 函数）；对 `CREATE ALIAS` 建的 Java 函数报
+`FEATURE_NOT_SUPPORTED`。`ALTER FUNCTION ... SET SCHEMA` 没有实现（要移动对象），也报不支持。
+
 ## 三、实现要点
 
 - `SqlFunction`（`lealone-db/.../db/schema/SqlFunction.java`）继承 `FunctionAlias`，
@@ -160,6 +199,18 @@ SELECT var_count(1, 2, 3);  -- 3
 - `CreateSqlFunction`（`lealone-sql/.../sql/ddl/CreateSqlFunction.java`）负责加排它锁、处理
   `OR REPLACE`/`IF NOT EXISTS`、`schema.add`；语句类型复用 `SQLStatement.CREATE_ALIAS`，
   `DROP FUNCTION` 复用 `DropFunctionAlias`（同样是 `DbObjectType.FUNCTION_ALIAS`）。
+- `FunctionAttributes`（`lealone-sql/.../sql/ddl/FunctionAttributes.java`）是属性值的载体，
+  `SQLParserBase.readFunctionAttribute()` 被 `CREATE FUNCTION`（`AS` 前后的两个属性循环）和
+  `ALTER FUNCTION` 共用；`SqlFunction` 上是这些属性字段 + 原样保留的易变性关键字，
+  属性全部体现在 `SqlFunction.getCreateSQL()` 里，所以落 sys(meta) 表后重启能回放。
+- `AlterSqlFunction`（`lealone-sql/.../sql/ddl/AlterSqlFunction.java`）负责 `ALTER FUNCTION`：
+  加 `FUNCTION_ALIAS` 排它锁、按（可选的）参数类型列表校验签名、改完字段后 `database.updateMeta()`
+  重写 sys 表里的 DDL；`RENAME TO` 走 `Schema.rename()`（`Database.renameDatabaseObject()` 只支持
+  非 schema 对象，直接用它会在 schema 对象上 NPE）。
+- `SECURITY DEFINER`：`ServerSession` 新增了 `createNestedConnection(User, boolean)` /
+  `createNestedSession(User)` 两个以指定用户身份建嵌套会话的重载，`SqlFunction` 里的
+  `createNestedConnection(session)`/`createNestedSession(session)` 按 `securityDefiner` 选择身份，
+  `PlpgSqlFunction` 也改了 1 行用同一个入口。
 - 函数表在 `readTableFilter()` 里也支持列别名列表（`FROM f(1) t(a, b)`），复用了既有的
   `FunctionTable.setColumnAliases`。
 - 每个函数调用都会新建一个嵌套 session/连接并重新 prepare 函数体，没有做按 session 缓存，
@@ -168,11 +219,12 @@ SELECT var_count(1, 2, 3);  -- 3
 ## 四、明确不做（都不在本次范围内）
 
 - select 列表里展开 setof 函数（`SELECT f(1)` 展开成多行）、以及 `f(1) + 1` 这类嵌套使用
-- `ROWS n` 提示、`WITH ORDINALITY`
+- `WITH ORDINALITY`；`ROWS n` 只当属性存着，不作为优化器的行数提示
 - 复合类型/`record`/`SETOF <表名>` 的返回类型
-- `SECURITY DEFINER`/`SECURITY INVOKER`、`COST`/`ROWS`/`SET` 子句
-- 按参数类型重载、`ALTER FUNCTION`、`COMMENT ON FUNCTION`
+- 按参数类型重载（同名函数不能并存，见第五节）、`ALTER PROCEDURE`/`ALTER ROUTINE`
+- `ALTER FUNCTION ... SET SCHEMA`（换 schema）、`SET configuration_parameter FROM CURRENT`
 - `DROP FUNCTION ... CASCADE/RESTRICT`
+- `SET`/`RESET` 只落 DDL，不真正影响函数体执行时的会话参数（见2.8节）
 - `LANGUAGE plpgsql` 等块语言与 `BEGIN ... END` 函数体、函数体里的 DML
 - `LATERAL`：函数表实参不能引用同一 FROM 里其它表的列
 - 多维数组参数（`INT[][]`）、`OUT` 参数是数组类型时的返回列类型推导（只按 `Value.ARRAY` 处理）
@@ -233,3 +285,17 @@ PostgreSQL 允许 `f(int)` 与 `f(varchar)` 并存，Lealone 目前做不到。�
 14. DDL 回滚后，同一个 session 里之前 prepare 过的 `SELECT f(...)` 可能命中缓存的执行计划，
     仍然返回旧结果（函数对象其实已经回滚掉了，新 session 调用会报找不到）。这是 DDL 与
     prepared statement 缓存之间的老问题，不在本次改动范围内。
+15. `ALTER FUNCTION ... COST/ROWS/SET/LEAKPROOF/WINDOW` 全部只改 DDL，调用行为和优化器行为都不变；
+    其中 `SET` 如果不生效，`SET search_path` 也就不会影响函数体里未限定表名的解析（仍按调用方 schema）。
+16. `SECURITY DEFINER` 依赖 DDL 里的 `OWNER TO`：如果属主用户被删掉了，调用会报 `USER_NOT_FOUND_1`；
+    属主的权限就是嵌套会话的权限，Lealone 没有函数级的 EXECUTE 权限，所以“谁能调用这个函数”
+    不受属主控制。
+17. `DROP/ALTER FUNCTION` 的签名比较只看类型（`Value` 类型 id），`varchar(10)` 与 `varchar`、
+    `numeric(10,2)` 与 `numeric` 视为同一类型；比较的是**入参**个数与类型，参数模式关键字
+    （`IN/OUT/INOUT/VARIADIC`）会被读掉但写出来的每个类型仍占一个位置，所以和 PostgreSQL 一样只写
+    IN/INOUT 参数即可（`DROP FUNCTION f(OUT int)` 在只有 OUT 参数的函数上会报函数不存在）。
+18. `ALTER FUNCTION` 一次只能带一个动作（和 PostgreSQL 一致），例如改易变性、改 `COST` 要分两条语句。
+19. `COMMENT ON FUNCTION` 的注释按**函数名**存（和 `COMMENT ON ALIAS` 共用一份 key），
+    不支持重载所以没有歧义；但函数被 `OR REPLACE` 重建后注释会保留（PostgreSQL 也是保留）。
+20. `ALTER FUNCTION` 只支持 `SqlFunction`/`PlpgSqlFunction`；`CREATE ALIAS` 建的 Java 函数、
+    `CREATE AGGREGATE` 建的对象都报 `FEATURE_NOT_SUPPORTED`。
