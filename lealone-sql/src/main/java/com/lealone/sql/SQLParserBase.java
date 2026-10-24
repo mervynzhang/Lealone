@@ -1202,6 +1202,7 @@ public class SQLParserBase implements SQLParser {
 
     protected StatementBase parseComment() {
         DbObjectType type = null;
+        boolean function = false;
         read("ON");
         boolean column = false;
         if (readIf("TABLE") || readIf("VIEW")) {
@@ -1215,6 +1216,9 @@ public class SQLParserBase implements SQLParser {
             type = DbObjectType.CONSTRAINT;
         } else if (readIf("ALIAS")) {
             type = DbObjectType.FUNCTION_ALIAS;
+        } else if (readIf("FUNCTION")) {
+            type = DbObjectType.FUNCTION_ALIAS;
+            function = true;
         } else if (readIf("INDEX")) {
             type = DbObjectType.INDEX;
         } else if (readIf("ROLE")) {
@@ -1261,6 +1265,10 @@ public class SQLParserBase implements SQLParser {
             command.setColumnName(list.get(1));
         } else {
             objectName = readIdentifierWithSchema();
+            // COMMENT ON FUNCTION name(types) IS ... 里的参数类型列表只用于消歧，注释还是按名字存
+            if (function) {
+                parseFunctionArgumentTypeList();
+            }
         }
         command.setSchemaName(schemaName);
         command.setObjectName(objectName);
