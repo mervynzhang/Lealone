@@ -394,6 +394,18 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
         save(true, false, dirtyMemory);
     }
 
+    @Override
+    public void saveForClosing(long dirtyMemory) {
+        if (!inMemory) {
+            sharedLock.lock();
+            try {
+                btreeStorage.saveForClosing(dirtyMemory);
+            } finally {
+                sharedLock.unlock();
+            }
+        }
+    }
+
     public void save(boolean appendModeEnabled) {
         save(true, appendModeEnabled, collectDirtyMemory());
     }
@@ -492,7 +504,12 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
     @Override
     public boolean hasUnsavedChanges() {
         // 除了root page，并发刷脏页时子页也可能还是脏页(此时root page已经被写成非脏页)
-        return getRootPage().getPos() == 0 || btreeStorage.getBTreeGC().hasDirtyPages();
+        if (getRootPage().getPos() == 0 || btreeStorage.getBTreeGC().hasDirtyPages())
+            return true;
+        // 页写过一次后原地修改不会变脏(脏=pos为0)，但redo里有比上次保存更新的已提交事务，
+        // 说明还有没落盘的修改，不能跳过保存，否则关闭时丢掉
+        Chunk lastChunk = btreeStorage.getChunkManager().getLastChunk();
+        return lastChunk != null && getLastTransactionId() > lastChunk.getLastTransactionId();
     }
 
     public Page gotoLeafPage(Object key) {

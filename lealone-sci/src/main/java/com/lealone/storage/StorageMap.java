@@ -219,6 +219,11 @@ public interface StorageMap<K, V> {
     default void save(long dirtyMemory) {
     }
 
+    // 关闭数据库时必须落盘：跳过"有没有脏页"的判据，避免并发save把页标干净后关闭时不再保存
+    default void saveForClosing(long dirtyMemory) {
+        save(dirtyMemory);
+    }
+
     default void repair() {
     }
 
