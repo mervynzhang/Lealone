@@ -1,0 +1,83 @@
+# Curated sqllogictest subset for the Lealone regression gate (see README.md).
+#
+# Paths are relative to -Dslt.dir (default /tmp/sqllogictest/test), i.e. the "test" directory of a
+# gregrahn/sqllogictest checkout. The suite itself is NOT committed to this repository.
+#
+# Size: 53 files, ~440k queries, roughly 20 s single threaded on a laptop-class machine.
+# The full 137 file set (select1-5, evidence/*, random/expr/*) is documented in README.md; this
+# list is the subset that is fast enough and quiet enough to run on every change.
+#
+# select1-4: pre-generated queries against 3+ column, 1000 row tables with 5 indexes each,
+# executed before and after CREATE INDEX (the file itself creates the indexes half way through).
+# They exercise index scans, ranges, IN lists (single and multi table), ORDER BY, DISTINCT, UNION/
+# EXCEPT/INTERSECT and up to 9-way joins - the richest plan coverage in the suite.
+# select4 was the file that caught the broken IndexCursor change at 68e7a8744 (1,683 of 2,832
+# queries returned too few rows); it is back in the list since 30c02350b and passes 2,832/2,832.
+select1.test
+select2.test
+select3.test
+select4.test
+
+#
+# evidence/*: documentation examples. Only files that Lealone can execute are kept here;
+# slt_lang_createtrigger, slt_lang_reindex, slt_lang_replace, slt_lang_update, in1 etc. use
+# SQLite/MySQL only DDL or TEXT-as-CLOB indexes and are excluded (see README.md).
+evidence/in2.test
+evidence/slt_lang_createview.test
+evidence/slt_lang_dropview.test
+#
+# random/expr/*: 10k randomly generated constant-folding/aggregate expressions each, with hashed
+# results. 20 files spread over the 0..119 range: this is the part that actually catches
+# expression evaluator regressions. The files below are the ones whose residual failures are
+# understood (see baseline.txt); files containing the known engine defects that are still open are
+# deliberately left in the full set only, so a fix shows up as a stale baseline instead of noise.
+random/expr/slt_good_1.test
+random/expr/slt_good_2.test
+random/expr/slt_good_4.test
+random/expr/slt_good_5.test
+random/expr/slt_good_19.test
+random/expr/slt_good_21.test
+random/expr/slt_good_32.test
+random/expr/slt_good_37.test
+random/expr/slt_good_43.test
+random/expr/slt_good_54.test
+random/expr/slt_good_60.test
+random/expr/slt_good_65.test
+random/expr/slt_good_73.test
+random/expr/slt_good_76.test
+random/expr/slt_good_87.test
+random/expr/slt_good_91.test
+random/expr/slt_good_96.test
+random/expr/slt_good_98.test
+random/expr/slt_good_106.test
+random/expr/slt_good_109.test
+
+# random/select/*: 随机生成的 join/aggregate/HAVING 查询, 每个文件约 9k 条,
+# 用 SQLite 做独立 oracle。挑出来的 12 个文件在当前实现上 109,187 条查询 0 失败,
+# 用来覆盖"多条带索引的表 + 复杂 WHERE/GROUP BY"的组合(门禁原来只覆盖 select1-4)。
+random/select/slt_good_0.test
+random/select/slt_good_100.test
+random/select/slt_good_101.test
+random/select/slt_good_102.test
+random/select/slt_good_103.test
+random/select/slt_good_104.test
+random/select/slt_good_105.test
+random/select/slt_good_106.test
+random/select/slt_good_107.test
+random/select/slt_good_108.test
+random/select/slt_good_109.test
+random/select/slt_good_10.test
+random/expr/slt_good_25.test
+random/expr/slt_good_26.test
+random/expr/slt_good_31.test
+random/expr/slt_good_33.test
+random/expr/slt_good_35.test
+random/expr/slt_good_36.test
+random/aggregates/slt_good_12.test
+random/aggregates/slt_good_125.test
+random/aggregates/slt_good_126.test
+random/aggregates/slt_good_127.test
+random/aggregates/slt_good_128.test
+random/aggregates/slt_good_129.test
+random/expr/slt_good_39.test
+random/expr/slt_good_40.test
