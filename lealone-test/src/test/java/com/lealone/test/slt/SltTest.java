@@ -107,8 +107,8 @@ public class SltTest {
                 files.add(s);
         }
         List<SltBaseline.Rule> rules = SltBaseline.loadAllowlist(allowText);
-        Map<String, Integer> baseline = SltBaseline.loadBaseline(baselineText);
-        for (String f : baseline.keySet()) {
+        SltBaseline.Baseline baseline = SltBaseline.loadBaseline(baselineText);
+        for (String f : baseline.counts.keySet()) {
             if (!files.contains(f))
                 System.out.println("[slt] note: baseline.txt lists " + f
                         + " which is not in files.txt (ignored)");
@@ -122,7 +122,7 @@ public class SltTest {
         System.out.println("[slt] data   = " + baseDir.toAbsolutePath());
         System.out.println("[slt] report = " + outDir.toAbsolutePath());
         System.out.println("[slt] allowlist rules = " + rules.size() + ", baseline entries = "
-                + baseline.size());
+                + baseline.counts.size());
 
         long t0 = System.currentTimeMillis();
         List<SltRunner.FileResult> results = new ArrayList<>();

@@ -100,6 +100,25 @@ public final class SltRunner {
          */
         public boolean sqlHasAll;
 
+        /**
+         * 稳定的失败标识: 只由 subtype + SQL 决定, 不含 detail/行号。
+         * 用于把 baseline 从"每文件失败个数"升级成"失败集合", 这样同一文件里
+         * "修好一条、又坏掉另一条"也能被发现(只比计数时二者相抵, 门禁会假绿)。
+         */
+        public String key() {
+            String text = subtype + "\t" + sql;
+            try {
+                java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+                byte[] d = md.digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                StringBuilder sb = new StringBuilder(16);
+                for (int i = 0; i < 8; i++)
+                    sb.append(String.format("%02x", d[i]));
+                return sb.toString();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
         /** Text the allowlist regular expressions are matched against. */
         public String signature() {
             return subtype + "\t" + sql + "\t" + detail + (sqlHasAll ? "\tALL" : "");
@@ -124,6 +143,13 @@ public final class SltRunner {
         public long ms;
         public boolean timeout;
         public String setupError = "";
+        // baseline(签名集合)相关: 未允许失败的key集合, 以及相对baseline新增/消失的key
+        public final java.util.List<String> unexpectedKeys = new ArrayList<>();
+        public final java.util.Set<String> baselineKeys = new java.util.TreeSet<>();
+        public final java.util.Set<String> newKeys = new java.util.TreeSet<>();
+        public final java.util.Set<String> staleKeys = new java.util.TreeSet<>();
+        /** True when the baseline entry for this file only has a count (old format). */
+        public boolean baselineByCountOnly;
         public final Map<String, Integer> skippedBy = new TreeMap<>();
         public final List<Failure> failures = new ArrayList<>();
 
@@ -956,7 +982,7 @@ public final class SltRunner {
                     + r.gatedFail + " fail, " + r.ms + "ms" + (r.timeout ? " TIMEOUT" : ""));
         }
         List<SltBaseline.Rule> rules = new ArrayList<>();
-        Map<String, Integer> baseline = new LinkedHashMap<>();
+        SltBaseline.Baseline baseline = new SltBaseline.Baseline();
         if (a.containsKey("allowlist") && Files.isRegularFile(Paths.get(a.get("allowlist"))))
             rules = SltBaseline.loadAllowlist(Paths.get(a.get("allowlist")));
         if (a.containsKey("baseline") && Files.isRegularFile(Paths.get(a.get("baseline"))))
