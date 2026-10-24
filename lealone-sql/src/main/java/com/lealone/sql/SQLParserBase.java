@@ -1530,8 +1530,34 @@ public class SQLParserBase implements SQLParser {
 
     protected Explain parseExplain() {
         Explain command = new Explain(session);
-        if (readIf("ANALYZE")) {
+        if (readIf("(")) {
+            // PostgreSQL的EXPLAIN选项: EXPLAIN (ANALYZE, COSTS OFF, VERBOSE) ...
+            do {
+                if (readIf("ANALYZE")) {
+                    command.setExecuteCommand(true);
+                } else if (readIf("VERBOSE")) {
+                    command.setVerbose(true);
+                } else if (readIf("COSTS")) {
+                    boolean costs = !readIf("OFF");
+                    readIf("ON");
+                    command.setCosts(costs);
+                } else if (readIf("FORMAT")) {
+                    // 只支持文本格式
+                    if (isToken("TEXT") || isToken("TEXT")) {
+                        read();
+                    } else {
+                        throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                                "EXPLAIN FORMAT only supports TEXT");
+                    }
+                } else {
+                    throw getSyntaxError();
+                }
+            } while (readIf(","));
+            read(")");
+        } else if (readIf("ANALYZE")) {
             command.setExecuteCommand(true);
+        } else if (readIf("VERBOSE")) {
+            command.setVerbose(true);
         } else {
             if (readIf("PLAN")) {
                 readIf("FOR");

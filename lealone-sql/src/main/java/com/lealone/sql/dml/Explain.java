@@ -5,6 +5,7 @@
  */
 package com.lealone.sql.dml;
 
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.TreeMap;
@@ -22,6 +23,8 @@ import com.lealone.sql.SQLStatement;
 import com.lealone.sql.StatementBase;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.ExpressionColumn;
+import com.lealone.sql.optimizer.TableFilter;
+import com.lealone.sql.query.Select;
 
 /**
  * This class represents the statement
@@ -32,6 +35,8 @@ public class Explain extends ManipulationStatement {
     private StatementBase command;
     private LocalResult result;
     private boolean executeCommand;
+    private boolean costs = true;
+    private boolean verbose;
 
     public Explain(ServerSession session) {
         super(session);
@@ -53,6 +58,15 @@ public class Explain extends ManipulationStatement {
 
     public void setExecuteCommand(boolean executeCommand) {
         this.executeCommand = executeCommand;
+    }
+
+    // EXPLAIN (COSTS OFF): 不输出代价和统计信息
+    public void setCosts(boolean costs) {
+        this.costs = costs;
+    }
+
+    public void setVerbose(boolean verbose) {
+        this.verbose = verbose;
     }
 
     @Override
@@ -84,8 +98,10 @@ public class Explain extends ManipulationStatement {
                     command.update();
                 }
                 plan = command.getPlanSQL();
+                plan = formatPlan(plan);
                 Map<String, Integer> statistics = db.statisticsEnd();
-                if (statistics != null) {
+                // COSTS OFF时不输出统计信息
+                if (statistics != null && costs) {
                     int total = 0;
                     for (Entry<String, Integer> e : statistics.entrySet()) {
                         total += e.getValue();
@@ -109,12 +125,81 @@ public class Explain extends ManipulationStatement {
                     }
                 }
             } else {
-                plan = command.getPlanSQL();
+                plan = formatPlan(command.getPlanSQL());
             }
             add(plan);
         }
         result.done();
         return result;
+    }
+
+    // 按EXPLAIN的选项加工执行计划: COSTS OFF去掉代价/统计信息，VERBOSE追加每张表的细节
+    private String formatPlan(String plan) {
+        if (!costs) {
+            plan = removeCostComments(plan);
+        }
+        if (verbose) {
+            plan += "\n" + getVerboseInfo();
+        }
+        // 去掉行尾多余的空行
+        int end = plan.length();
+        while (end > 0 && Character.isWhitespace(plan.charAt(end - 1))) {
+            end--;
+        }
+        return plan.substring(0, end);
+    }
+
+    // 去掉 /* scanCount: N */ 这类代价注释
+    private static String removeCostComments(String plan) {
+        StringBuilder buff = new StringBuilder(plan.length());
+        int index = 0;
+        while (true) {
+            int start = plan.indexOf("/* scanCount:", index);
+            if (start < 0) {
+                buff.append(plan, index, plan.length());
+                break;
+            }
+            int end = plan.indexOf("*/", start);
+            if (end < 0) {
+                buff.append(plan, index, plan.length());
+                break;
+            }
+            // 连同前面的缩进和后面的换行一起去掉
+            int lineStart = start;
+            while (lineStart > index && plan.charAt(lineStart - 1) == ' ') {
+                lineStart--;
+            }
+            buff.append(plan, index, lineStart);
+            index = end + 2;
+            if (index < plan.length() && plan.charAt(index) == '\n') {
+                index++;
+            }
+        }
+        // 去掉行尾多余的空行
+        return buff.toString().replaceAll("\\n\\s*\\n", "\n");
+    }
+
+    // VERBOSE: 每张表的扫描方式/行数/过滤条件
+    private String getVerboseInfo() {
+        if (!(command instanceof Select)) {
+            return "/* VERBOSE: " + command.getSQL() + " */";
+        }
+        StringBuilder buff = new StringBuilder();
+        buff.append("/* VERBOSE\n");
+        ArrayList<TableFilter> filters = ((Select) command).getFilters();
+        for (int i = 0; i < filters.size(); i++) {
+            TableFilter filter = filters.get(i);
+            buff.append("    table: ").append(filter.getTable().getName());
+            if (!filter.getTableAlias().equals(filter.getTable().getName())) {
+                buff.append(" alias: ").append(filter.getTableAlias());
+            }
+            if (filter.getIndex() != null) {
+                buff.append(" index: ").append(filter.getIndex().getName());
+            }
+            buff.append(" rows: ").append(filter.getTable().getRowCountApproximation());
+            buff.append('\n');
+        }
+        return buff.append("*/").toString();
     }
 
     private void add(String text) {
