@@ -14,7 +14,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
+import com.lealone.common.exceptions.DbException;
 import com.lealone.common.logging.Logger;
+import com.lealone.db.api.ErrorCode;
 import com.lealone.common.logging.LoggerFactory;
 import com.lealone.common.util.ShutdownHookUtils;
 import com.lealone.db.RunMode;
@@ -283,8 +285,11 @@ public class AOTransactionEngine extends TransactionEngineBase implements Storag
         try {
             return handler.getAsLong();
         } catch (Throwable t) {
-            logger.warn("Failed to run before checkpoint handler", t);
-            return Long.MAX_VALUE;
+            // 不能静默返回Long.MAX_VALUE: 那等于告诉检查点"没有待处理的事务"，
+            // 检查点就会用当前的lastTransactionId去截断redo log，把还没生效的索引操作永久丢掉。
+            // 抛出去让检查点放弃本次保存(见CheckpointService.save)。
+            throw DbException.get(ErrorCode.GENERAL_ERROR_1,
+                    "Failed to run before checkpoint handler: " + t);
         }
     }
 
