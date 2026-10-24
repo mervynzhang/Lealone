@@ -54,7 +54,6 @@ procedure.named_default	create_procedure.sql:107-121	7	Lealone 不支持 DEFAULT
 procedure.polymorphic	create_procedure.sql:126-159	11	Lealone 无 anyarray/anyelement 多态类型
 procedure.empty_body	create_procedure.sql:174-180	3	CREATE 能过但 CALL 时报 42000: 过程体不支持 BEGIN ATOMIC 空块
 procedure.out_params	create_procedure.sql:185-212	12	CREATE PROCEDURE 只接受 IN 参数(42102); OUT/INOUT/VARIADIC 在 CREATE FUNCTION 里已支持
-procedure.ambiguous_drop	create_procedure.sql:216-232	11	Lealone 不支持按参数类型重载
 procedure.call_function	create_procedure.sql:236-237	2	Lealone 的 CALL 不区分函数与过程
 procedure.alter_and_bad_def	create_procedure.sql:239-249	8	Lealone 不支持 ALTER PROCEDURE/FUNCTION, 过程也不接受 WINDOW/STRICT/VARIADIC/DEFAULT
 procedure.privileges	create_procedure.sql:258-267	10	Lealone 无过程级 EXECUTE 权限与 SET ROLE 语义

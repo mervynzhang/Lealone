@@ -258,7 +258,7 @@ SELECT var_count(1, 2, 3);  -- 3
 - `ROWS n` 只当属性存着，不作为优化器的行数提示
 - `ROWS FROM(...)` 多函数合并成一个表函数（单个函数的 `WITH ORDINALITY` 已支持）
 - 自定义复合类型（`CREATE TYPE ... AS (...)`）、`%ROWTYPE` 数组、整行 `record` 当标量
-- 存储过程按参数类型重载（`SqlProcedure` 仍然同名唯一）、`ALTER PROCEDURE`/`ALTER ROUTINE`
+- `ALTER PROCEDURE`/`ALTER ROUTINE`（存储过程重载已支持，见 `docs/PROCEDURE.md`）
 - `COMMENT ON FUNCTION name(type)` 仍按函数名存（多个重载共用一份注释）
 - PG 的 preferred-type 平局再选；`CREATE FUNCTION f(int)`（参数只写类型不写名）
 - `ALTER FUNCTION ... SET SCHEMA`（换 schema）、`SET configuration_parameter FROM CURRENT`
@@ -284,11 +284,16 @@ SELECT f(1);            -- 报错 90022: int不能隐式转成varchar，找不�
 SELECT f('x');          -- x!
 ```
 
+存储过程（`SqlProcedure`）复用同一套存储方案和消解规则：schema key 也带 `名字(入参类型id...)`，
+`Schema.findProcedures()` 返回候选集合，`SqlProcedure.getMatchScore()` 直接调用
+`SqlFunction.getTypeMatch()`。区别是过程没有 variadic、允许按全部参数（含 OUT 占位）匹配，
+`DROP PROCEDURE name(类型/模式)` 按完整参数列表匹配，详见 `docs/PROCEDURE.md`。
+
 ### 5.1 存储方案：FUNCTION_ALIAS 的 key 带上参数签名
 
 `Schema` 里每类对象都放在 `TransactionalDbObjects` 里，key 原来是 `obj.getName()`。现在
-`Schema.getDbObjectKey()` 对 `SqlFunction` 返回 `名字(参数类型id,...)`（数组参数还带上元素类型），
-其它对象类型原样返回名字，因此：
+`Schema.getDbObjectKey()` 对 `SqlFunction`/`SqlProcedure` 返回 `名字(参数类型id,...)`
+（函数的数组参数还带上元素类型），其它对象类型原样返回名字，因此：
 
 * `CREATE ALIAS`、`TABLE`、`INDEX` 等共用同一套容器的对象类型**完全不受影响**；
 * `TransactionalDbObjects` 只是新增了“按key存/取”和 `findAll(session)`（同一套多版本可见性规则），
@@ -340,7 +345,9 @@ SELECT f('x');          -- x!
 * 无类型实参只认 `NULL` 和**字符串字面量**；`CAST('5' AS VARCHAR)` 这种显式转过的常量在解析期
   已经是 `ValueExpression`，也会被当成无类型（PG 里它是 text，需要隐式/显式转换才行）；
 * `CREATE FUNCTION f(int)` 这种“参数只写类型不写名字”的写法还不支持（参数名必填），
-  和重载无关，是词法层的老限制。
+  和重载无关，是词法层的老限制；
+* PostgreSQL 的 `text` 在 Lealone 里映射成 `CLOB`，匹配时把 `CLOB` 和字符串类型
+  (`VARCHAR/CHAR/...)` 当成同一类（可以互相隐式转换），所以 `text` 参数能接受字符串字面量/表达式。
 
 ### 5.3 相关文件
 
@@ -351,6 +358,8 @@ SELECT f('x');          -- x!
 | `JavaFunction.resolveOverload` | 按实参静态类型选重载（解析期定不下来就等到 `optimize`） |
 | `CreateSqlFunction/DropFunctionAlias/AlterSqlFunction` | 按签名创建/替换/删除/修改 |
 | `FunctionOverloadTest` | 重载、DROP、OR REPLACE、SCRIPT 往返、重启、NULL/无类型实参、隐式转换矩阵 |
+| `SqlProcedure.getMatchScore/matchesDropSignature` | 存储过程复用同一套匹配规则；DROP 按完整参数列表+IN/OUT模式匹配 |
+| `ProcedureOverloadTest` | 过程重载、DROP 签名/模式、IF NOT EXISTS、SCRIPT 往返、重启 |
 
 ## 六、已知限制 / 额外发现但没修的问题
 
