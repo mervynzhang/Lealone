@@ -7,6 +7,7 @@ package com.lealone.storage.fs;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
 
 import com.lealone.common.compress.CompressTool;
 import com.lealone.common.exceptions.DbException;
@@ -27,6 +28,8 @@ public class FileStorageInputStream extends InputStream {
     private final boolean raw;
     private int remainingInBuffer;
     private boolean endOfFile;
+    // raw模式用自己的读位置，不依赖也不改变FileStorage的共享文件指针
+    private long rawPos;
 
     public FileStorageInputStream(FileStorage fileStorage, DataHandler handler, boolean compression,
             boolean alwaysClose) {
@@ -35,7 +38,13 @@ public class FileStorageInputStream extends InputStream {
 
     public FileStorageInputStream(FileStorage fileStorage, DataHandler handler, boolean compression,
             boolean alwaysClose, boolean raw) {
+        this(fileStorage, handler, compression, alwaysClose, raw, 0);
+    }
+
+    public FileStorageInputStream(FileStorage fileStorage, DataHandler handler, boolean compression,
+            boolean alwaysClose, boolean raw, long rawPos) {
         this.fileStorage = fileStorage;
+        this.rawPos = rawPos;
         this.alwaysClose = alwaysClose;
         this.raw = raw;
         if (compression) {
@@ -108,12 +117,15 @@ public class FileStorageInputStream extends InputStream {
         }
         page.reset();
         if (raw) {
-            remainingInBuffer = (int) Math.min(fileStorage.length() - fileStorage.getFilePointer(),
-                    Constants.IO_BUFFER_SIZE);
+            long length = fileStorage.length();
+            remainingInBuffer = (int) Math.min(length - rawPos, Constants.IO_BUFFER_SIZE);
             if (remainingInBuffer <= 0) {
                 endOfFile = true;
             } else {
-                fileStorage.readFully(page.getBytes(), 0, remainingInBuffer);
+                // 按绝对位置读，不影响FileStorage里存储引擎正在用的文件指针
+                ByteBuffer buff = ByteBuffer.wrap(page.getBytes(), 0, remainingInBuffer);
+                fileStorage.readFully(rawPos, remainingInBuffer, buff);
+                rawPos += remainingInBuffer;
             }
             return;
         }
