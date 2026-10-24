@@ -695,13 +695,26 @@ select functest1(3) r;
 
 -- @case function_sql.or_replace_window
 -- @pg create_function_sql.sql:337-339
--- 缺失: Lealone 不支持 WINDOW 属性, 也不支持 FUNCTION 和 PROCEDURE 之间互相 CREATE OR REPLACE
+-- 适配: 第一条用 CREATE OR REPLACE 把同名同签名的函数换成 WINDOW 函数, 成功;
+--       第二条想用 CREATE OR REPLACE 把函数改成过程, PG 报 42P13(cannot change routine kind),
+--       Lealone 报 90154(SQLState 也是 42P13), 函数和过程不能互转;
+--       正因为第二条失败了, 最后的 DROP FUNCTION 删掉的还是函数
 create or replace function functest1(a int) returns int language sql window
     as 'select $1';
+> update count: 0
+
+select functest1(7) r;
+> R
+> -
+> 7
+> rows: 1
+
 create or replace procedure functest1(a int) language sql
     as 'select $1';
+> exception 90154
+
 drop function functest1(a int);
--- PG 期望: 前两条都成功(函数变成 window 函数, 再变成过程), 最后 DROP FUNCTION 报 42883
+> update count: 0
 
 -- ---------------------------------------------------------------------------
 -- set-returning functions

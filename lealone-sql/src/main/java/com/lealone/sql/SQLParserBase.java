@@ -4531,7 +4531,7 @@ public class SQLParserBase implements SQLParser {
         } else if (readIf("ALIAS")) {
             return parseCreateFunctionAlias(force);
         } else if (readIf("PROCEDURE")) {
-            return parseCreateProcedure();
+            return parseCreateProcedure(orReplace);
         } else if (readIf("FUNCTION")) {
             return parseCreateSqlFunction(orReplace);
         } else if (readIf("SEQUENCE")) {
@@ -5433,12 +5433,13 @@ public class SQLParserBase implements SQLParser {
         return command;
     }
 
-    protected StatementBase parseCreateProcedure() {
+    protected StatementBase parseCreateProcedure(boolean orReplace) {
         boolean ifNotExists = readIfNotExists();
         String procedureName = readIdentifierWithSchema();
         CreateProcedure command = new CreateProcedure(session, getSchema());
         command.setProcedureName(procedureName);
         command.setIfNotExists(ifNotExists);
+        command.setOrReplace(orReplace);
         if (readIf("(")) {
             if (!readIf(")")) {
                 int parameterIndex = 0;
@@ -5478,7 +5479,16 @@ public class SQLParserBase implements SQLParser {
         }
         command.setLanguage(language);
         command.setAttributes(attributes);
+        checkProcedureAttributes(attributes);
         return command;
+    }
+
+    // 过程不接受WINDOW属性: PostgreSQL里WINDOW只用于函数
+    private void checkProcedureAttributes(FunctionAttributes attributes) {
+        if (attributes != null && attributes.getWindow() != null
+                && attributes.getWindow().booleanValue()) {
+            throw DbException.get(ErrorCode.SYNTAX_ERROR_1, "WINDOW is not allowed in a procedure");
+        }
     }
 
     // 过程参数支持PostgreSQL风格的IN/OUT/INOUT，默认是IN
@@ -6207,6 +6217,25 @@ public class SQLParserBase implements SQLParser {
      * 读取DROP FUNCTION/ALTER FUNCTION里可选的参数类型列表，没写时返回null。
      * 不支持重载，这里只取类型用于校验签名，参数模式(IN/OUT/INOUT/VARIADIC)忽略。
      */
+    // 当前token是不是参数名: 名字后面还要跟一个类型，类型名后面跟的是) , [ ( 这些
+    private boolean hasParameterName() {
+        if (currentTokenType != IDENTIFIER) {
+            return false;
+        }
+        int backup = parseIndex;
+        String token = currentToken;
+        boolean quoted = currentTokenQuoted;
+        int tokenType = currentTokenType;
+        read();
+        boolean name = !(isToken(")") || isToken(",") || isToken("[") || isToken("(")
+                || isToken("ARRAY"));
+        parseIndex = backup;
+        currentToken = token;
+        currentTokenQuoted = quoted;
+        currentTokenType = tokenType;
+        return name;
+    }
+
     protected int[] parseFunctionArgumentTypeList() {
         if (!readIf("(")) {
             return null;
@@ -6218,6 +6247,10 @@ public class SQLParserBase implements SQLParser {
                 readIf("OUT");
                 readIf("INOUT");
                 readIf("VARIADIC");
+                // PostgreSQL允许DROP FUNCTION f(a int)这样带参数名，参数名后面必然还跟着类型
+                if (hasParameterName()) {
+                    read();
+                }
                 Column column = parseColumnWithType(null);
                 int type = column.getType();
                 if (readIf("[")) {
@@ -6319,6 +6352,9 @@ public class SQLParserBase implements SQLParser {
         }
 
         int kind = findRoutineKind(routineName, typeIds, modes, ifExists);
+        if (kind != ROUTINE_FUNCTION) {
+            checkProcedureAttributes(attributes);
+        }
         if (kind == ROUTINE_FUNCTION) {
             AlterSqlFunction command = new AlterSqlFunction(session, getSchema());
             command.setFunctionName(routineName);
@@ -6495,6 +6531,7 @@ public class SQLParserBase implements SQLParser {
             if (!readFunctionAttribute(attributes)) {
                 throw getSyntaxError();
             }
+            checkProcedureAttributes(attributes);
             command.setAttributes(attributes);
         }
         return command;

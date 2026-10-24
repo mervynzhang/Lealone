@@ -179,6 +179,7 @@
 90151=Procedure {0} not found
 42725=Name {0} is not unique, please specify the parameter types
 42809={0} is not a procedure
+42P13={0}: cannot change routine kind
 HY000=General error: {0}
 HY004=Unknown data type: {0}
 HYC00=Feature not supported: {0}

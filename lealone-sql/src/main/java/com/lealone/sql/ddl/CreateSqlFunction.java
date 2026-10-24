@@ -16,6 +16,7 @@ import com.lealone.db.schema.CompositeType;
 import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SqlFunction;
+import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
 import com.lealone.db.table.Table;
@@ -484,6 +485,16 @@ public class CreateSqlFunction extends SchemaStatement {
         return null;
     }
 
+    // 同名的过程已经有相同的入参签名时不能把过程改成函数
+    private void checkRoutineKind() {
+        int[] types = getInputParameterTypeIds();
+        for (SqlProcedure p : schema.findProcedures(session, functionName)) {
+            if (p.matchesSignature(types)) {
+                throw DbException.get(ErrorCode.CANNOT_CHANGE_ROUTINE_KIND_1, functionName);
+            }
+        }
+    }
+
     // 名字已经被Java别名占用时不能再建同名函数
     private boolean isNameUsedByAlias() {
         FunctionAlias f = schema.findFunction(session, functionName);
@@ -532,6 +543,11 @@ public class CreateSqlFunction extends SchemaStatement {
         if (lock == null)
             return -1;
 
+        // 和PostgreSQL一样, FUNCTION和PROCEDURE是同一个名字空间,
+        // 用OR REPLACE把过程改成函数时要报"不能改变例程类型"
+        if (orReplace) {
+            checkRoutineKind();
+        }
         // 只替换参数类型相同的重载，其它重载保持不变
         FunctionAlias old = findSameSignature();
         if (old == null && isNameUsedByAlias()) {

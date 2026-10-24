@@ -48,8 +48,10 @@ public class AlterProcedureTest extends SqlTestBase {
 
         executeUpdate("ALTER PROCEDURE apr_a(INT) LEAKPROOF");
         assertTrue(getCreateSql("APR_A"), getCreateSql("APR_A").contains(" LEAKPROOF"));
-        executeUpdate("ALTER PROCEDURE apr_a(INT) WINDOW");
-        assertTrue(getCreateSql("APR_A"), getCreateSql("APR_A").contains(" WINDOW"));
+        // 过程和PostgreSQL一样不接受WINDOW属性(WINDOW只用于函数)
+        executeUpdateThanAssertErrorCode("ALTER PROCEDURE apr_a(INT) WINDOW",
+                ErrorCode.SYNTAX_ERROR_1);
+        assertFalse(getCreateSql("APR_A"), getCreateSql("APR_A").contains(" WINDOW"));
 
         executeUpdate("ALTER PROCEDURE apr_a(INT) COST 42");
         assertTrue(getCreateSql("APR_A"), getCreateSql("APR_A").contains(" COST 42"));

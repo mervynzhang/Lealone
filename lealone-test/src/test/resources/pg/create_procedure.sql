@@ -383,11 +383,14 @@ call sum(1);
 
 -- @case procedure.alter_and_bad_def
 -- @pg create_procedure.sql:239-249
--- 适配: PG 的过程只接受 SECURITY/SET 这一小撮属性, WINDOW/STRICT 会报错; Lealone 的过程和
---       函数共用同一套属性子句(ALTER PROCEDURE 本轮才支持), 所以前两条建过程和 ALTER PROCEDURE
---       按 Lealone 的实际行为断言成功;
+-- 适配: PG 的过程只接受 SECURITY/SET 这一小撮属性, WINDOW 是语法错误(42601); Lealone 的
+--       过程不接受 WINDOW 属性, 报 42000; STRICT 这类别的属性 Lealone 接受(比 PG 宽松);
 --       最后的 DROP PROCEDURE ptest1 去掉了, 因为后面的清理用例还要用 ptest1
 create procedure ptestx_attr() language sql window as $$ insert into cp_test values (1, 'a') $$;
+> exception 42000
+
+-- STRICT 过程可以建
+create procedure ptestx_attr() language sql strict as $$ insert into cp_test values (1, 'a') $$;
 > update count: 0
 
 -- 同名同签名的过程只能有一个, 再建一次报 90150
