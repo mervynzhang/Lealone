@@ -222,11 +222,16 @@ public class AOTransaction implements Transaction {
     }
 
     private void writeRedoLog(boolean asyncCommit) {
-        // 同一条语句会被重复stop，此时事务可能已经提交结束，不用再写一次redo log，
-        // 结果由第一次提交负责回调
+        // 同一条语句会被重复stop，此时事务可能已经提交结束，不用再写一次redo log；
+        // 但异步提交的完成回调必须补上，否则这条语句永远等不到响应(客户端挂死)。
+        // 不能用checkNotClosed()抛异常：ServerSession.commit/rollback没有try/finally，
+        // 这里抛出去会让session上的transaction引用悬空，后续语句跟着出问题。
         UndoLog ul = undoLog;
-        if (ul == null)
+        if (ul == null) {
+            if (asyncCommit)
+                asyncCommitComplete();
             return;
+        }
         if (session != null && !session.isRedoLogEnabled()) {
             if (asyncCommit)
                 asyncCommitComplete();
