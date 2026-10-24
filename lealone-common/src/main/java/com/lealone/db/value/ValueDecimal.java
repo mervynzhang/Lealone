@@ -94,12 +94,16 @@ public class ValueDecimal extends Value {
 
     @Override
     public Value divide(Value v) {
+        return divide(v, value.scale() + DIVIDE_SCALE_ADD);
+    }
+
+    @Override
+    public Value divide(Value v, int scale) {
         ValueDecimal dec = (ValueDecimal) v;
         if (dec.value.signum() == 0) {
             throw DbException.get(ErrorCode.DIVISION_BY_ZERO_1, getSQL());
         }
-        BigDecimal bd = value.divide(dec.value, value.scale() + DIVIDE_SCALE_ADD,
-                RoundingMode.HALF_DOWN);
+        BigDecimal bd = value.divide(dec.value, scale, RoundingMode.HALF_DOWN);
         if (bd.signum() == 0) {
             bd = BigDecimal.ZERO;
         } else if (bd.scale() > 0) {

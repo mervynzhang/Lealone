@@ -145,7 +145,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
     // 期望: DECIMAL(10,4)/DECIMAL(10,4) 的商标度不超过 20（H2 2.4.240 为 20，H2 1.4 为 15）；
     // 实际: DECIMAL(29,29)，0.33333333333333333333333333333。
     // 影响: 商参与后续运算/比较时精度失真，且结果集元数据不可预期。
-    @Ignore("BUG: DECIMAL(10,4)/DECIMAL(10,4) produces scale 29 instead of <= 20 (H2: 20)")
     @Test
     public void decimalDivisionScaleIsTooLarge() {
         Object o = queryObject("SELECT CAST(1 AS DECIMAL(10,4)) / CAST(3 AS DECIMAL(10,4))");
