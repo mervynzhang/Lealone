@@ -44,9 +44,10 @@ public class ProcedureNestedCallOutTest extends SqlAssertTestBase {
                 + " BEGIN a := 1; END; $$");
 
         // 调用只有IN参数的过程仍然允许
-        executeUpdate("CREATE OR REPLACE PROCEDURE pnc_p6(IN x INT) AS $$ SELECT x $$");
+        // 过程体里引用参数只能用?占位, 不能用参数名(这是既有约定, 和函数体不同)
+        executeUpdate("CREATE OR REPLACE PROCEDURE pnc_p6(IN x INT) AS $$ SELECT ? $$");
         executeUpdate("CREATE OR REPLACE PROCEDURE pnc_p7(IN y INT) AS $$"
-                + " CALL pnc_p6(y); SELECT y $$");
+                + " CALL pnc_p6(?); SELECT ? $$");
         executeUpdate("DROP PROCEDURE pnc_p7");
         executeUpdate("DROP PROCEDURE pnc_p6");
         executeUpdate("DROP PROCEDURE pnc_p5");
