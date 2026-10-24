@@ -10,6 +10,8 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.util.zip.ZipOutputStream;
 
+import com.lealone.storage.BackupContext;
+
 import com.lealone.db.value.ValueLob;
 
 /**
@@ -37,6 +39,9 @@ public interface LobStorage {
     }
 
     default void backupTo(String baseDir, ZipOutputStream out, Long lastDate) {
+    }
+
+    default void backupTo(String baseDir, BackupContext ctx) {
     }
 
     /**
