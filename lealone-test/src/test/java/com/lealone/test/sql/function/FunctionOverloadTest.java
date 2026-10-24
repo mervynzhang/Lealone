@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.sql.Types;
 
 import org.junit.Test;
 
@@ -179,8 +180,12 @@ public class FunctionOverloadTest extends SqlTestBase {
 
         // DATE可以隐式转TIMESTAMP，反过来不行
         executeUpdate("CREATE FUNCTION fm4(a TIMESTAMP) RETURNS TIMESTAMP AS $$ SELECT a $$");
-        executeQuery("SELECT fm4(CAST('2020-01-02' AS DATE))");
-        assertEquals("2020-01-02 00:00:00.0", getStringValue(1));
+        // 时刻字符串依赖JVM默认时区(同一时刻在不同时区渲染出来的字符串不同)，
+        // 这里改成和引擎自己做的同一个转换比较，任何时区下都成立
+        executeQuery("SELECT fm4(CAST('2020-01-02' AS DATE)), "
+                + "CAST(CAST('2020-01-02' AS DATE) AS TIMESTAMP)");
+        assertEquals(getStringValue(2), getStringValue(1));
+        assertEquals(Types.TIMESTAMP, rs.getMetaData().getColumnType(1));
         executeUpdate("CREATE FUNCTION fm5(a DATE) RETURNS DATE AS $$ SELECT a $$");
         executeQueryThanAssertErrorCode("SELECT fm5(CAST('2020-01-02 03:04:05' AS TIMESTAMP))",
                 ErrorCode.FUNCTION_NOT_FOUND_1);
