@@ -42,6 +42,7 @@ import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.Sequence;
 import com.lealone.db.schema.SqlFunction;
+import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.schema.UserAggregate;
 import com.lealone.db.schema.UserDataType;
 import com.lealone.db.service.Service;
@@ -5089,16 +5090,65 @@ public class SQLParserBase implements SQLParser {
         command.setIfNotExists(ifNotExists);
         if (readIf("(")) {
             if (!readIf(")")) {
+                int parameterIndex = 0;
                 do {
-                    String parameterName = readAliasIdentifier();
-                    command.addParameter(parseColumnWithType(parameterName));
+                    parameterIndex++;
+                    parseProcedureParameter(command, parameterIndex);
                 } while (readIf(","));
                 read(")");
             }
         }
+        // LANGUAGE子句可以写在AS之前也可以写在之后，过程和函数一样只支持SQL
+        while (readIf("LANGUAGE")) {
+            checkProcedureLanguage(readStringOrIdentifier());
+        }
         read("AS");
         command.setBody(readString());
+        while (readIf("LANGUAGE")) {
+            checkProcedureLanguage(readStringOrIdentifier());
+        }
         return command;
+    }
+
+    // 过程参数支持PostgreSQL风格的IN/OUT/INOUT，默认是IN
+    private void parseProcedureParameter(CreateProcedure command, int parameterIndex) {
+        int mode = SqlProcedure.PARAM_IN;
+        if (readIf("IN")) {
+            if (readIf("OUT"))
+                mode = SqlProcedure.PARAM_INOUT;
+        } else if (readIf("OUT")) {
+            mode = SqlProcedure.PARAM_OUT;
+        } else if (readIf("INOUT")) {
+            mode = SqlProcedure.PARAM_INOUT;
+        } else if (isToken("VARIADIC")) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "VARIADIC parameter in CREATE PROCEDURE");
+        }
+        Column column;
+        // OUT/INOUT参数可以只写类型不写名字
+        if (mode != SqlProcedure.PARAM_IN && isDataTypeName(currentToken)) {
+            column = parseColumnWithType("$" + parameterIndex);
+        } else {
+            String parameterName = readAliasIdentifier();
+            column = parseColumnWithType(parameterName);
+            // PostgreSQL也允许把OUT/INOUT写在参数名后面
+            if (readIf("OUT")) {
+                mode = SqlProcedure.PARAM_OUT;
+            } else if (readIf("INOUT")) {
+                mode = SqlProcedure.PARAM_INOUT;
+            }
+        }
+        command.addParameter(column, mode);
+    }
+
+    private static void checkProcedureLanguage(String language) {
+        // 过程和函数不同，过程体的SQL串由调用方按yieldable链异步执行，
+        // PL/pgSQL过程体需要同步解释执行，不属于本次支持范围
+        if (!"SQL".equalsIgnoreCase(language)) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "CREATE PROCEDURE ... LANGUAGE " + language
+                            + ", only LANGUAGE SQL is supported");
+        }
     }
 
     protected StatementBase parseDropProcedure() {

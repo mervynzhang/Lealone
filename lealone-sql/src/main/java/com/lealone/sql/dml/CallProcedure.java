@@ -32,6 +32,8 @@ public class CallProcedure extends Call {
     private final SqlProcedure procedure;
     private final Expression[] args;
     private final Expression[] resultExpressions;
+    // OUT/INOUT参数对应的结果列
+    private final Expression[] outputExpressions;
     // 过程体里是否有查询语句: -1还没判断, 0没有, 1有
     private int bodyHasQuery = -1;
 
@@ -42,6 +44,17 @@ public class CallProcedure extends Call {
         ExpressionColumn c = new ExpressionColumn(session.getDatabase(),
                 new Column(procedure.getName() + "()", Value.INT));
         resultExpressions = new Expression[] { c };
+        int outputCount = procedure.getOutputParameterCount();
+        if (outputCount > 0) {
+            outputExpressions = new Expression[outputCount];
+            for (int i = 0; i < outputCount; i++) {
+                int index = procedure.getOutputParameterIndex(i);
+                Column column = procedure.getParameter(index);
+                outputExpressions[i] = new ExpressionColumn(session.getDatabase(), column);
+            }
+        } else {
+            outputExpressions = resultExpressions;
+        }
     }
 
     public SqlProcedure getProcedure() {
@@ -56,6 +69,11 @@ public class CallProcedure extends Call {
         return resultExpressions;
     }
 
+    // CALL的结果列：有OUT/INOUT参数时是OUT/INOUT参数，否则是过程名+更新数
+    public Expression[] getOutputExpressions() {
+        return outputExpressions;
+    }
+
     @Override
     public int getType() {
         return SQLStatement.CALL;
@@ -67,9 +85,12 @@ public class CallProcedure extends Call {
     }
 
     // 过程体里有查询语句时按查询语句执行，这样Statement.execute()也能通过getResultSet()拿到结果集；
-    // 只有更新语句的过程仍然按更新语句执行，保持原来的更新计数语义
+    // 只有更新语句的过程仍然按更新语句执行，保持原来的更新计数语义。
+    // 有OUT/INOUT参数的过程总是返回一行，所以也按查询语句执行
     @Override
     public boolean isQuery() {
+        if (procedure.hasOutputParameters())
+            return true;
         if (bodyHasQuery < 0) {
             bodyHasQuery = LealoneSQLParser.hasQueryStatement(session, procedure.getBody()) ? 1 : 0;
         }
@@ -85,7 +106,8 @@ public class CallProcedure extends Call {
 
     @Override
     public Future<Result> getMetaData() {
-        LocalResult result = new LocalResult(session, resultExpressions, 1);
+        Expression[] expressions = getOutputExpressions();
+        LocalResult result = new LocalResult(session, expressions, expressions.length);
         result.done();
         return Future.succeededFuture(result);
     }

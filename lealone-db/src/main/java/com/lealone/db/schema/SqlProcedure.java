@@ -20,15 +20,44 @@ import com.lealone.db.table.Column;
  */
 public class SqlProcedure extends SchemaObjectBase {
 
+    // 参数模式，和SqlFunction保持一致
+    public static final int PARAM_IN = 0;
+    public static final int PARAM_OUT = 1;
+    public static final int PARAM_INOUT = 2;
+
     private final String body;
     private final Column[] parameters;
+    private final int[] parameterModes;
+    private final int[] inputIndexes; // 入参(IN/INOUT)在参数列表中的下标
+    private final int[] outputIndexes; // OUT/INOUT参数在参数列表中的下标
+
     // 过程体的解析结果，由sql模块负责填充和读取
     private volatile Object compiledBody;
 
-    public SqlProcedure(Schema schema, int id, String name, String body, Column[] parameters) {
+    public SqlProcedure(Schema schema, int id, String name, String body, Column[] parameters,
+            int[] parameterModes) {
         super(schema, id, name);
         this.body = body;
         this.parameters = parameters;
+        this.parameterModes = parameterModes;
+        int inputCount = 0;
+        int outputCount = 0;
+        for (int mode : parameterModes) {
+            if (mode != PARAM_OUT)
+                inputCount++;
+            if (mode != PARAM_IN)
+                outputCount++;
+        }
+        inputIndexes = new int[inputCount];
+        outputIndexes = new int[outputCount];
+        int i = 0;
+        int o = 0;
+        for (int p = 0; p < parameterModes.length; p++) {
+            if (parameterModes[p] != PARAM_OUT)
+                inputIndexes[i++] = p;
+            if (parameterModes[p] != PARAM_IN)
+                outputIndexes[o++] = p;
+        }
     }
 
     @Override
@@ -48,6 +77,30 @@ public class SqlProcedure extends SchemaObjectBase {
         return parameters[i];
     }
 
+    public int getParameterMode(int i) {
+        return parameterModes[i];
+    }
+
+    public int getInputParameterCount() {
+        return inputIndexes.length;
+    }
+
+    public int getInputParameterIndex(int i) {
+        return inputIndexes[i];
+    }
+
+    public boolean hasOutputParameters() {
+        return outputIndexes.length > 0;
+    }
+
+    public int getOutputParameterCount() {
+        return outputIndexes.length;
+    }
+
+    public int getOutputParameterIndex(int i) {
+        return outputIndexes[i];
+    }
+
     public Object getCompiledBody() {
         return compiledBody;
     }
@@ -61,8 +114,16 @@ public class SqlProcedure extends SchemaObjectBase {
     public String getCreateSQL() {
         StatementBuilder buff = new StatementBuilder("CREATE PROCEDURE ");
         buff.append(getSQL()).append('(');
-        for (int i = 0, size = parameters.length; i < size; i++)
-            buff.appendExceptFirst(", ").append(parameters[i].getCreateSQL(false));
+        for (int i = 0, size = parameters.length; i < size; i++) {
+            buff.appendExceptFirst(", ");
+            int mode = parameterModes[i];
+            if (mode == PARAM_OUT) {
+                buff.append("OUT ");
+            } else if (mode == PARAM_INOUT) {
+                buff.append("INOUT ");
+            }
+            buff.append(parameters[i].getCreateSQL(false));
+        }
         buff.append(") AS ").append(StringUtils.quoteStringSQL(body));
         return buff.toString();
     }
