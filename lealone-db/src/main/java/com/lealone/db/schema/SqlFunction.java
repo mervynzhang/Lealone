@@ -1223,10 +1223,19 @@ public class SqlFunction extends FunctionAlias {
      * PL/pgSQL等过程式语言由子类覆盖这个方法。
      */
     protected Value executeFunction(ServerSession session, Value[] values) {
-        Connection conn = createNestedConnection(session);
         // 外层是自动提交时, 函数体的语句已经各自提交, 用完就可以立刻关掉嵌套连接,
-        // 不必等到整条语句结束(否则大表上逐行调用函数会把嵌套连接攒成O(行数)个)
+        // 不必等到整条语句结束(否则大表上逐行调用函数会把嵌套连接攒成O(行数)个);
+        // 显式事务里嵌套连接要留到事务结束, 那就同一条语句里同一个函数复用一个,
+        // 这样嵌套连接的数量只跟函数种类数有关, 不会随行数增长
         boolean autoClose = session.isAutoCommit();
+        boolean ownsSlot = !autoClose && session.tryUseNestedOwner(this);
+        Connection conn = ownsSlot ? session.getStatementNestedConnection(this) : null;
+        if (conn == null) {
+            conn = createNestedConnection(session);
+            if (ownsSlot) {
+                session.putStatementNestedConnection(this, conn);
+            }
+        }
         boolean success = false;
         try {
             // 函数体里的表名按调用方当前的schema解析
@@ -1264,6 +1273,9 @@ public class SqlFunction extends FunctionAlias {
         } catch (SQLException e) {
             throw DbException.convert(e);
         } finally {
+            if (ownsSlot) {
+                session.releaseNestedOwner(this);
+            }
             if (success && autoClose) {
                 session.closeNestedConnection(conn);
             }

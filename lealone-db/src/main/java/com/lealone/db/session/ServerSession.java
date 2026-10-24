@@ -154,6 +154,11 @@ public class ServerSession extends SessionBase implements InternalSession {
 
     private ArrayList<Connection> nestedConnections;
     private ArrayList<ServerSession> nestedSessions;
+    // 显式事务里嵌套连接/会话要留到事务结束(回滚语义)，如果每次函数调用都新建一个，
+    // 数量就是O(行数)，调度器每次挑命令都要扫一遍session；同一条语句里同一个函数复用一个就够了
+    private HashMap<SqlFunction, Connection> statementNestedConnections;
+    private HashMap<SqlFunction, ServerSession> statementNestedSessions;
+    private HashSet<SqlFunction> nestedOwnersInUse;
 
     public ServerSession(Database database, User user, int id) {
         this.database = database;
@@ -628,6 +633,7 @@ public class ServerSession extends SessionBase implements InternalSession {
 
     public void startCurrentCommand(PreparedSQLStatement statement) {
         if (executingStatements++ == 0) {
+            clearStatementNestedObjects();
             currentCommand = statement;
             if (queryTimeout > 0) {
                 long now = System.currentTimeMillis();
@@ -885,7 +891,61 @@ public class ServerSession extends SessionBase implements InternalSession {
         }
     }
 
+    /**
+     * 尝试占用某个函数在本语句内的复用槽位。
+     * 函数体递归调用自己时(上一次调用还没返回)返回false，调用方新建一个临时嵌套连接，避免串味。
+     */
+    public boolean tryUseNestedOwner(SqlFunction owner) {
+        if (nestedOwnersInUse == null) {
+            nestedOwnersInUse = new HashSet<>();
+        }
+        return nestedOwnersInUse.add(owner);
+    }
+
+    public void releaseNestedOwner(SqlFunction owner) {
+        if (nestedOwnersInUse != null) {
+            nestedOwnersInUse.remove(owner);
+        }
+    }
+
+    public Connection getStatementNestedConnection(SqlFunction owner) {
+        return statementNestedConnections != null ? statementNestedConnections.get(owner) : null;
+    }
+
+    public void putStatementNestedConnection(SqlFunction owner, Connection conn) {
+        if (statementNestedConnections == null) {
+            statementNestedConnections = new HashMap<>();
+        }
+        statementNestedConnections.put(owner, conn);
+    }
+
+    public ServerSession getStatementNestedSession(SqlFunction owner) {
+        return statementNestedSessions != null ? statementNestedSessions.get(owner) : null;
+    }
+
+    public void putStatementNestedSession(SqlFunction owner, ServerSession nestedSession) {
+        if (statementNestedSessions == null) {
+            statementNestedSessions = new HashMap<>();
+        }
+        statementNestedSessions.put(owner, nestedSession);
+    }
+
+    // 每条顶层语句开始时清掉复用槽位：复用不跨语句，
+    // 这样某条语句失败时的回滚不会波及前面已经成功执行的语句
+    private void clearStatementNestedObjects() {
+        if (statementNestedConnections != null) {
+            statementNestedConnections = null;
+        }
+        if (statementNestedSessions != null) {
+            statementNestedSessions = null;
+        }
+        if (nestedOwnersInUse != null) {
+            nestedOwnersInUse = null;
+        }
+    }
+
     private void commitOrRollbackNestedConnections(boolean commit) {
+        clearStatementNestedObjects();
         if (nestedConnections != null) {
             for (Connection conn : nestedConnections) {
                 try {

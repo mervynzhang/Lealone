@@ -37,9 +37,18 @@ public class PlpgSqlFunction extends SqlFunction {
         PlpgSqlAst.Block block = getCompiledBody();
         // 函数体内的SQL在独立的嵌套会话里执行，事务以当前会话的事务为父事务；
         // SECURITY DEFINER时这个嵌套会话用的是属主身份
-        ServerSession nestedSession = createNestedSession(session);
-        // 函数体里的SQL共用一个事务，这样带EXCEPTION段的块才能回滚到块入口的保存点
+        // 显式事务里嵌套会话要留到事务结束, 同一条语句里同一个函数复用一个,
+        // 这样嵌套会话数量不随行数增长(否则调度器每次挑命令都要扫O(行数)个session)
         boolean autoCommit = session.isAutoCommit();
+        boolean ownsSlot = !autoCommit && session.tryUseNestedOwner(this);
+        ServerSession nestedSession = ownsSlot ? session.getStatementNestedSession(this) : null;
+        if (nestedSession == null) {
+            nestedSession = createNestedSession(session);
+            if (ownsSlot) {
+                session.putStatementNestedSession(this, nestedSession);
+            }
+        }
+        // 函数体里的SQL共用一个事务，这样带EXCEPTION段的块才能回滚到块入口的保存点
         nestedSession.setAutoCommit(false);
         String schemaName = session.getCurrentSchemaName();
         if (schemaName != null && !Constants.SCHEMA_MAIN.equals(schemaName))
@@ -65,6 +74,9 @@ public class PlpgSqlFunction extends SqlFunction {
                 session.closeNestedSession(nestedSession);
             return value;
         } finally {
+            if (ownsSlot) {
+                session.releaseNestedOwner(this);
+            }
             // 异常离开函数时整个函数体的修改都要回滚，对应PostgreSQL的语句级子事务
             if (!success)
                 nestedSession.rollback();
