@@ -172,10 +172,8 @@ public class SequenceTest extends SqlAssertTestBase {
         drop("seq_c2");
     }
 
-    // BUG: 只容纳两个值的序列（MINVALUE 1 MAXVALUE 2）在 CREATE 时就被拒绝。
-    // 期望: 可以创建，nextval 依次返回 1、2，第 3 次才耗尽（H2 行为）；
-    // 实际: 90009，因为 Sequence.isValid 要求 abs(increment) < maxValue - minValue（应该允许 <=）。
-    @Ignore("BUG: CREATE SEQUENCE with MINVALUE 1 MAXVALUE 2 is rejected by an over-strict range check")
+    // 只容纳两个值的序列（MINVALUE 1 MAXVALUE 2）可以创建，nextval 依次返回 1、2（H2 行为），
+    // 因为 abs(increment) <= maxValue - minValue 就是合法的
     @Test
     public void twoValueRangeIsAllowed() {
         drop("seq_c3");

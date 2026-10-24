@@ -228,11 +228,11 @@ public class Sequence extends SchemaObjectBase {
      */
     private static boolean isValid(long value, long minValue, long maxValue, long increment) {
         return minValue <= value && maxValue >= value && maxValue > minValue && increment != 0 &&
-        // Math.abs(increment) < maxValue - minValue
+        // Math.abs(increment) <= maxValue - minValue
         // use BigInteger to avoid overflows when maxValue and minValue
         // are really big
                 BigInteger.valueOf(increment).abs().compareTo(
-                        BigInteger.valueOf(maxValue).subtract(BigInteger.valueOf(minValue))) < 0;
+                        BigInteger.valueOf(maxValue).subtract(BigInteger.valueOf(minValue))) <= 0;
     }
 
     private static long getDefaultMinValue(Long startValue, long increment) {
