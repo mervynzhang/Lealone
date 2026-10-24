@@ -1007,6 +1007,14 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals("[1:a, 2:b]",
                 queryRowList("SELECT id, name FROM plp_all_rows() ORDER BY id").toString());
 
+        // 带引号的表名也能解析和回放
+        executeUpdate("DROP TABLE IF EXISTS \"plp_quoted_t\"");
+        executeUpdate("CREATE TABLE \"plp_quoted_t\"(id INT)");
+        executeUpdate("INSERT INTO \"plp_quoted_t\" VALUES(5)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_quoted_rows() RETURNS SETOF \"plp_quoted_t\" "
+                + "LANGUAGE plpgsql AS $$ BEGIN RETURN QUERY SELECT * FROM \"plp_quoted_t\"; END; $$");
+        assertEquals("[5]", queryIntList("SELECT id FROM plp_quoted_rows()").toString());
+
         // SQL语言的函数同样可以返回SETOF <表名>
         executeUpdate("CREATE OR REPLACE FUNCTION plp_sql_rows() RETURNS SETOF plp_row_t "
                 + "LANGUAGE SQL AS $$ SELECT * FROM plp_row_t $$");
