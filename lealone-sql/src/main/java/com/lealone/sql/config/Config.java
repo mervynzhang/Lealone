@@ -171,7 +171,9 @@ public class Config {
             def.parameters.putAll(engineMap);
         }
         def.name = name;
-        def.enabled = Boolean.parseBoolean(engineMap.get("enabled"));
+        // 没配置enabled时保持默认值true，不能当成false处理
+        if (engineMap.containsKey("enabled"))
+            def.enabled = Boolean.parseBoolean(engineMap.get("enabled"));
         if (engineMap.containsKey("is_default"))
             def.is_default = Boolean.parseBoolean(engineMap.get("is_default"));
     }
