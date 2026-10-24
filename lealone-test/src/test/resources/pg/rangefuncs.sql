@@ -69,13 +69,42 @@ select a,b,ord from ord_rngfunct(1) with ordinality as z(a,b,ord);
 
 -- @case rangefuncs.with_ordinality_unnest
 -- @pg rangefuncs.sql:13-17
--- 缺失: 没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持, 见上一个用例)
+-- 适配: PG 的 ARRAY['a','b'] 现在能用 ARRAY[...] 字面量(元素必须是常量);
+--       最后一条 PG 用 row_to_json(s.*), Lealone 没有 row_to_json, 直接取 s.*
 select a,ord from unnest(array['a','b']) with ordinality as z(a,ord);
+> A ORD
+> - ---
+> a 1
+> b 2
+> rows: 2
+
 select * from unnest(array['a','b']) with ordinality as z(a,ord);
+> A ORD
+> - ---
+> a 1
+> b 2
+> rows: 2
+
 select a,ord from unnest(array[1.0::float8]) with ordinality as z(a,ord);
+> A   ORD
+> --- ---
+> 1.0 1
+> rows: 1
+
 select * from unnest(array[1.0::float8]) with ordinality as z(a,ord);
-select row_to_json(s.*) from generate_series(11,14) with ordinality s;
--- PG 期望: 逐行返回 (值, 行号)
+> A   ORD
+> --- ---
+> 1.0 1
+> rows: 1
+
+select * from generate_series(11,14) with ordinality s;
+> X  ORDINALITY
+> -- ----------
+> 11 1
+> 12 2
+> 13 3
+> 14 4
+> rows: 4
 
 -- ---------------------------------------------------------------------------
 -- 标量/多行函数出现在 FROM 里(这次新解锁的部分)
