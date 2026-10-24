@@ -2,12 +2,12 @@
 --
 -- rangefuncs.sql(827 行)测的是 set-returning 函数在 FROM 子句里的各种用法。
 -- Lealone 现在支持 RETURNS SETOF / RETURNS TABLE 和表函数调用(含列别名、VIEW、JOIN),
--- 所以这个文件第一次可以转一部分过来; 依赖 WITH ORDINALITY、unnest()、generate_series()、
+-- 所以这个文件第一次可以转一部分过来; 依赖 unnest()、generate_series()、
 -- SETOF <表行类型>、INSERT ... RETURNING 的用例仍然 skip, 原因写在 skip-list.txt。
 --
 -- 转换时的固定改法:
 --   1. PG 的无名参数/`$1` 改成命名参数;
---   2. `SELECT funct() WITH ORDINALITY` 这种整体 skip;
+--   2. 依赖 unnest()/generate_series() 的 `WITH ORDINALITY` 语句整体 skip;
 --   3. 被 skip 的用例保持 PG 原样语句, 期望值以 "-- PG 期望:" 注释给出。
 
 -- ---------------------------------------------------------------------------
@@ -24,11 +24,47 @@ select * from rngfunct(1);
 -- PG 期望: rngfunc2 里 rngfuncid=1 的行
 
 -- @case rangefuncs.with_ordinality
--- @pg rangefuncs.sql:9-17
--- 缺失: WITH ORDINALITY 直接报 42000 语法错; 另外 unnest()/generate_series() 也没有
-select * from rngfunct(1) with ordinality as z(a,b,ord);
+-- @pg rangefuncs.sql:9-12
+-- 适配: PG 的 rngfunct(int) 返回 SETOF rngfunc2(表行类型)且用 $1, 这里改成 RETURNS TABLE + 命名参数
+create table ord_rngfunc2(rngfuncid int, f2 int);
+> update count: 0
+
+insert into ord_rngfunc2 values(1, 11), (2, 22), (1, 111);
+> update count: 3
+
+create function ord_rngfunct(p int) returns table(rngfuncid int, f2 int) as
+    'select rngfuncid, f2 from ord_rngfunc2 where rngfuncid = p order by f2' language sql;
+> update count: 0
+
+select * from ord_rngfunct(1) with ordinality as z(a,b,ord);
+> A B   ORD
+> - --- ---
+> 1 11  1
+> 1 111 2
+> rows: 2
+
+select * from ord_rngfunct(1) with ordinality as z(a,b,ord) where b > 100;
+> A B   ORD
+> - --- ---
+> 1 111 2
+> rows: 1
+
+select a,b,ord from ord_rngfunct(1) with ordinality as z(a,b,ord);
+> A B   ORD
+> - --- ---
+> 1 11  1
+> 1 111 2
+> rows: 2
+
+-- @case rangefuncs.with_ordinality_unnest
+-- @pg rangefuncs.sql:13-17
+-- 缺失: 没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持, 见上一个用例)
+select a,ord from unnest(array['a','b']) with ordinality as z(a,ord);
 select * from unnest(array['a','b']) with ordinality as z(a,ord);
--- PG 期望: 多出一列 ord(从 1 开始的行号)
+select a,ord from unnest(array[1.0::float8]) with ordinality as z(a,ord);
+select * from unnest(array[1.0::float8]) with ordinality as z(a,ord);
+select row_to_json(s.*) from generate_series(11,14) with ordinality s;
+-- PG 期望: 逐行返回 (值, 行号)
 
 -- ---------------------------------------------------------------------------
 -- 标量/多行函数出现在 FROM 里(这次新解锁的部分)

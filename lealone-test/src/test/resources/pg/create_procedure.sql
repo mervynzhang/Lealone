@@ -192,12 +192,11 @@ call ptest6a(1, null);
 
 -- @case procedure.collation
 -- @pg create_procedure.sql:164-170
--- 适配: PG 的过程体是 LANGUAGE SQL + 参数名, Lealone 过程体用 ? 按位置引用;
---       PG 的实参是 least('a','b'), Lealone 没有 least()(42122), 这里直接传它的结果 'a'
+-- 适配: PG 的过程体是 LANGUAGE SQL + 参数名, Lealone 过程体用 ? 按位置引用
 create procedure ptest7(a text, b text) as 'select ? = ?';
 > update count: 0
 
-call ptest7('a', 'a');
+call ptest7(least('a', 'b'), 'a');
 > ?1 = ?2
 > -------
 > TRUE
