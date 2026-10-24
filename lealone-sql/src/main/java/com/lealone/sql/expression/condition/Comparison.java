@@ -263,8 +263,52 @@ public class Comparison extends Condition {
         int dataType = Value.getHigherOrder(left.getType(), right.getType());
         l = l.convertTo(dataType);
         r = r.convertTo(dataType);
+        if (isRowValue() && l instanceof ValueArray && r instanceof ValueArray) {
+            return compareRowValue((ValueArray) l, (ValueArray) r, compareType);
+        }
         boolean result = compareNotNull(database, l, r, compareType);
         return ValueBoolean.get(result);
+    }
+
+    private boolean isRowValue() {
+        return left instanceof ExpressionList || right instanceof ExpressionList;
+    }
+
+    /**
+     * 行值比较采用三值逻辑：某个字段无法判定时返回 NULL 而不是 TRUE/FALSE，
+     * 例如 (1, NULL) = (1, NULL) 和 (NULL, 2) IN ((1, 2)) 的结果都是 UNKNOWN。
+     */
+    private Value compareRowValue(ValueArray l, ValueArray r, int compareType) {
+        Value[] list1 = l.getList();
+        Value[] list2 = r.getList();
+        if (list1.length != list2.length) {
+            return ValueBoolean.get(compareNotNull(database, l, r, compareType));
+        }
+        int type = compareType & ~NULL_SAFE;
+        boolean unknown = false;
+        for (int i = 0; i < list1.length; i++) {
+            Value v1 = list1[i];
+            Value v2 = list2[i];
+            if ((compareType & NULL_SAFE) != 0) {
+                // IS [NOT] DISTINCT FROM 把 NULL 当成普通值来比较
+                if (!database.areEqual(v1, v2)) {
+                    return ValueBoolean.get(type == NOT_EQUAL);
+                }
+            } else if (v1 == ValueNull.INSTANCE || v2 == ValueNull.INSTANCE) {
+                if (type != EQUAL && type != NOT_EQUAL) {
+                    // 排序比较由第一个能区分大小的字段决定，遇到 NULL 就无法判定
+                    return ValueNull.INSTANCE;
+                }
+                unknown = true;
+            } else if (database.compare(v1, v2) != 0) {
+                return ValueBoolean.get(compareNotNull(database, v1, v2, type));
+            }
+        }
+        if (unknown) {
+            return ValueNull.INSTANCE;
+        }
+        // 所有字段都相等
+        return ValueBoolean.get(type == EQUAL || type == BIGGER_EQUAL || type == SMALLER_EQUAL);
     }
 
     /**

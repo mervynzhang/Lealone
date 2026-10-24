@@ -5,7 +5,6 @@
  */
 package com.lealone.test.sql.expression;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.test.sql.SqlAssertTestBase;
@@ -13,7 +12,7 @@ import com.lealone.test.sql.SqlAssertTestBase;
 /**
  * 谓词与三值逻辑：AND/OR/NOT 真值表、IS [NOT] NULL、行值、IN/NOT IN、LIKE ESCAPE、CASE。
  * <p>
- * 期望值以 SQL 标准 / H2 语义为准。已确认不符合标准的断言放在 {@code @Ignore("BUG: ...")} 里。
+ * 期望值以 SQL 标准 / H2 语义为准。
  */
 public class PredicateLogicTest extends SqlAssertTestBase {
 
@@ -156,10 +155,6 @@ public class PredicateLogicTest extends SqlAssertTestBase {
         assertQueryFalse("SELECT 3 BETWEEN 1 AND 2");
     }
 
-    // ------------------------------------------------------------------
-    // 以下为已确认缺陷（期望值按 SQL 标准与 H2 2.4.240 实测）
-    // ------------------------------------------------------------------
-
     @Test
     public void andWithFalseOnRight() {
         assertQueryFalse("SELECT NULL AND FALSE");
@@ -177,10 +172,6 @@ public class PredicateLogicTest extends SqlAssertTestBase {
         assertQueryFalse("SELECT (1, NULL) IS NULL");
     }
 
-    // BUG: 行值比较没有做三值逻辑，含 NULL 的行比较直接返回 TRUE/FALSE 而不是 UNKNOWN。
-    // 期望: (1,NULL) = (1,NULL) 为 NULL，(NULL,2) IN ((1,2)) 为 NULL（H2 均为 null）；
-    // 实际: true / false。
-    @Ignore("BUG: row value comparison with NULL returns TRUE/FALSE instead of UNKNOWN (H2: null)")
     @Test
     public void rowValueComparisonIsThreeValued() {
         assertQueryNull("SELECT (1, NULL) = (1, NULL)");
