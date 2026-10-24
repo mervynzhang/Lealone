@@ -13,7 +13,10 @@ import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.session.ServerSession;
+import com.lealone.db.value.Value;
 import com.lealone.sql.SQLStatement;
+import com.lealone.sql.plpgsql.PlpgSqlFunction;
+import com.lealone.sql.plpgsql.PlpgSqlParser;
 
 /**
  * This class represents the statement
@@ -38,6 +41,7 @@ public class CreateSqlFunction extends SchemaStatement {
     private int[] columnTypes;
     private long[] columnPrecisions;
     private int[] columnScales;
+    private String language = "SQL";
     private String body;
     private String bodySql;
     private int[] bodyParameterIndexes;
@@ -72,6 +76,10 @@ public class CreateSqlFunction extends SchemaStatement {
     public void setReturnType(String returnTypeSql, int returnType) {
         this.returnTypeSql = returnTypeSql;
         this.returnType = returnType;
+    }
+
+    public void setLanguage(String language) {
+        this.language = language;
     }
 
     /**
@@ -129,9 +137,42 @@ public class CreateSqlFunction extends SchemaStatement {
         this.orReplace = orReplace;
     }
 
+    // OUT/INOUT参数组成返回行，只支持标量返回的语言不能有多个
+    private int getOutputParameterCount() {
+        int count = 0;
+        for (int mode : parameterModes) {
+            if (mode != SqlFunction.PARAM_IN) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    // PL/pgSQL解释器用CAST解析参数类型，数组类型(含VARIADIC)的写法还解析不了
+    private boolean hasArrayParameter() {
+        for (int typeId : parameterTypeIds) {
+            if (typeId == Value.ARRAY) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public int update() {
         session.getUser().checkAdmin();
+        boolean plpgsql = PlpgSqlFunction.LANGUAGE.equalsIgnoreCase(language);
+        // 先校验语言和函数体，非法时不改动已有的函数
+        if (plpgsql) {
+            PlpgSqlParser.parse(body);
+            // PL/pgSQL只支持标量值，结果集返回值和数组参数都没有实现
+            if (returnColumns || getOutputParameterCount() > 1 || hasArrayParameter()) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "SETOF/TABLE, multiple OUT or array parameters in PL/pgSQL function");
+            }
+        } else if (!"SQL".equalsIgnoreCase(language)) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "LANGUAGE " + language);
+        }
         DbObjectLock lock = schema.tryExclusiveLock(DbObjectType.FUNCTION_ALIAS, session);
         if (lock == null)
             return -1;
@@ -148,7 +189,13 @@ public class CreateSqlFunction extends SchemaStatement {
             schema.remove(session, old, lock);
         }
         int id = getObjectId();
-        SqlFunction function = new SqlFunction(schema, id, functionName);
+        SqlFunction function;
+        if (plpgsql) {
+            function = new PlpgSqlFunction(schema, id, functionName);
+        } else {
+            function = new SqlFunction(schema, id, functionName);
+        }
+        function.setLanguage(language);
         function.setParameters(parameterNames, parameterTypes, parameterTypeIds,
                 parameterComponentTypes, parameterModes, variadic);
         // setof/table的结果列要先设置，setReturnType里要检查它和OUT/INOUT参数是否冲突

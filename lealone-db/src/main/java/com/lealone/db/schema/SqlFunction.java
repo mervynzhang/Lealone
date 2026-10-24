@@ -38,6 +38,7 @@ import com.lealone.sql.IExpression;
  * 有多个时函数返回一个只含一行的结果集(可以在FROM子句里当成表使用)；
  * 存在OUT/INOUT参数时可以省略RETURNS子句。
  * RETURNS SETOF/RETURNS TABLE和OUT/INOUT参数不能同时使用(和PostgreSQL一致)。
+ * 函数体也可以写成LANGUAGE plpgsql的PL/pgSQL块，这时由子类PlpgSqlFunction解释执行。
  */
 public class SqlFunction extends FunctionAlias {
 
@@ -75,6 +76,7 @@ public class SqlFunction extends FunctionAlias {
     private long[] columnPrecisions;
     private int[] columnScales;
 
+    private String language = "SQL";
     private String body;
     private String bodySql;
     private int[] bodyParameterIndexes;
@@ -193,6 +195,30 @@ public class SqlFunction extends FunctionAlias {
         this.columnScales = columnScales;
     }
 
+    public String getLanguage() {
+        return language;
+    }
+
+    public void setLanguage(String language) {
+        this.language = language == null ? "SQL" : language;
+    }
+
+    protected String getBody() {
+        return body;
+    }
+
+    protected String[] getParameterNames() {
+        return parameterNames;
+    }
+
+    protected String[] getParameterTypes() {
+        return parameterTypes;
+    }
+
+    protected int getReturnType() {
+        return returnType;
+    }
+
     /**
      * 设置函数体。
      *
@@ -275,6 +301,10 @@ public class SqlFunction extends FunctionAlias {
         if (strict) {
             buff.append(" STRICT");
         }
+        // SQL语言的函数保持原来的DDL格式，过程式语言要显式写出LANGUAGE
+        if (!"SQL".equalsIgnoreCase(language)) {
+            buff.append(" LANGUAGE ").append(language);
+        }
         buff.append(isDeterministic() ? " IMMUTABLE" : " VOLATILE");
         buff.append(" AS ").append(StringUtils.quoteStringSQL(body));
         return buff.toString();
@@ -323,6 +353,14 @@ public class SqlFunction extends FunctionAlias {
                 }
             }
         }
+        return executeFunction(session, values);
+    }
+
+    /**
+     * 执行函数体，SQL语言的函数体由子类之外的默认实现执行，
+     * PL/pgSQL等过程式语言由子类覆盖这个方法。
+     */
+    protected Value executeFunction(ServerSession session, Value[] values) {
         Connection conn = session.createNestedConnection(false);
         try {
             // 函数体里的表名按调用方当前的schema解析
@@ -337,7 +375,7 @@ public class SqlFunction extends FunctionAlias {
                 }
                 ResultSet rs = prep.executeQuery();
                 try {
-                    if (setReturning) {
+                    if (isSetReturning()) {
                         return readSetResult(session, rs);
                     }
                     if (returnType == Value.RESULT_SET) {
