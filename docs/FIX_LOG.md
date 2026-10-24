@@ -53,8 +53,8 @@
 
 | # | 问题 | 复现 | 状态 |
 |---|---|---|---|
-| 52 | **一次失败的 `CREATE TRIGGER` 之后，同一连接上的事务回滚静默失效（P0 丢数据）**：`BEGIN; DELETE ...; ROLLBACK;` 之后数据不恢复（另一连接验证过：删除未提交，说明事务在起作用，只是 undo 记录丢了）。同样流程换成"失败的 `CREATE TABLE`"或普通 DML 都正常，所以问题在 `CreateTrigger.update()` 的失败路径（`TriggerObject.setTriggerClassName` 抛异常，位于 `lock.addHandler(...)`/`schema.add(...)` 之前，留下了半初始化的状态） | `FailedDdlBreaksRollbackTest`（`@Ignore` 标注，去掉即可看到失败） | **待修复** |
-| 51 | **级联删除在事务里回滚后子行永久丢失（P0 丢数据）**：`ON DELETE CASCADE` 级联删掉的子行没有 undo 记录，事务回滚时父行恢复、子行不恢复。对照实验：不带外键的普通删除在同一事务里回滚正常，所以问题在级联路径（`ConstraintReferential.updateWithSkipCheck` → `PreparedSQLStatement.update()` 同步执行，与普通 DML 的 undo 记录方式不同） | `CascadeDeleteRollbackTest`（`@Ignore` 标注，去掉即可看到失败）：建父子表+级联外键 → `BEGIN; DELETE FROM p WHERE id=1; ROLLBACK;` → 期望子行恢复，实际丢失（另一连接验证过：事务未提交时外部看不到删除，说明删除确实在事务内，只是 undo 记录缺失） | **待修复** |
+| 52 | **一次失败的 `CREATE TRIGGER` 之后，同一连接上的事务回滚静默失效（P0 丢数据）**：`BEGIN; DELETE ...; ROLLBACK;` 之后数据不恢复（另一连接验证过：删除未提交，说明事务在起作用，只是 undo 记录丢了）。同样流程换成"失败的 `CREATE TABLE`"或普通 DML 都正常，所以问题在 `CreateTrigger.update()` 的失败路径（`TriggerObject.setTriggerClassName` 抛异常，位于 `lock.addHandler(...)`/`schema.add(...)` 之前，留下了半初始化的状态） | `FailedDdlBreaksRollbackTest`（`@Ignore` 标注，去掉即可看到失败） | **待修复**（重要线索：只在**语句缓存开启**时出现，`SET QUERY_CACHE_SIZE 0` 可规避 —— 见 #51 行末说明） |
+| 51 | **级联删除在事务里回滚后子行永久丢失（P0 丢数据）**：`ON DELETE CASCADE` 级联删掉的子行没有 undo 记录，事务回滚时父行恢复、子行不恢复。对照实验：不带外键的普通删除在同一事务里回滚正常，所以问题在级联路径（`ConstraintReferential.updateWithSkipCheck` → `PreparedSQLStatement.update()` 同步执行，与普通 DML 的 undo 记录方式不同） | `CascadeDeleteRollbackTest`（`@Ignore` 标注，去掉即可看到失败）：建父子表+级联外键 → `BEGIN; DELETE FROM p WHERE id=1; ROLLBACK;` → 期望子行恢复，实际丢失（另一连接验证过：事务未提交时外部看不到删除，说明删除确实在事务内，只是 undo 记录缺失）。**根因线索（本轮新发现）**：把同一脚本里的 `SET QUERY_CACHE_SIZE 0` 加上，缺陷就不再出现 —— 说明与**语句缓存里被复用/半失败状态的 PreparedSQLStatement** 有关；默认 JDBC 同步客户端(直接用 `DriverManager` 连 embed)不复现，只有测试用的异步网络工厂配置下复现 | **待修复** |
 
 ## 二、待修复（按优先级）
 
