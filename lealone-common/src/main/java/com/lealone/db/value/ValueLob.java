@@ -330,6 +330,11 @@ public class ValueLob extends Value {
      * @return the new value or itself
      */
     public ValueLob link(DataHandler dh, int tabId) {
+        if (dh == null) {
+            // 和 unlink 一样: "已存储LOB没有handler"这个状态确实存在(反序列化出来就是null),
+            // 没有LOB存储可操作时保持原状, 不做改动, 而不是空指针
+            return this;
+        }
         if (small == null) {
             if (tableId == LobStorage.TABLE_TEMP) {
                 dh.getLobStorage().setTable(this, tabId);
