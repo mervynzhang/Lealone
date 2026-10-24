@@ -46,7 +46,9 @@ public class LobStreamMap {
     }
 
     public void save() {
-        map.save(true);
+        // 不能用append模式：append时body和redo log都往同一个chunk末尾追加，
+        // 两者位置都依赖文件长度，并发时会互相覆盖，恢复时lastRedoLogPos也对不上
+        map.save(false);
     }
 
     public void gc() {
