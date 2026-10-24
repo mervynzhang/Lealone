@@ -9,6 +9,7 @@ import java.util.List;
 
 import com.lealone.db.command.CommandParameter;
 import com.lealone.db.result.Result;
+import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
 import com.lealone.server.protocol.Packet;
 import com.lealone.server.protocol.PacketType;
@@ -172,12 +173,24 @@ public class PacketHandlers {
 
     private static PreparedSQLStatement getPreparedSQLStatementFromCache(PacketHandleTask task,
             int commandId, Value[] parameters) {
-        PreparedSQLStatement stmt = (PreparedSQLStatement) task.session.getCache(commandId);
+        PreparedSQLStatement stmt = getPreparedSQLStatementFromCache(task.session, commandId);
         List<? extends CommandParameter> params = stmt.getParameters();
         for (int i = 0, size = parameters.length; i < size; i++) {
             CommandParameter p = params.get(i);
             p.setValue(parameters[i]);
         }
         return stmt;
+    }
+
+    static PreparedSQLStatement getPreparedSQLStatementFromCache(ServerSession session,
+            int commandId) {
+        PreparedSQLStatement stmt = (PreparedSQLStatement) session.getCache(commandId);
+        PreparedSQLStatement newStmt = stmt.recompileIfRequired();
+        if (newStmt != stmt) {
+            // DDL修改了元数据(表结构等)，缓存中的语句需要换成重新编译后的
+            newStmt.setId(commandId);
+            session.addCache(commandId, newStmt);
+        }
+        return newStmt;
     }
 }
