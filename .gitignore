@@ -8,3 +8,5 @@ target
 .idea
 .dbeaver
 dependency-reduced-pom.xml
+# 测试运行时生成的库目录
+lealone_data/
