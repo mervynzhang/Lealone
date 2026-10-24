@@ -14,6 +14,7 @@
 #   converted  = 逐用例转换, 文件里的语句要么执行、要么在下面点名 skip
 #   skip-all   = 整个文件都不适用, 下面只点名了几个代表性用例
 # @pg-total create_function_sql.sql 179 converted
+# @pg-total create_procedure.sql 109 converted
 #
 # 重新统计 PG 语句数: mvn -o -pl lealone-test test -Dtest=PgRegressTest \
 #   -Dpg.srcdir=/path/to/postgres/src/test/regress/sql
@@ -48,3 +49,20 @@ function_sql.bad_body_return_type	create_function_sql.sql:465-466	1	缺陷: 建�
 function_sql.bad_body_columns	create_function_sql.sql:471-472	1	缺陷: 函数体返回多列时静默取第一列
 function_sql.bad_body_positional	create_function_sql.sql:474-475	1	Lealone 不支持 $1/$2 位置参数
 function_sql.empty_body_call	create_function_sql.sql:484-488	4	Lealone 无 anyarray/anyelement 多态类型
+procedure.call_random	create_procedure.sql:2-2	1	Lealone 的 CALL 不区分函数与过程
+procedure.psql_meta	create_procedure.sql:14-21	1	Lealone 客户端没有 psql 元命令, 也没有 pg_get_functiondef()
+procedure.atomic_body	create_procedure.sql:32-43	5	Lealone 无 BEGIN ATOMIC 过程体
+procedure.utility_body	create_procedure.sql:46-50	2	Lealone 过程体不能执行 DDL
+procedure.body_select	create_procedure.sql:53-59	2	缺陷: CALL 返回结果集时 execute() 拿不到行
+procedure.nested_call	create_procedure.sql:63-74	4	缺陷: 过程体里嵌套 CALL 参数绑定冲突(90012)
+procedure.inout_params	create_procedure.sql:79-102	6	Lealone 无 OUT/INOUT 参数
+procedure.named_default	create_procedure.sql:107-121	7	Lealone 不支持 DEFAULT 参数与命名实参
+procedure.polymorphic	create_procedure.sql:126-159	11	Lealone 无 anyarray/anyelement 多态类型
+procedure.collation	create_procedure.sql:164-170	2	缺陷: CALL 返回结果集时 execute() 拿不到行
+procedure.empty_body	create_procedure.sql:174-180	3	Lealone 过程体不能为空, 也无 BEGIN ATOMIC
+procedure.out_params	create_procedure.sql:185-212	12	Lealone 无 OUT/INOUT/VARIADIC 参数
+procedure.ambiguous_drop	create_procedure.sql:216-232	11	Lealone 不支持按参数类型重载
+procedure.call_function	create_procedure.sql:236-237	2	Lealone 的 CALL 不区分函数与过程
+procedure.alter_and_bad_def	create_procedure.sql:239-249	8	Lealone 不支持 ALTER PROCEDURE/ALTER FUNCTION 与 WINDOW/STRICT/VARIADIC/DEFAULT
+procedure.privileges	create_procedure.sql:258-267	10	Lealone 无过程级 EXECUTE 权限与 SET ROLE 语义
+procedure.routine_syntax	create_procedure.sql:272-278	5	Lealone 不支持 ALTER ROUTINE/DROP ROUTINE
