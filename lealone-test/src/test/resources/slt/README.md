@@ -8,7 +8,7 @@ Measured on HEAD `30c02350b` (Java 21, single thread, one fresh embedded databas
 
 | run | files | queries | pass | failures | of which allowlisted | wall time |
 |---|---|---|---|---|---|---|
-| curated gate (`files.txt`) | 27 | 208,201 | 196,453 (94.36 %) | 11,748 | 11,746 | ~9 s |
+| curated gate (`files.txt`) | 45 | 376,388 | 364,640 (96.88 %) | 11,748 | 11,746 | ~13 s |
 | full set (`select1-5`, `evidence/*`, `random/expr/*`) | 137 | 1,207,979 | 1,129,620 (93.51 %) | 78,359 | 78,263 | ~80 s |
 
 98 % of the raw failures are one dialect gap (the `ALL` quantifier, see the allowlist); the gate
@@ -47,7 +47,7 @@ git clone --depth 1 https://github.com/gregrahn/sqllogictest /tmp/sqllogictest  
 mvn -o install -Dmaven.test.skip=true -pl lealone-main -am                       # engine at HEAD
 ```
 
-Curated subset - the gate (27 files, ~9 s, only `SltTest` runs):
+Curated subset - the gate (45 files, ~13 s, only `SltTest` runs):
 
 ```bash
 mvn -o test -pl lealone-test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogictest/test
