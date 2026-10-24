@@ -15,6 +15,7 @@ import java.util.List;
 import com.lealone.common.exceptions.DbException;
 import com.lealone.common.util.MathUtils;
 import com.lealone.common.util.StatementBuilder;
+import com.lealone.db.LocalDataHandler;
 import com.lealone.db.Constants;
 
 /**
@@ -47,13 +48,19 @@ public class ValueArray extends Value {
     }
 
     public static ValueArray get(java.sql.Array array) {
-        Object[] objArray;
         try {
-            objArray = (Object[]) array.getArray();
-            int size = objArray.length;
+            Object arrayObject = array.getArray();
+            if (arrayObject == null)
+                return new ValueArray(new Value[0]);
+            // 用反射按下标取元素: 基本类型数组(int[]/boolean[]...)不能直接强转成 Object[]，
+            // 元素为 null 时也不能调 toString()
+            int size = java.lang.reflect.Array.getLength(arrayObject);
             Value[] values = new Value[size];
+            LocalDataHandler dataHandler = new LocalDataHandler();
             for (int i = 0; i < size; i++) {
-                values[i] = ValueString.get(objArray[i].toString());
+                // 按元素自己的 Java 类型转换, 不要把 int/boolean/日期都变成字符串
+                values[i] = DataType.convertToValue(dataHandler, java.lang.reflect.Array.get(arrayObject, i),
+                        Value.UNKNOWN);
             }
             return new ValueArray(values);
         } catch (SQLException e) {
