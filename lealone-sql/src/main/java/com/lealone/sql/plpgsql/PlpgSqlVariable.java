@@ -73,6 +73,8 @@ public class PlpgSqlVariable {
             value = ValueNull.INSTANCE;
         if (type != Value.UNKNOWN)
             value = value.convertTo(type);
+        if (notNull && value == ValueNull.INSTANCE)
+            throw PlpgSqlException.notNullViolation(name);
         this.value = value;
     }
 

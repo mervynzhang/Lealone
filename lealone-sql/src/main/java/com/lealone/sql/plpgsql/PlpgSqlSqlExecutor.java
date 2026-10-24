@@ -63,9 +63,13 @@ public class PlpgSqlSqlExecutor {
         try {
             ArrayList<Value[]> rows = new ArrayList<>();
             if (result != null) {
+                int columnCount = result.getVisibleColumnCount();
                 while ((maxRows <= 0 || rows.size() < maxRows) && result.next()) {
-                    // currentRow返回的数组可能会被复用，必须复制一份
-                    rows.add(result.currentRow().clone());
+                    // currentRow返回的数组可能会被复用，并且可能包含排序用的内部列，只复制可见列
+                    Value[] current = result.currentRow();
+                    Value[] row = new Value[columnCount];
+                    System.arraycopy(current, 0, row, 0, Math.min(columnCount, current.length));
+                    rows.add(row);
                 }
             }
             return rows;

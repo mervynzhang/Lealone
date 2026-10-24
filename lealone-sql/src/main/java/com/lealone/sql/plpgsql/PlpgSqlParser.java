@@ -211,21 +211,12 @@ public class PlpgSqlParser {
             String label = parseLabel();
             if (isKeyword("DECLARE") || isKeyword("BEGIN"))
                 return new NestedBlock(start, parseBlock(label, start));
-            if (isKeyword("LOOP")) {
-                Loop loop = parseLoop();
-                loop.label = label;
-                return loop;
-            }
-            if (isKeyword("WHILE")) {
-                While whileLoop = parseWhile();
-                whileLoop.label = label;
-                return whileLoop;
-            }
-            if (isKeyword("FOR")) {
-                For forLoop = parseFor();
-                forLoop.label = label;
-                return forLoop;
-            }
+            if (isKeyword("LOOP"))
+                return parseLoop(label);
+            if (isKeyword("WHILE"))
+                return parseWhile(label);
+            if (isKeyword("FOR"))
+                return parseFor(label);
             throw syntaxError(current(), "label can only be used before a block or loop");
         }
         if (isKeyword("DECLARE") || isKeyword("BEGIN"))
@@ -233,11 +224,11 @@ public class PlpgSqlParser {
         if (isKeyword("IF"))
             return parseIf();
         if (isKeyword("LOOP"))
-            return parseLoop();
+            return parseLoop(null);
         if (isKeyword("WHILE"))
-            return parseWhile();
+            return parseWhile(null);
         if (isKeyword("FOR"))
-            return parseFor();
+            return parseFor(null);
         if (isKeyword("EXIT"))
             return parseExit();
         if (isKeyword("CONTINUE"))
@@ -313,8 +304,9 @@ public class PlpgSqlParser {
         return node;
     }
 
-    private Loop parseLoop() {
+    private Loop parseLoop(String label) {
         Loop loop = new Loop(current().start);
+        loop.label = label;
         expectKeyword("LOOP");
         parseStatements(loop.statements);
         expectKeyword("END");
@@ -323,8 +315,9 @@ public class PlpgSqlParser {
         return loop;
     }
 
-    private While parseWhile() {
+    private While parseWhile(String label) {
         While loop = new While(current().start);
+        loop.label = label;
         expectKeyword("WHILE");
         loop.condition = captureExpression(new String[] { "LOOP" }, new String[0]);
         expectKeyword("LOOP");
@@ -335,8 +328,9 @@ public class PlpgSqlParser {
         return loop;
     }
 
-    private For parseFor() {
+    private For parseFor(String label) {
         For loop = new For(current().start);
+        loop.label = label;
         expectKeyword("FOR");
         Token variableToken = expectIdentifier();
         loop.variable = variableToken.value;
@@ -363,12 +357,12 @@ public class PlpgSqlParser {
         return loop;
     }
 
-    // END LOOP后面可以跟和开头相同的标签
+    // END LOOP后面可以跟和开头相同的标签，不匹配时按PostgreSQL的做法报语法错误
     private void parseLoopEndLabel(String label) {
         if (current().type == TokenType.IDENTIFIER) {
             String endLabel = current().value;
-            if (label != null && !label.equalsIgnoreCase(endLabel))
-                throw syntaxError(current(), "end label " + endLabel + " does not match " + label);
+            if (label == null || !label.equalsIgnoreCase(endLabel))
+                throw syntaxError(current(), "end label " + endLabel + " does not match");
             next();
         }
         if (isOp(";"))

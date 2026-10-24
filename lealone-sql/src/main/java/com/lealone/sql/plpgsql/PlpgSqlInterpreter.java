@@ -109,6 +109,11 @@ public class PlpgSqlInterpreter {
                 return ValueNull.INSTANCE;
             } catch (ReturnSignal signal) {
                 return signal.value;
+            } catch (ExitSignal signal) {
+                throw PlpgSqlException.raise("42601",
+                        "EXIT cannot be used outside a loop or labeled block");
+            } catch (ContinueSignal signal) {
+                throw PlpgSqlException.raise("42601", "CONTINUE cannot be used outside a loop");
             }
         } finally {
             scope = null;
@@ -166,11 +171,14 @@ public class PlpgSqlInterpreter {
             PlpgSqlVariable variable = new PlpgSqlVariable(declaration.name,
                     declaration.nameQuoted, declaration.constant, declaration.notNull);
             variable.setType(resolveType(declaration.typeName));
+            if (declaration.constant && declaration.defaultExpression == null)
+                throw PlpgSqlException.raise("42601",
+                        "constant " + declaration.name + " must have a default value");
+            // 默认值表达式在变量加入作用域之前求值，这样同名变量可以引用外层的
+            Value value = declaration.defaultExpression == null ? ValueNull.INSTANCE
+                    : sqlExecutor.evalExpression(declaration.defaultExpression, scope);
             scope.declare(variable);
-            if (declaration.defaultExpression != null) {
-                Value value = sqlExecutor.evalExpression(declaration.defaultExpression, scope);
-                variable.setInitialValue(value);
-            }
+            variable.setInitialValue(value);
         }
     }
 
@@ -290,8 +298,11 @@ public class PlpgSqlInterpreter {
         if (rows.isEmpty()) {
             if (selectInto.strict)
                 throw PlpgSqlException.noDataFound();
-            for (String target : selectInto.targets)
-                findVariable(target, false).setValue(ValueNull.INSTANCE);
+            for (String target : selectInto.targets) {
+                PlpgSqlVariable variable = findVariable(target, false);
+                variable.checkCanAssign();
+                variable.setValue(ValueNull.INSTANCE);
+            }
             return;
         }
         if (selectInto.strict && rows.size() > 1)
@@ -301,8 +312,11 @@ public class PlpgSqlInterpreter {
             throw PlpgSqlException.raise("42804",
                     "SELECT INTO has " + row.length + " columns but " + selectInto.targets.length
                             + " variables");
-        for (int i = 0; i < row.length; i++)
-            findVariable(selectInto.targets[i], false).setValue(row[i]);
+        for (int i = 0; i < row.length; i++) {
+            PlpgSqlVariable variable = findVariable(selectInto.targets[i], false);
+            variable.checkCanAssign();
+            variable.setValue(row[i]);
+        }
     }
 
     private void executePerform(Perform node) {
@@ -374,11 +388,9 @@ public class PlpgSqlInterpreter {
                     false, false);
             variable.setType(Value.INT);
             loopScope.declare(variable);
-            // REVERSE表示从end往start倒着数
-            int from = node.reverse ? end : start;
-            int to = node.reverse ? start : end;
+            // REVERSE表示从第一个表达式开始，每次减去步长，所以通常写成REVERSE n..1
             int delta = node.reverse ? -step : step;
-            for (int i = from; delta > 0 ? i <= to : i >= to; i += delta) {
+            for (int i = start; delta > 0 ? i <= end : i >= end; i += delta) {
                 variable.setValue(ValueInt.get(i));
                 try {
                     executeStatements(node.statements);
@@ -435,8 +447,6 @@ public class PlpgSqlInterpreter {
 
     private String formatMessage(Raise node) {
         String message = node.message == null ? "" : node.message;
-        if (node.arguments.isEmpty())
-            return message;
         StringBuilder buff = new StringBuilder(message.length());
         int argIndex = 0;
         for (int i = 0; i < message.length(); i++) {
@@ -449,12 +459,15 @@ public class PlpgSqlInterpreter {
                     Value value = sqlExecutor.evalExpression(node.arguments.get(argIndex++), scope);
                     buff.append(valueToString(value));
                 } else {
-                    buff.append('%');
+                    throw PlpgSqlException.raise("22023",
+                            "too few parameters specified for RAISE");
                 }
             } else {
                 buff.append(c);
             }
         }
+        if (argIndex < node.arguments.size())
+            throw PlpgSqlException.raise("22023", "too many parameters specified for RAISE");
         return buff.toString();
     }
 

@@ -10,7 +10,8 @@ import java.util.Map;
 
 /**
  * PL/pgSQL的变量作用域，嵌套块通过parent指针形成作用域链。
- * 没有加双引号的变量名大小写不敏感，加了双引号的按原样精确匹配。
+ * Lealone的标识符默认大小写不敏感，所以变量查找也按大小写不敏感处理，
+ * 加了双引号的变量优先按原样精确匹配。
  */
 public class PlpgSqlScope implements PlpgSqlVariableResolver {
 
@@ -26,6 +27,11 @@ public class PlpgSqlScope implements PlpgSqlVariableResolver {
     }
 
     public void declare(PlpgSqlVariable variable) {
+        for (PlpgSqlVariable old : variables.values()) {
+            if (old.getName().equalsIgnoreCase(variable.getName()))
+                throw PlpgSqlException.raise("42723",
+                        "duplicate declaration of variable " + variable.getName());
+        }
         variables.put(variable.getName(), variable);
     }
 
@@ -38,15 +44,19 @@ public class PlpgSqlScope implements PlpgSqlVariableResolver {
     }
 
     private PlpgSqlVariable findInThisScope(String name, boolean quoted) {
-        PlpgSqlVariable v = variables.get(name);
-        if (v != null && (quoted == v.isNameQuoted()))
-            return v;
-        if (!quoted) {
-            for (PlpgSqlVariable variable : variables.values()) {
-                if (!variable.isNameQuoted() && variable.getName().equalsIgnoreCase(name))
+        PlpgSqlVariable exactButDifferentQuote = null;
+        PlpgSqlVariable caseInsensitive = null;
+        for (PlpgSqlVariable variable : variables.values()) {
+            if (variable.getName().equals(name)) {
+                // 大小写和引号都一致时直接命中
+                if (quoted == variable.isNameQuoted())
                     return variable;
+                if (exactButDifferentQuote == null)
+                    exactButDifferentQuote = variable;
+            } else if (variable.getName().equalsIgnoreCase(name) && caseInsensitive == null) {
+                caseInsensitive = variable;
             }
         }
-        return null;
+        return exactButDifferentQuote != null ? exactButDifferentQuote : caseInsensitive;
     }
 }
