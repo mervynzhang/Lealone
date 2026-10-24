@@ -21,13 +21,11 @@
 # 重新统计 PG 语句数: mvn -o -pl lealone-test test -Dtest=PgRegressTest \
 #   -Dpg.srcdir=/path/to/postgres/src/test/regress/sql
 
-function_sql.leakproof	create_function_sql.sql:88-119	16	LEAKPROOF 属性和pg_proc.proleakproof已支持, 但缺少函数级权限模型(SET SESSION AUTHORIZATION/OWNER权限)和建函数的LEAKPROOF权限校验
 function_sql.or_replace_window	create_function_sql.sql:337-339	3	Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转
 function_sql.setof_inline	create_function_sql.sql:353-376	10	select列表里的setof展开已支持, 但SQL函数的SETOF体不会内联进执行计划(EXPLAIN只有函数表), 且脚本无法断言多行计划文本
 function_sql.partition_ops	create_function_sql.sql:449-461	6	Lealone 无 CREATE OPERATOR CLASS/分区操作符类
 procedure.call_random	create_procedure.sql:2-2	1	Lealone 的 CALL 不区分函数与过程
 procedure.psql_meta	create_procedure.sql:14-21	1	Lealone客户端没有psql元命令(\df); pg_get_functiondef()本身已支持
 procedure.call_function	create_procedure.sql:236-237	2	Lealone 的 CALL 不区分函数与过程
-procedure.privileges	create_procedure.sql:258-267	10	GRANT/REVOKE EXECUTE ON PROCEDURE 的解析已支持, 但 Lealone 无 SET ROLE/PUBLIC 角色, 过程权限也不参与调用检查
 procedure.routine_syntax	create_procedure.sql:272-278	5	Lealone 不支持 ALTER ROUTINE/DROP ROUTINE(ALTER PROCEDURE/DROP PROCEDURE 已支持)
 procedure.out_params_named	create_procedure.sql:199-212	8	不支持命名 OUT 参数占位(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150)

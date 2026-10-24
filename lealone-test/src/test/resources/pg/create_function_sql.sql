@@ -236,20 +236,56 @@ select proname, prosecdef from information_schema.pg_proc
 
 -- @case function_sql.leakproof
 -- @pg create_function_sql.sql:88-119
--- 缺失: Lealone 不支持 LEAKPROOF 属性和 GRANT/SET ROLE 权限语义
+-- 适配: Lealone 没有 pg_proc/regproc, 改用 INFORMATION_SCHEMA.PG_PROC 的 PROLEAKPROOF 列;
+--       PG 里"关掉LEAKPROOF不需要超级用户", Lealone 的CREATE/ALTER FUNCTION整体要求admin,
+--       所以这里只断言非admin建LEAKPROOF函数报 90040(比PG更严)
 create function functest_E_1(a int) returns boolean language 'sql'
     as 'select a > 100';
+> update count: 0
+
 create function functest_E_2(a int) returns boolean language 'sql'
     leakproof as 'select a > 100';
-select proname, proleakproof from pg_proc
-       where oid in ('functest_E_1'::regproc,
-                     'functest_E_2'::regproc) order by proname;
+> update count: 0
+
+select proname, proleakproof from information_schema.pg_proc
+       where proname in ('FUNCTEST_E_1', 'FUNCTEST_E_2') order by proname;
+> PRONAME      PROLEAKPROOF
+> ------------ ------------
+> FUNCTEST_E_1 FALSE
+> FUNCTEST_E_2 TRUE
+> rows: 2
+
+alter function functest_E_1(int) leakproof;
+> update count: 0
+
 alter function functest_E_2(int) not leakproof;
+> update count: 0
+
+select proname, proleakproof from information_schema.pg_proc
+       where proname in ('FUNCTEST_E_1', 'FUNCTEST_E_2') order by proname;
+> PRONAME      PROLEAKPROOF
+> ------------ ------------
+> FUNCTEST_E_1 TRUE
+> FUNCTEST_E_2 FALSE
+> rows: 2
+
+-- 非admin不能建LEAKPROOF函数(PG里报42501, Lealone整体要求admin, 报90040)
+-- 适配: PG 的 setup 段建的 regress_unpriv_user 在 Lealone 里要带 PASSWORD
+create user regress_unpriv_user password 'p';
+> update count: 0
+
 set session authorization regress_unpriv_user;
+> update count: 0
+
 create function functest_E_3(a int) returns boolean language 'sql'
-    leakproof as 'select a < 200';  -- PG 里这一步没有超级用户权限, 报错
+    leakproof as 'select a < 200';
+> exception 90040
+
 reset session authorization;
--- PG 期望: e_1=f, e_2=t, 再 f; 建 functest_E_3 报 42501
+> update count: 0
+
+drop user regress_unpriv_user;
+> update count: 0
 
 -- ---------------------------------------------------------------------------
 -- CALLED ON NULL INPUT | RETURNS NULL ON NULL INPUT | STRICT
