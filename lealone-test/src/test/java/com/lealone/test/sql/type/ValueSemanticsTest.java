@@ -165,7 +165,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
     // BUG: ROUND 对 DECIMAL 入参先转成 DOUBLE，丢掉标度并按二进制浮点舍入。
     // 期望: ROUND(CAST(1.005 AS DECIMAL(10,3)), 2) = 1.01（H2 返回 NUMERIC(3,2) 1.01）；
     // 实际: 1.0（结果类型 DOUBLE）。
-    @Ignore("BUG: ROUND(DECIMAL, n) converts to DOUBLE, 1.005 -> 1.0 instead of 1.01")
     @Test
     public void roundOnDecimalKeepsDecimalSemantics() {
         assertQueryEquals(new BigDecimal("1.01"),
