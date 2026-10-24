@@ -19,14 +19,15 @@ public class ScriptTest extends SqlTestBase {
     public void run() {
         executeUpdate("create table IF NOT EXISTS ScriptTest(id int)");
         // 生成各种Create SQL，此命令返回结果集，所以要用executeQuery
-        sql = "SCRIPT SIMPLE NODATA NOPASSWORDS NOSETTINGS TO 'my_script_test.sql' TABLE ScriptTest";
+        String absFile = new java.io.File("target/test-data/my_script_test.sql").getAbsolutePath();
+        new java.io.File(absFile).getParentFile().mkdirs();
+        sql = "SCRIPT SIMPLE NODATA NOPASSWORDS NOSETTINGS TO '" + absFile + "' TABLE ScriptTest";
         printResultSet();
 
         executeUpdate("drop table ScriptTest");
-        executeUpdate("RUNSCRIPT FROM 'my_script_test.sql'");
+        executeUpdate("RUNSCRIPT FROM '" + absFile + "'");
 
         executeUpdate("drop table ScriptTest");
-        String fileName = "./target/test-data/script_directory/my_script_test.sql";
-        executeUpdate("RUNSCRIPT FROM '" + fileName + "'");
+        executeUpdate("RUNSCRIPT FROM '" + absFile + "'");
     }
 }
