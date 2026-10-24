@@ -163,7 +163,7 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
                     && IndexOperator.getCurrentOperation() != null) {
                 IndexOperation rio = IndexOperator.createRIO(row.getKey(), oldColumns);
                 rio.setTransaction(IndexOperator.getCurrentOperation().getTransaction());
-                IndexOperator.addIndexOperation(session, table, rio);
+                IndexOperator.addIndexOperation(session, table, this, rio);
             }
             onComplete(handler);
             return;
