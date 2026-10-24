@@ -19,6 +19,7 @@ import com.lealone.common.util.StatementBuilder;
 import com.lealone.common.util.StringUtils;
 import com.lealone.db.Constants;
 import com.lealone.db.api.ErrorCode;
+import com.lealone.db.auth.User;
 import com.lealone.db.result.SimpleResultSet;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.DataType;
@@ -539,7 +540,7 @@ public class SqlFunction extends FunctionAlias {
      * PL/pgSQL等过程式语言由子类覆盖这个方法。
      */
     protected Value executeFunction(ServerSession session, Value[] values) {
-        Connection conn = session.createNestedConnection(false);
+        Connection conn = createNestedConnection(session);
         try {
             // 函数体里的表名按调用方当前的schema解析
             String schemaName = session.getCurrentSchemaName();
@@ -573,6 +574,28 @@ public class SqlFunction extends FunctionAlias {
         } catch (SQLException e) {
             throw DbException.convert(e);
         }
+    }
+
+    /**
+     * SECURITY DEFINER的函数体以属主的身份执行(属主默认是创建者)，其它情况还是以调用者的身份执行。
+     */
+    protected Connection createNestedConnection(ServerSession session) {
+        if (securityDefiner) {
+            return session.createNestedConnection(getOwnerUser(session), false);
+        }
+        return session.createNestedConnection(false);
+    }
+
+    protected ServerSession createNestedSession(ServerSession session) {
+        if (securityDefiner) {
+            return session.createNestedSession(getOwnerUser(session));
+        }
+        return session.createNestedSession();
+    }
+
+    private User getOwnerUser(ServerSession session) {
+        String owner = ownerName != null ? ownerName : session.getUser().getName();
+        return session.getDatabase().getUser(session, owner);
     }
 
     /**

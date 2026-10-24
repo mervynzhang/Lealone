@@ -35,8 +35,9 @@ public class PlpgSqlFunction extends SqlFunction {
     @Override
     protected Value executeFunction(ServerSession session, Value[] values) {
         PlpgSqlAst.Block block = getCompiledBody();
-        // 函数体内的SQL在独立的嵌套会话里执行，事务以当前会话的事务为父事务
-        ServerSession nestedSession = session.createNestedSession();
+        // 函数体内的SQL在独立的嵌套会话里执行，事务以当前会话的事务为父事务；
+        // SECURITY DEFINER时这个嵌套会话用的是属主身份
+        ServerSession nestedSession = createNestedSession(session);
         String schemaName = session.getCurrentSchemaName();
         if (schemaName != null && !Constants.SCHEMA_MAIN.equals(schemaName))
             nestedSession.setCurrentSchemaName(schemaName);

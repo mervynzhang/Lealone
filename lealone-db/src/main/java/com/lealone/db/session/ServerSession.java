@@ -1024,10 +1024,21 @@ public class ServerSession extends SessionBase implements InternalSession {
      * @return the nested connection
      */
     public Connection createNestedConnection(boolean columnList) {
+        return createNestedConnection(getUser(), columnList);
+    }
+
+    /**
+     * 以指定用户的身份创建嵌套连接。SECURITY DEFINER的函数用属主的身份执行函数体。
+     *
+     * @param user 嵌套会话使用的用户
+     * @param columnList if the url should be 'jdbc:lealone:columnlist:connection'
+     * @return the nested connection
+     */
+    public Connection createNestedConnection(User user, boolean columnList) {
         String url = columnList ? Constants.CONN_URL_COLUMNLIST : Constants.CONN_URL_INTERNAL;
         // 使用新session
-        ServerSession session = createNestedSession(false);
-        Connection conn = createConnection(session, getUser().getName(), url);
+        ServerSession session = createNestedSession(user, false);
+        Connection conn = createConnection(session, user.getName(), url);
         if (nestedConnections == null) {
             nestedConnections = new ArrayList<>();
         }
@@ -1051,8 +1062,16 @@ public class ServerSession extends SessionBase implements InternalSession {
         return createNestedSession(true);
     }
 
+    public ServerSession createNestedSession(User user) {
+        return createNestedSession(user, true);
+    }
+
     private ServerSession createNestedSession(boolean add) {
-        ServerSession session = database.createSession(getUser(), getScheduler());
+        return createNestedSession(getUser(), add);
+    }
+
+    private ServerSession createNestedSession(User user, boolean add) {
+        ServerSession session = database.createSession(user, getScheduler());
         session.setAutoCommit(isAutoCommit());
         if (add) {
             if (nestedSessions == null) {

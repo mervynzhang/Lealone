@@ -184,6 +184,10 @@ public class CreateSqlFunction extends SchemaStatement {
         function.setCost(attributes.getCost());
         function.setRows(attributes.getRows());
         function.setOwnerName(attributes.getOwner());
+        // SECURITY DEFINER时属主默认是创建者，要持久化下来，重启后才能继续以属主身份执行
+        if (function.isSecurityDefiner() && function.getOwnerName() == null) {
+            function.setOwnerName(session.getUser().getName());
+        }
         for (String[] item : attributes.getConfigItems()) {
             function.addConfigItem(item[0], item[1]);
         }

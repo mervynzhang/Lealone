@@ -116,6 +116,10 @@ public class AlterSqlFunction extends SchemaStatement {
             return 0;
         }
         applyAttributes(sqlFunction);
+        if (sqlFunction.isSecurityDefiner() && sqlFunction.getOwnerName() == null) {
+            // SECURITY DEFINER时属主默认是执行ALTER的用户
+            sqlFunction.setOwnerName(session.getUser().getName());
+        }
         if (ownerName != null) {
             // 属主用户必须存在；属主只记录不生效，Lealone没有函数属主/权限模型
             db.getUser(session, ownerName);
