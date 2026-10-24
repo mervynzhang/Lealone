@@ -269,12 +269,48 @@ public class CreateSqlFunction extends SchemaStatement {
         }
     }
 
+    // 只有入参参与函数签名，OUT参数不影响重载
+    private int[] getInputParameterTypeIds() {
+        int count = 0;
+        for (int mode : parameterModes) {
+            if (mode != SqlFunction.PARAM_OUT) {
+                count++;
+            }
+        }
+        int[] types = new int[count];
+        int i = 0;
+        for (int p = 0; p < parameterModes.length; p++) {
+            if (parameterModes[p] != SqlFunction.PARAM_OUT) {
+                types[i++] = parameterTypeIds[p];
+            }
+        }
+        return types;
+    }
+
+    // 找出名字和参数类型都相同的函数，也就是会被这次CREATE替换掉的那个重载
+    private FunctionAlias findSameSignature() {
+        int[] types = getInputParameterTypeIds();
+        for (FunctionAlias f : schema.findFunctions(session, functionName)) {
+            if (f instanceof SqlFunction && ((SqlFunction) f).matchesSignature(types)) {
+                return f;
+            }
+        }
+        return null;
+    }
+
+    // 名字已经被Java别名占用时不能再建同名函数
+    private boolean isNameUsedByAlias() {
+        FunctionAlias f = schema.findFunction(session, functionName);
+        return f != null && !(f instanceof SqlFunction);
+    }
+
     @Override
     public int update() {
         session.getUser().checkAdmin();
         boolean plpgsql = PlpgSqlFunction.LANGUAGE.equalsIgnoreCase(language);
-        // 已经有同名函数并且加了IF NOT EXISTS时什么都不用做
-        if (!plpgsql && ifNotExists && schema.findFunction(session, functionName) != null)
+        // 已经有同签名的函数或者名字被别名占用，并且加了IF NOT EXISTS时什么都不用做；
+        // 参数类型不同的重载不受影响，仍然要创建
+        if (!plpgsql && ifNotExists && (findSameSignature() != null || isNameUsedByAlias()))
             return 0;
         // 先校验语言和函数体，非法时不改动已有的函数
         if (plpgsql) {
@@ -293,7 +329,12 @@ public class CreateSqlFunction extends SchemaStatement {
         if (lock == null)
             return -1;
 
-        FunctionAlias old = schema.findFunction(session, functionName);
+        // 只替换参数类型相同的重载，其它重载保持不变
+        FunctionAlias old = findSameSignature();
+        if (old == null && isNameUsedByAlias()) {
+            // 名字被Java别名占用时保持原来的行为: 不加OR REPLACE就报已存在
+            old = schema.findFunction(session, functionName);
+        }
         if (old != null) {
             if (ifNotExists) {
                 return 0;

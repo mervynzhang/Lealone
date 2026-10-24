@@ -5,6 +5,8 @@
  */
 package com.lealone.sql.ddl;
 
+import java.util.ArrayList;
+
 import com.lealone.common.exceptions.DbException;
 import com.lealone.db.DbObjectType;
 import com.lealone.db.api.ErrorCode;
@@ -57,19 +59,38 @@ public class DropFunctionAlias extends SchemaStatement {
         if (lock == null)
             return -1;
 
-        FunctionAlias functionAlias = schema.findFunction(session, aliasName);
-        if (functionAlias == null) {
+        ArrayList<FunctionAlias> list = schema.findFunctions(session, aliasName);
+        if (list.isEmpty()) {
             if (!ifExists) {
                 throw DbException.get(ErrorCode.FUNCTION_ALIAS_NOT_FOUND_1, aliasName);
             }
-        } else if (functionAlias instanceof SqlFunction
-                && !((SqlFunction) functionAlias).matchesSignature(argumentTypeIds)) {
-            // 不支持按参数类型重载，类型对不上就等于函数不存在
-            if (!ifExists) {
-                throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1,
-                        ((SqlFunction) functionAlias).getSignature());
+            return 0;
+        }
+        FunctionAlias functionAlias = null;
+        if (argumentTypeIds == null) {
+            // 多个重载时没写参数类型就不知道删哪一个，和PostgreSQL一样报歧义
+            if (list.size() > 1) {
+                throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, aliasName);
             }
+            functionAlias = list.get(0);
         } else {
+            for (FunctionAlias f : list) {
+                if (f instanceof SqlFunction) {
+                    if (((SqlFunction) f).matchesSignature(argumentTypeIds)) {
+                        functionAlias = f;
+                        break;
+                    }
+                } else {
+                    // CREATE ALIAS建的Java函数不看参数类型，和以前一样直接删
+                    functionAlias = f;
+                    break;
+                }
+            }
+            if (functionAlias == null && !ifExists) {
+                throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, aliasName);
+            }
+        }
+        if (functionAlias != null) {
             schema.remove(session, functionAlias, lock);
         }
         return 0;

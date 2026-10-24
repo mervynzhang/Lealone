@@ -657,9 +657,25 @@ public class SqlFunction extends FunctionAlias {
         return Double.toString(value);
     }
 
+    // 同名函数可能有多个重载，DROP语句必须写上参数类型，否则SCRIPT回放时删不掉指定的重载
     @Override
     public String getDropSQL() {
-        return "DROP FUNCTION IF EXISTS " + getSQL();
+        return "DROP FUNCTION IF EXISTS " + getSQL() + '(' + getInputParameterTypesSQL() + ')';
+    }
+
+    // DROP FUNCTION name(types)里的参数类型列表，空列表表示没有参数
+    private String getInputParameterTypesSQL() {
+        StatementBuilder buff = new StatementBuilder();
+        for (int i = 0; i < inputParameterCount; i++) {
+            int index = inputIndexes[i];
+            buff.appendExceptFirst(", ");
+            if (parameterTypes != null && index < parameterTypes.length) {
+                buff.append(parameterTypes[index]);
+            } else {
+                buff.append(DataType.getDataType(parameterTypeIds[index]).name);
+            }
+        }
+        return buff.toString();
     }
 
     @Override

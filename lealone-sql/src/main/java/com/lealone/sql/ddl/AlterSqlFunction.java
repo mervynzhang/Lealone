@@ -5,6 +5,8 @@
  */
 package com.lealone.sql.ddl;
 
+import java.util.ArrayList;
+
 import com.lealone.common.exceptions.DbException;
 import com.lealone.db.Database;
 import com.lealone.db.DbObjectType;
@@ -80,6 +82,31 @@ public class AlterSqlFunction extends SchemaStatement {
         this.resetAll = resetAll;
     }
 
+    // 按名字和参数类型找要修改的函数，有重载时必须写参数类型
+    private FunctionAlias findFunction() {
+        ArrayList<FunctionAlias> list = schema.findFunctions(session, functionName);
+        if (list.isEmpty()) {
+            return null;
+        }
+        if (argumentTypeIds == null) {
+            if (list.size() > 1) {
+                throw DbException.get(ErrorCode.AMBIGUOUS_FUNCTION_NAME_1, functionName);
+            }
+            return list.get(0);
+        }
+        for (FunctionAlias f : list) {
+            if (f instanceof SqlFunction) {
+                if (((SqlFunction) f).matchesSignature(argumentTypeIds)) {
+                    return f;
+                }
+            } else if (list.size() == 1) {
+                // CREATE ALIAS建的Java函数不看参数类型
+                return f;
+            }
+        }
+        return null;
+    }
+
     @Override
     public int update() {
         session.getUser().checkAdmin();
@@ -87,7 +114,7 @@ public class AlterSqlFunction extends SchemaStatement {
         if (lock == null)
             return -1;
 
-        FunctionAlias function = schema.findFunction(session, functionName);
+        FunctionAlias function = findFunction();
         if (function == null) {
             if (ifExists) {
                 return 0;
@@ -100,12 +127,6 @@ public class AlterSqlFunction extends SchemaStatement {
                     "ALTER FUNCTION on Java alias: " + functionName);
         }
         SqlFunction sqlFunction = (SqlFunction) function;
-        if (!sqlFunction.matchesSignature(argumentTypeIds)) {
-            if (ifExists) {
-                return 0;
-            }
-            throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, sqlFunction.getSignature());
-        }
         Database db = session.getDatabase();
         if (newName != null) {
             if (schema.findFunction(session, newName) != null) {
