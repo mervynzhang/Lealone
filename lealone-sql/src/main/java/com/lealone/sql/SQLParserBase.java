@@ -5466,17 +5466,39 @@ public class SQLParserBase implements SQLParser {
         command.setAliasName(functionName);
         ifExists = readIfExists(ifExists);
         command.setIfExists(ifExists);
-        // 不支持按参数类型重载，参数类型列表读出来直接忽略
-        if (readIf("(")) {
-            while (currentTokenType != CLOSE) {
-                if (currentTokenType == END) {
-                    throw getSyntaxError();
-                }
-                read();
-            }
-            read();
-        }
+        // 不支持按参数类型重载，但参数类型列表要参与签名校验
+        command.setArgumentTypeIds(parseFunctionArgumentTypeList());
         return command;
+    }
+
+    /**
+     * 读取DROP FUNCTION/ALTER FUNCTION里可选的参数类型列表，没写时返回null。
+     * 不支持重载，这里只取类型用于校验签名，参数模式(IN/OUT/INOUT/VARIADIC)忽略。
+     */
+    protected int[] parseFunctionArgumentTypeList() {
+        if (!readIf("(")) {
+            return null;
+        }
+        ArrayList<Integer> typeIds = Utils.newSmallArrayList();
+        if (!readIf(")")) {
+            do {
+                readIf("IN");
+                readIf("OUT");
+                readIf("INOUT");
+                readIf("VARIADIC");
+                Column column = parseColumnWithType(null);
+                int type = column.getType();
+                if (readIf("[")) {
+                    read("]");
+                    type = Value.ARRAY;
+                } else if (readIf("ARRAY")) {
+                    type = Value.ARRAY;
+                }
+                typeIds.add(type);
+            } while (readIf(","));
+            read(")");
+        }
+        return toIntArray(typeIds);
     }
 
     protected Query parseWith() {

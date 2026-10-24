@@ -11,6 +11,7 @@ import com.lealone.db.api.ErrorCode;
 import com.lealone.db.lock.DbObjectLock;
 import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
+import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.session.ServerSession;
 import com.lealone.sql.SQLStatement;
 
@@ -25,6 +26,8 @@ public class DropFunctionAlias extends SchemaStatement {
 
     private String aliasName;
     private boolean ifExists;
+    // DROP FUNCTION name(types)里的参数类型，null表示没写
+    private int[] argumentTypeIds;
 
     public DropFunctionAlias(ServerSession session, Schema schema) {
         super(session, schema);
@@ -43,6 +46,10 @@ public class DropFunctionAlias extends SchemaStatement {
         this.ifExists = ifExists;
     }
 
+    public void setArgumentTypeIds(int[] argumentTypeIds) {
+        this.argumentTypeIds = argumentTypeIds;
+    }
+
     @Override
     public int update() {
         session.getUser().checkAdmin();
@@ -54,6 +61,13 @@ public class DropFunctionAlias extends SchemaStatement {
         if (functionAlias == null) {
             if (!ifExists) {
                 throw DbException.get(ErrorCode.FUNCTION_ALIAS_NOT_FOUND_1, aliasName);
+            }
+        } else if (functionAlias instanceof SqlFunction
+                && !((SqlFunction) functionAlias).matchesSignature(argumentTypeIds)) {
+            // 不支持按参数类型重载，类型对不上就等于函数不存在
+            if (!ifExists) {
+                throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1,
+                        ((SqlFunction) functionAlias).getSignature());
             }
         } else {
             schema.remove(session, functionAlias, lock);
