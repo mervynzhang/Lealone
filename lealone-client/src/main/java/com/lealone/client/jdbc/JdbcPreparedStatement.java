@@ -111,7 +111,7 @@ public class JdbcPreparedStatement extends JdbcStatement implements PreparedStat
 
     private JdbcFuture<ResultSet> executeQueryInternal(boolean async) {
         Value[] values = toValues();
-        return conn.executeJdbcTask(async, this, ac -> {
+        return executeTask(async, ac -> {
             int id = getNextTraceId(TraceObjectType.RESULT_SET);
             if (isDebugEnabled()) {
                 debugCodeAssign(TraceObjectType.RESULT_SET, id,
@@ -178,7 +178,7 @@ public class JdbcPreparedStatement extends JdbcStatement implements PreparedStat
     }
 
     private JdbcFuture<Integer> executeUpdateInternal(Value[] parameterValues, boolean async) {
-        return conn.executeJdbcTask(async, this, ac -> {
+        return executeTask(async, ac -> {
             checkAndClose();
             setExecutingStatement(command);
             command.executeUpdate(parameterValues).onComplete(ar -> {
