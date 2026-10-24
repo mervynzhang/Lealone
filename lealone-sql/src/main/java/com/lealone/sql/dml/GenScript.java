@@ -260,6 +260,16 @@ public class GenScript extends ScriptBase {
                 }
                 add(obj.getCreateSQL(), false);
             }
+            // 存储过程也要出现在脚本里, 否则SCRIPT/RUNSCRIPT和备份都会丢掉过程定义
+            for (SchemaObject obj : db.getAllSchemaObjects(DbObjectType.PROCEDURE)) {
+                if (excludeSchema(obj.getSchema())) {
+                    continue;
+                }
+                if (drop) {
+                    add(obj.getDropSQL(), false);
+                }
+                add(obj.getCreateSQL(), false);
+            }
             for (SchemaObject obj : db.getAllSchemaObjects(DbObjectType.SEQUENCE)) {
                 if (excludeSchema(obj.getSchema())) {
                     continue;
