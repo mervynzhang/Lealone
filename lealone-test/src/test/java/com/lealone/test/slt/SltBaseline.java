@@ -13,9 +13,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -101,13 +104,38 @@ public final class SltBaseline {
         return rules;
     }
 
-    /** Format: {@code file <TAB> expected_non_allowlisted_failures [<TAB> observed_total]}. */
-    public static Map<String, Integer> loadBaseline(Path file) throws IOException {
+    /**
+     * Baseline 内容: 每个文件的失败个数(给报表用) + 未允许失败的 key 集合(给门禁用)。
+     * <p>
+     * 只比个数时, 同一个文件里"修好一条、又坏掉另一条"会因为个数相抵而判为 OK(假绿);
+     * 比 key 集合就能发现新增的失败。
+     */
+    public static final class Baseline {
+        public final Map<String, Integer> counts = new LinkedHashMap<>();
+        public final Map<String, Set<String>> keys = new LinkedHashMap<>();
+
+        public int countOf(String file) {
+            Integer c = counts.get(file);
+            return c == null ? 0 : c;
+        }
+
+        public Set<String> keysOf(String file) {
+            Set<String> s = keys.get(file);
+            return s == null ? Collections.emptySet() : s;
+        }
+    }
+
+    /**
+     * 格式(v2): {@code file <TAB> path <TAB> count [<TAB> observed]} 与
+     * {@code fail <TAB> path <TAB> key [<TAB> subtype <TAB> line <TAB> sql(仅供参考)]}。
+     * 旧格式(只有 file 行)仍然兼容: 这时按个数比较。
+     */
+    public static Baseline loadBaseline(Path file) throws IOException {
         return loadBaseline(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
     }
 
-    public static Map<String, Integer> loadBaseline(String text) throws IOException {
-        Map<String, Integer> m = new LinkedHashMap<>();
+    public static Baseline loadBaseline(String text) throws IOException {
+        Baseline b = new Baseline();
         try (Reader r = new StringReader(text)) {
             BufferedReader br = new BufferedReader(r);
             String line;
@@ -117,16 +145,33 @@ public final class SltBaseline {
                 if (line.trim().isEmpty() || line.trim().startsWith("#"))
                     continue;
                 String[] p = line.split("\t");
-                if (p.length < 2)
-                    throw new IOException("bad baseline line " + n + " (need file<TAB>count): " + line);
-                try {
-                    m.put(p[0].trim(), Integer.parseInt(p[1].trim()));
-                } catch (NumberFormatException e) {
-                    throw new IOException("bad baseline count on line " + n + ": " + line);
+                String tag = p[0].trim();
+                if (tag.equals("fail")) {
+                    if (p.length < 3)
+                        throw new IOException("bad baseline fail line " + n + ": " + line);
+                    b.keys.computeIfAbsent(p[1].trim(), k -> new TreeSet<>()).add(p[2].trim());
+                } else if (tag.equals("file")) {
+                    if (p.length < 3)
+                        throw new IOException("bad baseline file line " + n + ": " + line);
+                    try {
+                        b.counts.put(p[1].trim(), Integer.parseInt(p[2].trim()));
+                    } catch (NumberFormatException e) {
+                        throw new IOException("bad baseline count on line " + n + ": " + line);
+                    }
+                } else {
+                    // 旧格式: <file><TAB><count>[<TAB><observed>], 按个数比较
+                    if (p.length < 2)
+                        throw new IOException("bad baseline line " + n
+                                + " (need file<TAB>count): " + line);
+                    try {
+                        b.counts.put(tag, Integer.parseInt(p[1].trim()));
+                    } catch (NumberFormatException e) {
+                        throw new IOException("bad baseline count on line " + n + ": " + line);
+                    }
                 }
             }
         }
-        return m;
+        return b;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -135,7 +180,7 @@ public final class SltBaseline {
 
     /** Marks allowlisted failures, counts unexpected ones and compares them with the baseline. */
     public static void classify(List<SltRunner.FileResult> results, List<Rule> rules,
-            Map<String, Integer> baseline) {
+            Baseline baseline) {
         for (SltRunner.FileResult r : results) {
             r.allowlisted = 0;
             r.gatedFail = 0;
@@ -154,9 +199,31 @@ public final class SltBaseline {
                 }
             }
             r.unexpected = r.gatedFail - r.allowlisted;
-            Integer b = baseline.get(r.file);
-            r.baseline = b == null ? 0 : b;
-            r.delta = r.unexpected - r.baseline;
+            r.unexpectedKeys.clear();
+            for (SltRunner.Failure f : r.failures)
+                if (f.gated() && f.allowRule.isEmpty())
+                    r.unexpectedKeys.add(f.key());
+            r.baseline = baseline.countOf(r.file);
+            Set<String> baseKeys = baseline.keysOf(r.file);
+            r.baselineByCountOnly = baseKeys.isEmpty() && r.baseline > 0;
+            r.baselineKeys.clear();
+            r.baselineKeys.addAll(baseKeys);
+            r.newKeys.clear();
+            r.staleKeys.clear();
+            if (r.baselineByCountOnly) {
+                // 旧格式(只有个数): 只能按个数比较
+                r.delta = r.unexpected - r.baseline;
+            } else {
+                for (String k : r.unexpectedKeys)
+                    if (!baseKeys.contains(k))
+                        r.newKeys.add(k);
+                for (String k : baseKeys)
+                    if (!r.unexpectedKeys.contains(k))
+                        r.staleKeys.add(k);
+                r.delta = r.newKeys.size();
+                if (r.delta == 0 && !r.staleKeys.isEmpty())
+                    r.delta = -r.staleKeys.size();
+            }
             if (r.timeout)
                 r.status = "TIMEOUT";
             else if (!r.setupError.isEmpty())
@@ -176,7 +243,7 @@ public final class SltBaseline {
         sb.append(String.format("%-42s %8s %8s %6s %7s %7s %6s %6s  %s%n", "file", "queries",
                 "pass", "fail", "allowed", "unexp", "base", "delta", "status"));
         sb.append("-".repeat(110)).append('\n');
-        int queries = 0, pass = 0, fail = 0, allowed = 0, unexp = 0, base = 0;
+        int queries = 0, pass = 0, fail = 0, allowed = 0, unexp = 0, base = 0, deltaSum = 0;
         for (SltRunner.FileResult r : results) {
             queries += r.qTotal;
             pass += r.qPass;
@@ -184,6 +251,7 @@ public final class SltBaseline {
             allowed += r.allowlisted;
             unexp += r.unexpected;
             base += r.baseline;
+            deltaSum += r.delta;
             sb.append(String.format("%-42s %8d %8d %6d %7d %7d %6d %+6d  %s%n",
                     shorten(r.file, 42), r.qTotal, r.qPass, r.gatedFail, r.allowlisted, r.unexpected,
                     r.baseline, r.delta, r.status));
@@ -194,9 +262,11 @@ public final class SltBaseline {
             }
         }
         sb.append("-".repeat(110)).append('\n');
+        // 汇总必须用"每文件 delta 之和": 按签名比较时, 一个文件的失败被另一个文件的修复抵消,
+        // 用 unexp-base 会算成 0 而误报 PASS(端到端红对照就是在这一点上暴露的)
         sb.append(String.format("%-42s %8d %8d %6d %7d %7d %6d %+6d  %s%n", "TOTAL", queries, pass, fail,
-                allowed, unexp, base, unexp - base,
-                unexp - base == 0 ? "PASS" : (unexp - base > 0 ? "FAIL" : "STALE")));
+                allowed, unexp, base, deltaSum,
+                deltaSum == 0 ? "PASS" : (deltaSum > 0 ? "FAIL" : "STALE")));
         return sb.toString();
     }
 
@@ -211,10 +281,15 @@ public final class SltBaseline {
         else if (!r.setupError.isEmpty())
             reason = "setup error: " + r.setupError;
         else if (r.delta > 0)
-            reason = "unexpected failures = " + r.unexpected + ", baseline = " + r.baseline;
+            reason = r.newKeys.isEmpty()
+                    ? "unexpected failures = " + r.unexpected + ", baseline = " + r.baseline
+                    : "new failure signature(s) not in the baseline: " + r.newKeys.size();
         else if (r.delta < 0)
-            reason = "fewer failures than the baseline (" + r.unexpected + " < " + r.baseline
-                    + "), the bug may be fixed: update baseline.txt";
+            reason = r.baselineByCountOnly
+                    ? "fewer failures than the baseline (" + r.unexpected + " < " + r.baseline
+                            + "), the bug may be fixed: update baseline.txt"
+                    : "baseline signature(s) no longer failing: " + r.staleKeys.size()
+                            + ", update baseline.txt";
         if (reason == null)
             return "";
         StringBuilder sb = new StringBuilder();
@@ -282,17 +357,28 @@ public final class SltBaseline {
     public static String renderBaseline(List<SltRunner.FileResult> results) {
         StringBuilder sb = new StringBuilder();
         sb.append("# sqllogictest baseline for the Lealone build.\n");
-        sb.append("# Columns: file <TAB> expected non-allowlisted QUERY failures <TAB>");
-        sb.append(" observed total query failures (informational).\n");
+        sb.append("# Format:\n");
+        sb.append("#   file <TAB> path <TAB> expected non-allowlisted failures [<TAB> observed]\n");
+        sb.append("#   fail <TAB> path <TAB> key [<TAB> subtype <TAB> line <TAB> sql(only for reading)]\n");
+        sb.append("# The 'fail' lines are what the gate compares, so replacing one failure with another\n");
+        sb.append("# in the same file is detected even when the per-file count stays the same.\n");
         sb.append("# Regenerate with: mvn -o test -pl lealone-test -Pslt -Dtest=SltTest");
         sb.append(" -Dslt.updateBaseline=true\n");
-        sb.append("# Only query failures are gated; 'statement' records are executed but never counted.\n");
         for (SltRunner.FileResult r : results) {
             if (r.timeout || !r.setupError.isEmpty())
                 sb.append("# WARNING: run did not complete cleanly for this file: ")
                         .append(r.timeout ? "timeout" : r.setupError).append('\n');
-            sb.append(r.file).append('\t').append(r.unexpected).append('\t').append(r.gatedFail)
-                    .append('\n');
+            List<SltRunner.Failure> unexpected = new ArrayList<>();
+            for (SltRunner.Failure f : r.failures)
+                if (f.gated() && f.allowRule.isEmpty())
+                    unexpected.add(f);
+            sb.append("file\t").append(r.file).append('\t').append(unexpected.size()).append('\t')
+                    .append(r.gatedFail).append('\n');
+            unexpected.sort((x, y) -> x.key().compareTo(y.key()));
+            for (SltRunner.Failure f : unexpected)
+                sb.append("fail\t").append(r.file).append('\t').append(f.key()).append('\t')
+                        .append(f.subtype).append('\t').append(f.line).append('\t')
+                        .append(abbrev(f.sql, 120).replace('\t', ' ').replace('\n', ' ')).append('\n');
         }
         return sb.toString();
     }
