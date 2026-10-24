@@ -1784,7 +1784,7 @@ public class Database extends DbObjectBase implements DataHandler {
     }
 
     public void backupTo(String fileName, String baseBackupFile) {
-        checkpoint();
+        checkpoint(true); // 备份要等脏页写完，否则备份出来的文件可能不是一致快照
         String baseDir = getStoragePath().replace('\\', '/');
         baseDir = baseDir.substring(0, baseDir.lastIndexOf('/'));
         BackupManifest baseManifest = null;
