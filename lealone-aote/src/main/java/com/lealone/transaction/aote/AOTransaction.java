@@ -343,8 +343,12 @@ public class AOTransaction implements Transaction {
 
     @Override
     public void rollback() {
+        // 已经提交或回滚过了，重复回滚当作空操作。
+        // 原来这里会抛异常，但finally里的endTransaction照样执行，
+        // 导致同一个事务被移除两次、解锁两次，可能把其他事务的锁解掉。
+        if (isClosed())
+            return;
         try {
-            checkNotClosed();
             rollbackTo(0);
         } finally {
             maxCommittedLogId = -2;
@@ -380,7 +384,11 @@ public class AOTransaction implements Transaction {
 
     @Override
     public void rollbackToSavepoint(int savepointId) {
-        checkNotClosed();
+        // 事务已经结束就没有可回滚的保存点了。
+        // 原来这里直接抛异常，而调用方是语句异常处理里的rollbackCurrentCommand，
+        // 异常会一路抛到调度线程的循环里，语句永远结束不了，客户端只能一直等。
+        if (isClosed())
+            return;
         rollbackTo(savepointId);
     }
 
