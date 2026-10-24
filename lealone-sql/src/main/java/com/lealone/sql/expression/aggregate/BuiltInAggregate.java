@@ -206,7 +206,14 @@ public abstract class BuiltInAggregate extends Aggregate {
             break;
         case BuiltInAggregate.AVG: {
             int i = calculator.getIndex();
-            Value v = divide(calculator.getValue(i + 1), calculator.getValue(i).getLong());
+            Value sum = calculator.getValue(i + 1);
+            int sumType = sum.getType();
+            // 整数除法会把平均值截断，先转成DECIMAL再除
+            if (sumType == Value.BYTE || sumType == Value.SHORT || sumType == Value.INT
+                    || sumType == Value.LONG) {
+                sum = sum.convertTo(Value.DECIMAL);
+            }
+            Value v = divide(sum, calculator.getValue(i).getLong());
             calculator.addResultValue(v);
             calculator.addIndex(2);
             break;

@@ -515,6 +515,17 @@ public abstract class Value implements Comparable<Value> {
     }
 
     /**
+     * Divide by a value and round the result to the given scale.
+     *
+     * @param v the value to divide by
+     * @param scale the scale of the result
+     * @return the result
+     */
+    public Value divide(Value v, int scale) {
+        return divide(v);
+    }
+
+    /**
      * Multiply with a value and return the result.
      *
      * @param v the value to multiply with

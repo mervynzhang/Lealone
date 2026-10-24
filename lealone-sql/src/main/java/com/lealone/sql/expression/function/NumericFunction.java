@@ -5,6 +5,7 @@
  */
 package com.lealone.sql.expression.function;
 
+import java.math.RoundingMode;
 import java.util.Calendar;
 
 import com.lealone.common.compress.CompressTool;
@@ -21,6 +22,7 @@ import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueBytes;
 import com.lealone.db.value.ValueDate;
+import com.lealone.db.value.ValueDecimal;
 import com.lealone.db.value.ValueDouble;
 import com.lealone.db.value.ValueInt;
 import com.lealone.db.value.ValueLong;
@@ -288,8 +290,16 @@ public class NumericFunction extends BuiltInFunction {
             // sql = "SELECT ROUND(12.234, 2)"; //12.23, 4舍5入，小数保留两位
             // sql = "SELECT ROUND(12.235, 2)"; //12.24
             // sql = "SELECT ROUND(12.236, 2)"; //12.24
+            if (v0.getType() == Value.DECIMAL) {
+                // DECIMAL转成DOUBLE会丢掉标度，所以直接对BigDecimal四舍五入
+                int n = v1 == null ? 0 : v1.getInt();
+                result = ValueDecimal.get(v0.getBigDecimal().setScale(n, RoundingMode.HALF_UP));
+                break;
+            }
             double f = v1 == null ? 1. : Math.pow(10., v1.getDouble()); // 小数位是2，相当于先求10的2次方
-            result = ValueDouble.get(Math.round(v0.getDouble() * f) / f);
+            double d = v0.getDouble() * f;
+            // Math.round是朝+∞取整，平局时应该远离0，负数要单独处理
+            result = ValueDouble.get((d < 0 ? -Math.round(-d) : Math.round(d)) / f);
             break;
         }
         case TRUNCATE: {
@@ -304,7 +314,8 @@ public class NumericFunction extends BuiltInFunction {
                 result = ValueTimestamp.get(new java.sql.Timestamp(c.getTimeInMillis()));
             } else {
                 double d = v0.getDouble();
-                int p = v1.getInt();
+                // 只有一个参数时等价于TRUNC(x, 0)
+                int p = v1 == null ? 0 : v1.getInt();
                 double f = Math.pow(10., p);
                 double g = d * f;
                 result = ValueDouble.get(((d < 0) ? Math.ceil(g) : Math.floor(g)) / f);
