@@ -78,6 +78,7 @@
 | `0459f3347` | 失败用例遗留"已关闭仍注册的库 + 隔离目录 + 备份包"→ 后续用例偶发红（失败路径实测残留 0 项） |
 | `ee68d2079` | 重启校验复制**活跃元数据库** `db_0` 有竞态 → 子进程偶发初始化失败（复制前同步 checkpoint） |
 | `71a92ffbe` | P0 修好后把临时隔离的 SLT 门禁用例**移回普通套件** |
+| `a9b0716cb` | 跑套件会**改写被跟踪的** `orm/generated/*.java`（生成器用 CRLF、写文件无条件覆盖）→ 工作区一跑就脏、只读检出失败；改为 LF + 内容不变不重写 |
 
 ## 三、修的过程里自己引入又修掉的回归（值得注意）
 
@@ -93,7 +94,7 @@
 
 | 项 | 说明 |
 |---|---|
-| 测试 hermetic 化 | 需要手工 `rm -rf target/test-data`，且跑套件会改写被跟踪的 `orm/generated/*.java`；改动面大，建议独立立项 |
+| 测试 hermetic 化 | **"跑套件会改写被跟踪的 `orm/generated/*.java`" 已修**（`a9b0716cb`：生成器改用 LF + 内容不变不重写，实测跑两轮后 0 个改写）。仍剩"需要手工 `rm -rf target/test-data`"（共享存储目录），这一项改动面大，建议独立立项 |
 | SLT 门禁的"同文件替换"已修，但**精选集仍只有 27 个文件** | 覆盖面有限，扩大精选集是另一件事 |
 | `CheckpointService.save` 结束复位 `lastTransactionId=-1` | 使 `hasUnsavedChanges()` 的"redo 比上个 chunk 新"兜底在关闭路径失效；当前关闭正确性依赖"页是脏页"，本次已在三条关闭路径上验证 |
 | 内部 session 仍计入 `getSessionCount()/closeIfNeeded()` | 更彻底的做法是给 `ServerSession` 加 internal 标记分集合 |
