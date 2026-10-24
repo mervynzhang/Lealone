@@ -2231,6 +2231,8 @@ public class SQLParserBase implements SQLParser {
                 r = Aggregate.create(Aggregate.COUNT_ALL, null, currentSelect, false);
             } else {
                 boolean distinct = readIf("DISTINCT");
+                if (!distinct)
+                    readIf("ALL"); // ALL是无意义的修饰，等同不写
                 Expression on = readExpression();
                 if (on instanceof Wildcard && !distinct) {
                     // PostgreSQL compatibility: count(t.*)
@@ -2243,6 +2245,8 @@ public class SQLParserBase implements SQLParser {
             AGroupConcat agg = null;
             if (equalsToken("GROUP_CONCAT", aggregateName)) {
                 boolean distinct = readIf("DISTINCT");
+                if (!distinct)
+                    readIf("ALL"); // ALL是无意义的修饰，等同不写
                 agg = new AGroupConcat(Aggregate.GROUP_CONCAT, readExpression(), currentSelect,
                         distinct);
                 if (readIf("ORDER")) {
@@ -2262,6 +2266,8 @@ public class SQLParserBase implements SQLParser {
             r = agg;
         } else {
             boolean distinct = readIf("DISTINCT");
+            if (!distinct)
+                readIf("ALL"); // ALL是无意义的修饰，等同不写
             r = Aggregate.create(aggregateType, readExpression(), currentSelect, distinct);
         }
         read(")");
