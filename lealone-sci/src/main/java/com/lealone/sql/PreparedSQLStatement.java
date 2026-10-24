@@ -84,6 +84,9 @@ public interface PreparedSQLStatement extends SQLStatement, ManualCloseable {
 
         PreparedSQLStatement getStatement();
 
+        // 超时等错误要能交给正在等待的语句，让它带着错误结束
+        void handleException(Throwable t);
+
     }
 
     static class YieldableCommand {
@@ -114,6 +117,10 @@ public interface PreparedSQLStatement extends SQLStatement, ManualCloseable {
 
         public int getPriority() {
             return yieldable.getPriority();
+        }
+
+        public PreparedSQLStatement.Yieldable<?> getYieldable() {
+            return yieldable;
         }
 
         public void setParameterValues(Value[] parameterValues) {
