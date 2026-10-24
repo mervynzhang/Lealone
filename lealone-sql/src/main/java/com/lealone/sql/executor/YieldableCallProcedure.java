@@ -48,7 +48,6 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
     private Result result;
     private int updateCount;
     private int index;
-    private int argIndex;
 
     public YieldableCallProcedure(CallProcedure call, int maxRows, boolean query,
             AsyncResultHandler<T> asyncHandler) {
@@ -204,14 +203,12 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         }
     }
 
-    // 过程体的参数按出现顺序用?引用，调用时按位置依次赋值
+    // 过程体的每条语句各自独立绑定参数：语句里的第i个?对应第i个实参
     private void bindParameters(PreparedSQLStatement stmt) {
-        if (argIndex >= argValues.length)
-            return;
         List<? extends CommandParameter> params = stmt.getParameters();
         if (params == null)
             return;
-        for (int i = 0, size = params.size(); i < size && argIndex < argValues.length; i++)
-            params.get(i).setValue(argValues[argIndex++], false);
+        for (int i = 0, size = params.size(); i < size && i < argValues.length; i++)
+            params.get(i).setValue(argValues[i], false);
     }
 }
