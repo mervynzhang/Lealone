@@ -118,9 +118,12 @@ public abstract class ManipulationStatement extends StatementBase {
         @Override
         protected void startInternal() {
             // 真正改数据的还是原来的更新执行器，它每写成功一行就把返回行写进result
-            YieldableBase<Integer> y = dml.createYieldableUpdate(ar -> {
-                if (ar.isFailed())
-                    innerError = ar.getCause();
+            YieldableBase<Integer> y = dml.createYieldableUpdate(new AsyncResultHandler<Integer>() {
+                @Override
+                public void handle(AsyncResult<Integer> ar) {
+                    if (ar.isFailed())
+                        innerError = ar.getCause();
+                }
             });
             if (!(y instanceof YieldableLoopUpdateBase))
                 throw DbException.getUnsupportedException("RETURNING in this execution mode");

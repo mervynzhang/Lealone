@@ -112,7 +112,8 @@ public class SqlFunction extends FunctionAlias {
     // 每个元素是{参数名, 值}，值可能为null(表示DEFAULT)
     private final ArrayList<String[]> configItems = new ArrayList<>();
 
-    private JavaMethod sqlJavaMethod;
+    // volatile: 延迟初始化不加锁, 并发下重复创建也无害
+    private volatile JavaMethod sqlJavaMethod;
 
     public SqlFunction(Schema schema, int id, String name) {
         super(schema, id, name);
@@ -692,7 +693,7 @@ public class SqlFunction extends FunctionAlias {
         return getSqlJavaMethod();
     }
 
-    private synchronized JavaMethod getSqlJavaMethod() {
+    private JavaMethod getSqlJavaMethod() {
         if (sqlJavaMethod == null) {
             sqlJavaMethod = new SqlJavaMethod();
         }

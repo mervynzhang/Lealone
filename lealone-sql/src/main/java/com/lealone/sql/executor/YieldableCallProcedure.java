@@ -12,6 +12,7 @@ import java.util.List;
 import com.lealone.common.exceptions.DbException;
 import com.lealone.db.Constants;
 import com.lealone.db.api.ErrorCode;
+import com.lealone.db.async.AsyncResult;
 import com.lealone.db.async.AsyncResultHandler;
 import com.lealone.db.async.AsyncTask;
 import com.lealone.db.command.CommandParameter;
@@ -263,26 +264,32 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
     }
 
     private void createYieldableUpdate(PreparedSQLStatement stmt) {
-        yieldable = stmt.createYieldableUpdate(ar -> {
-            if (ar.isSucceeded()) {
-                updateCount += ar.getResult();
-                onStatementComplete();
-            } else {
-                onComplete(ar.getCause());
+        yieldable = stmt.createYieldableUpdate(new AsyncResultHandler<Integer>() {
+            @Override
+            public void handle(AsyncResult<Integer> ar) {
+                if (ar.isSucceeded()) {
+                    updateCount += ar.getResult();
+                    onStatementComplete();
+                } else {
+                    onComplete(ar.getCause());
+                }
             }
         });
         nestedSession.setYieldableCommand(new YieldableCommand(-1, yieldable, -1));
     }
 
     private void createYieldableQuery(PreparedSQLStatement stmt) {
-        yieldable = stmt.createYieldableQuery(maxRows, false, ar -> {
-            if (ar.isSucceeded()) {
-                if (result != null)
-                    result.close();
-                result = ar.getResult();
-                onStatementComplete();
-            } else {
-                onComplete(ar.getCause());
+        yieldable = stmt.createYieldableQuery(maxRows, false, new AsyncResultHandler<Result>() {
+            @Override
+            public void handle(AsyncResult<Result> ar) {
+                if (ar.isSucceeded()) {
+                    if (result != null)
+                        result.close();
+                    result = ar.getResult();
+                    onStatementComplete();
+                } else {
+                    onComplete(ar.getCause());
+                }
             }
         });
         nestedSession.setYieldableCommand(new YieldableCommand(-1, yieldable, -1));
