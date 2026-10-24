@@ -18,6 +18,28 @@ import com.lealone.common.exceptions.DbException;
 public final class PlpgSqlCondition {
 
     private static final Map<String, String> NAME_TO_SQL_STATE = new HashMap<>();
+    // Lealone沿用了一些H2风格的SQLSTATE，这里映射成PostgreSQL的标准SQLSTATE，
+    // 这样WHEN undefined_table这类条件名才能匹配Lealone引擎抛出的42S02
+    private static final Map<String, String> ENGINE_STATE_ALIAS = new HashMap<>();
+
+    static {
+        addEngineState("42S01", "42P07"); // 表已存在: duplicate_table
+        addEngineState("42S02", "42P01"); // 表不存在: undefined_table
+        addEngineState("42S11", "42P07"); // 索引已存在
+        addEngineState("42S12", "42704"); // 索引不存在: undefined_object
+        addEngineState("42S21", "42701"); // 列重复: duplicate_column
+        addEngineState("42S22", "42703"); // 列不存在: undefined_column
+        addEngineState("42102", "42P01");
+        addEngineState("42122", "42703");
+        addEngineState("90022", "42883"); // 函数不存在: undefined_function
+        addEngineState("90077", "42883");
+        addEngineState("22018", "22P02"); // 数据转换失败: invalid_text_representation
+        addEngineState("23513", "23514"); // check约束违反
+        addEngineState("23506", "23503"); // 外键父记录不存在
+        addEngineState("42000", "42601"); // 语法错误
+        addEngineState("42001", "42601");
+        addEngineState("HYT00", "55P03"); // 锁超时: lock_not_available
+    }
 
     static {
         add("raise_exception", "P0001");
@@ -73,6 +95,19 @@ public final class PlpgSqlCondition {
         NAME_TO_SQL_STATE.put(name, sqlState);
     }
 
+    private static void addEngineState(String engineState, String sqlState) {
+        ENGINE_STATE_ALIAS.put(engineState, sqlState);
+    }
+
+    // 把Lealone引擎的SQLSTATE转换成PostgreSQL的标准SQLSTATE
+    public static String toCanonicalSqlState(String sqlState) {
+        if (sqlState == null)
+            return null;
+        String state = sqlState.trim().toUpperCase();
+        String alias = ENGINE_STATE_ALIAS.get(state);
+        return alias == null ? state : alias;
+    }
+
     /**
      * 把parser保存的条件文本归一化成OTHERS标记、SQLSTATE码或条件名。
      */
@@ -93,7 +128,7 @@ public final class PlpgSqlCondition {
                     allValid = false;
             }
             if (allValid)
-                return c.toUpperCase();
+                return toCanonicalSqlState(c);
         }
         String sqlState = toSqlState(c);
         return sqlState != null ? sqlState : c.toLowerCase();
@@ -105,14 +140,15 @@ public final class PlpgSqlCondition {
     public static boolean matches(List<String> conditions, String sqlState) {
         if (conditions == null || conditions.isEmpty())
             return false;
+        String canonicalState = toCanonicalSqlState(sqlState);
         for (String condition : conditions) {
             if ("others".equalsIgnoreCase(condition))
                 return true;
-            String normalized = normalize(condition);
-            if (sqlState == null) {
+            if (canonicalState == null)
                 continue;
-            }
-            if (normalized != null && normalized.equalsIgnoreCase(sqlState))
+            String normalized = normalize(condition);
+            if (normalized != null
+                    && toCanonicalSqlState(normalized).equalsIgnoreCase(canonicalState))
                 return true;
         }
         return false;
