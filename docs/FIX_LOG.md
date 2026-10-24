@@ -16,6 +16,7 @@
 |---|---|---|---|---|
 | 1 | 关联子查询只在最内层与外层关联时，中间层子查询结果被跨外层行复用，返回上一行的过期值（静默错数据） | `CorrelatedVisitor` 展开嵌套子查询，并把嵌套查询自己的 `TableFilter` 并入"自己的列"集合 | 新增 `CorrelatedSubqueryTest` 4 例；回退本改动后正好两条嵌套用例变红（`expected:<2> but was:<1>`），两条对照仍绿 | 已修复 |
 | 2 | 异步提交回调在事务已结束时会丢失（语句挂死），重复提交时会重复执行（客户端收到两次响应） | `undoLog == null` 时补调 `asyncCommitComplete()`；`asyncCommitComplete()` 先取走 `asyncTask` 再置空，保证恰好一次 | 新增 `AsyncCommitCallbackTest` 2 例；去掉补调 → 30s 超时"没有回调"；去掉取走置空 → `expected:<1> but was:<2>` | 已修复 |
+| 15 | 加密文件/损坏文件的块长度越界时**静默**当 EOF，LOB 读损坏数据会被悄悄截断且事后无法排查 | 保留"按 EOF 处理"的契约（`ScriptBase.verifyMagic` 已有明确的加密错误），但补一条 warn 日志带上块长度/可用长度/文件名 | 新增 `FileStorageTest.testChunkLengthExceedsFileSize`（长度为正但超出文件范围，此前只覆盖 `Integer.MAX_VALUE` 极端值）；`FileStorageTest` 5/5 通过 | 已修复（改为可见） |
 | 14 | `SequenceLockedExceptionTest` 的 worker 抛异常后不 `countDown()`，主线程 `latch.await()` 永久挂死（surefire 也无超时），会把 CI 卡死 | worker 用 `finally { latch.countDown(); }` 并把异常存起来；主线程 `await(30s)` + 重新抛出；加 `@Test(timeout=60000)`；`lock_timeout` 从 1000000 降到 10000；补 conn/stmt 关闭 | 注入一个 worker 失败（改成查不存在的表）后：**0.2 秒内明确失败**（`worker 线程执行失败: Table "NOT_EXIST_TABLE" not found`）而不是挂死；正常路径连跑 2 次通过 | 已修复 |
 | 13 | 列存表把 `columnIndexes == null` 当成"一列都不加载"：重启后 `SCRIPT` 导出直接 `NullPointerException: Value.getPrecision() because "v" is null`，整行读全为 null，`CREATE INDEX`/`ExternalService` 同路径受影响 | `BTreeCursor` 把 null 列集当整行取；`ColumnStorageLeafPage.getValue(index, int[])` 对 null 列集加载全部列页；新增 `beforeWrite` 覆盖，保存前确保列页已加载 | 两进程探针：回退修复后重启执行 `SCRIPT` 报上述 NPE，带修复则导出 5 行且整行读 `7,v7,70`；新增 `ColumnStorageFullRowTest` 3 例（整行读、SCRIPT 导出、CHECKPOINT SYNC 后 SUM 校验，连跑 3 轮稳定）。**注：该 NPE 需要重启才复现，池内用例只锁定行为** | 已修复 |
 | 12 | 死代码：`IndexOperator.addIndexOperation(...)` 5 参重载零调用者；`BTreeStorage` 里 `thirdLastChunk != lastChunk` 恒真（`findThirdLastChunk` 取 `maxSeq-2`，与 `lastChunk` 序号必然不同） | 删除这两处；`Chunk.getOffset()` 的 >2G 溢出检查**保留**（零成本安全网，删掉才是退步） | 无新增测试（纯减法），全量套件验证 | 已修复 |
@@ -41,7 +42,6 @@
 | # | 问题 | 位置 |
 |---|---|---|
 | 12 | `rollbackToSavepoint` 的 `isClosed() → return` 与被回退的 `137de5658` 同类；正解是在 `YieldableBase.handleException`/`Session.commit/rollback` 加 try/finally | `AOTransaction.java:393-399` |
-| 13 | 加密文件密码错误/损坏被静默当 EOF（LOB 流也走这里 → 数据被悄悄截断） | `FileStorageInputStream.java:142-146` |
 | 14 | 去重表超过 10 万条后静默停止去重 | `QFlat.java:41` |
 
 ### P2 热路径性能
