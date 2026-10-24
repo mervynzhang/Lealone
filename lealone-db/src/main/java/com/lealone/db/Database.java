@@ -37,6 +37,7 @@ import com.lealone.common.util.Utils;
 import com.lealone.db.api.DatabaseEventListener;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.auth.Right;
+import com.lealone.db.auth.RightOwner;
 import com.lealone.db.auth.Role;
 import com.lealone.db.auth.User;
 import com.lealone.db.index.Cursor;
@@ -1323,6 +1324,46 @@ public class Database extends DbObjectBase implements DataHandler {
      * 对象上有没有授权记录(包括REVOKE之后留下的0权限标记)。
      * 函数/过程的EXECUTE检查只在有授权记录时才做，没有授权历史的对象保持"人人可调用"的历史行为。
      */
+    /**
+     * 授权的快照，CREATE OR REPLACE 换对象时用它把授权原样搬到新对象上。
+     */
+    public static class RightSnapshot {
+        private final RightOwner grantee;
+        private final int rightMask;
+
+        RightSnapshot(RightOwner grantee, int rightMask) {
+            this.grantee = grantee;
+            this.rightMask = rightMask;
+        }
+    }
+
+    /**
+     * 记下对象上的所有授权(含0权限的"显式REVOKE"标记)，按授权记录的顺序返回。
+     */
+    public ArrayList<RightSnapshot> getRightsSnapshot(DbObject object) {
+        ArrayList<RightSnapshot> list = new ArrayList<>();
+        for (Right right : getAllRights()) {
+            if (right.getGrantedObject() == object) {
+                list.add(new RightSnapshot((RightOwner) right.getGrantee(),
+                        right.getRightMask()));
+            }
+        }
+        return list;
+    }
+
+    /**
+     * CREATE OR REPLACE 之后把授权快照还原到新对象上。
+     * 0权限标记也必须还原，否则"没有授权记录=人人可调用"的兼容规则会让REVOKE失效。
+     */
+    public void restoreRights(ServerSession session, DbObject object,
+            ArrayList<RightSnapshot> snapshot, DbObjectLock lock) {
+        for (RightSnapshot item : snapshot) {
+            Right right = new Right(this, allocateObjectId(), item.grantee, item.rightMask, object);
+            item.grantee.grantRight(object, right);
+            addDatabaseObject(session, right, lock);
+        }
+    }
+
     public boolean hasGrantedRights(DbObject object) {
         HashMap<String, Right> map = getDbObjects(DbObjectType.RIGHT);
         for (Right right : map.values()) {

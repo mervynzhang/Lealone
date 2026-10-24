@@ -7,6 +7,7 @@ package com.lealone.db.table;
 
 import java.io.Reader;
 import java.sql.DatabaseMetaData;
+import java.sql.Types;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.text.Collator;
@@ -891,7 +892,7 @@ public class InfoMetaTable extends MetaTable {
                             // JAVA_METHOD
                             alias.getJavaMethodName(),
                             // DATA_TYPE
-                            "" + getMetaSqlType(method.getDataType()),
+                            getMetaSqlType(method.getDataType()),
                             // TYPE_NAME
                             getMetaTypeName(method.getDataType()),
                             // COLUMN_COUNT INT
@@ -1544,19 +1545,19 @@ public class InfoMetaTable extends MetaTable {
         return "IN";
     }
 
-    // 同上: UNKNOWN没有对应的DataType, 用OTHER兜底, 不能让整张元表不可用
-    private static int getMetaSqlType(int type) {
-        if (type == Value.UNKNOWN)
-            return java.sql.Types.OTHER;
-        return DataType.convertTypeToSQLType(type);
-    }
-
     // 触发器函数的返回类型是Value.UNKNOWN, 没有对应的DataType,
     // 不能因为一个函数的类型特殊就让整张元表对任何查询都不可用
     private static String getMetaTypeName(int type) {
         if (type == Value.UNKNOWN)
             return "UNKNOWN";
         return DataType.getDataType(type).name;
+    }
+
+    // DATA_TYPE列同理, 没有对应的SQL类型时按Types.OTHER输出
+    private static String getMetaSqlType(int type) {
+        if (type == Value.UNKNOWN)
+            return "" + Types.OTHER;
+        return "" + DataType.convertTypeToSQLType(type);
     }
 
     private void addFunctionParameters(ArrayList<Row> rows, String catalog, SqlFunction function) {

@@ -8,6 +8,7 @@ package com.lealone.sql.ddl;
 import java.util.ArrayList;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.db.Database;
 import com.lealone.db.DbObjectType;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.lock.DbObjectLock;
@@ -240,6 +241,7 @@ public class CreateProcedure extends SchemaStatement {
         if (orReplace) {
             checkRoutineKind(inputTypeIds);
         }
+        ArrayList<Database.RightSnapshot> rightsSnapshot = null;
         SqlProcedure old = findSameSignature(inputTypeIds);
         if (old != null) {
             if (ifNotExists)
@@ -247,6 +249,8 @@ public class CreateProcedure extends SchemaStatement {
             if (!orReplace) {
                 throw DbException.get(ErrorCode.PROCEDURE_ALREADY_EXISTS_1, procedureName);
             }
+            // 和PostgreSQL一样，CREATE OR REPLACE不改变授权：先记下旧过程的授权，建好后再还原
+            rightsSnapshot = session.getDatabase().getRightsSnapshot(old);
             // 先删掉旧的过程再创建新的，同一个事务里完成
             schema.remove(session, old, lock);
         }
@@ -273,6 +277,9 @@ public class CreateProcedure extends SchemaStatement {
             procedure.setOwnerName(session.getUser().getName());
         }
         schema.add(session, procedure, lock);
+        if (rightsSnapshot != null) {
+            session.getDatabase().restoreRights(session, procedure, rightsSnapshot, lock);
+        }
         return 0;
     }
 }
