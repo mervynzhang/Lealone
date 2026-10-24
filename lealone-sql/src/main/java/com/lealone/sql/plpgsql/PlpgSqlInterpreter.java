@@ -517,10 +517,12 @@ public class PlpgSqlInterpreter {
         if (record == null || !record.isRecord())
             throw DbException.getUnsupportedException(
                     "PL/pgSQL RETURN NEXT with multiple columns requires a record variable");
-        for (int i = 0; i < count; i++) {
-            row[i] = convertColumnValue(i,
-                    record.getRecordField(resultInfo.getColumnName(i)));
-        }
+        if (record.getRecordFieldCount() != count)
+            throw PlpgSqlException.raise("42804",
+                    "RETURN NEXT record has " + record.getRecordFieldCount()
+                            + " fields but " + count + " columns expected");
+        for (int i = 0; i < count; i++)
+            row[i] = convertColumnValue(i, record.getRecordField(i));
         return row;
     }
 

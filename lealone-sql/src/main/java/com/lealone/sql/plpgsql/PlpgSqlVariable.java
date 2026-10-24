@@ -126,6 +126,20 @@ public class PlpgSqlVariable {
         return recordFieldValues[index];
     }
 
+    public int getRecordFieldCount() {
+        return recordFieldNames == null ? 0 : recordFieldNames.length;
+    }
+
+    public Value getRecordField(int index) {
+        if (!recordAssigned)
+            throw PlpgSqlException.raise("55000",
+                    "record \"" + name + "\" is not assigned yet");
+        if (index < 0 || index >= recordFieldValues.length)
+            throw PlpgSqlException.raise("42703",
+                    "record \"" + name + "\" has no field " + (index + 1));
+        return recordFieldValues[index];
+    }
+
     public void setRecordField(String fieldName, Value value) {
         int index = findRecordField(fieldName);
         if (value == null)
