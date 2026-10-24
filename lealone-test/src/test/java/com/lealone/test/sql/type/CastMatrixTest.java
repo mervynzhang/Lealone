@@ -145,7 +145,6 @@ public class CastMatrixTest extends SqlAssertTestBase {
 
     // BUG: CAST(... AS DECIMAL(p,s)) 的结果精度不是声明的 p，而是按实际值位数缩水。
     // 期望: 列元数据精度 = 5（H2 返回 DECIMAL(5,2)）；实际: 3。
-    @Ignore("BUG: CAST(1.999 AS DECIMAL(5,2)) reports precision 3 instead of the declared 5")
     @Test
     public void decimalCastKeepsDeclaredPrecision() throws Exception {
         try (ResultSet r = stmt.executeQuery("SELECT CAST(1.999 AS DECIMAL(5,2))")) {
