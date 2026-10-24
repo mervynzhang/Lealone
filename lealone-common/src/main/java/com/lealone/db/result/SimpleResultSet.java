@@ -43,7 +43,10 @@ import com.lealone.db.value.DataType;
 import com.lealone.db.value.ReadonlyBlob;
 import com.lealone.db.value.ReadonlyClob;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueDate;
 import com.lealone.db.value.ValueNull;
+import com.lealone.db.value.ValueTime;
+import com.lealone.db.value.ValueTimestamp;
 import com.lealone.db.value.ValueUuid;
 
 /**
@@ -817,8 +820,12 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
     @Override
     public Date getDate(int columnIndex) throws SQLException {
         Object o = get(columnIndex);
+        if (o == ValueNull.INSTANCE)
+            return null;
         if (o instanceof Value)
             return ((Value) o).convertTo(Value.DATE).getDate();
+        if (o instanceof String)
+            return ValueDate.parse((String) o).getDate();
         return (Date) o;
     }
 
@@ -1226,8 +1233,12 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
     @Override
     public Time getTime(int columnIndex) throws SQLException {
         Object o = get(columnIndex);
+        if (o == ValueNull.INSTANCE)
+            return null;
         if (o instanceof Value)
             return ((Value) o).convertTo(Value.TIME).getTime();
+        if (o instanceof String)
+            return ValueTime.parse((String) o).getTime();
         return (Time) o;
     }
 
@@ -1267,8 +1278,12 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
     @Override
     public Timestamp getTimestamp(int columnIndex) throws SQLException {
         Object o = get(columnIndex);
+        if (o == ValueNull.INSTANCE)
+            return null;
         if (o instanceof Value)
             return ((Value) o).convertTo(Value.TIMESTAMP).getTimestamp();
+        if (o instanceof String)
+            return ValueTimestamp.parse((String) o).getTimestamp();
         return (Timestamp) o;
     }
 

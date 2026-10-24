@@ -190,6 +190,8 @@ public class FunctionOverloadTest extends SqlTestBase {
                 "CREATE FUNCTION sz_td(i INT) RETURNS SETOF DATE AS $$ SELECT DATE '2020-01-02' $$");
         executeUpdate(
                 "CREATE FUNCTION sz_tt(i INT) RETURNS SETOF TIME AS $$ SELECT TIME '03:04:05' $$");
+        executeUpdate("CREATE FUNCTION sz_tn(i INT) RETURNS SETOF TIMESTAMP AS "
+                + "$$ SELECT TIMESTAMP '2020-01-02 03:04:05.123456789' $$");
         executeUpdate("CREATE FUNCTION sz_tbl(i INT) RETURNS TABLE(x TIMESTAMP, d DATE, t TIME) AS "
                 + "$$ SELECT TIMESTAMP '2020-01-02 00:00:00', DATE '2020-01-02', TIME '03:04:05' $$");
         executeUpdate("CREATE FUNCTION sz_pts(i INT) RETURNS SETOF TIMESTAMP AS $$ "
@@ -206,18 +208,29 @@ public class FunctionOverloadTest extends SqlTestBase {
 
     private void checkSetofDateTime(String zone) throws Exception {
         TimeZone.setDefault(TimeZone.getTimeZone(zone));
-        // 期望值取引擎自己的显式CAST
+        // 期望值取引擎自己的显式CAST: 字符串、时间戳毫秒数、纳秒数都要逐字节一致
         executeQuery("SELECT CAST(TIMESTAMP '2020-01-02 00:00:00' AS TIMESTAMP), "
+                + "CAST(TIMESTAMP '2020-01-02 03:04:05.123456789' AS TIMESTAMP), "
                 + "CAST(DATE '2020-01-02' AS DATE), CAST(TIME '03:04:05' AS TIME)");
         String expectedTs = getStringValue(1);
-        String expectedDate = getStringValue(2);
-        String expectedTime = getStringValue(3);
-        long expectedMillis = rs.getTimestamp(1).getTime();
+        long expectedTsMillis = rs.getTimestamp(1).getTime();
+        String expectedNanosTs = getStringValue(2);
+        long expectedNanosMillis = rs.getTimestamp(2).getTime();
+        int expectedNanos = rs.getTimestamp(2).getNanos();
+        String expectedDate = getStringValue(3);
+        long expectedDateMillis = rs.getDate(3).getTime();
+        String expectedTime = getStringValue(4);
+        long expectedTimeMillis = rs.getTime(4).getTime();
 
+        // setof TIMESTAMP
         executeQuery("SELECT * FROM sz_ts(1)");
         assertEquals(expectedTs, getStringValue(1));
-        executeQuery("SELECT * FROM sz_ts(1)");
-        assertEquals(expectedMillis, rs.getTimestamp(1).getTime());
+        assertEquals(expectedTsMillis, rs.getTimestamp(1).getTime());
+        // 带纳秒的TIMESTAMP
+        executeQuery("SELECT * FROM sz_tn(1)");
+        assertEquals(expectedNanosTs, getStringValue(1));
+        assertEquals(expectedNanosMillis, rs.getTimestamp(1).getTime());
+        assertEquals(expectedNanos, rs.getTimestamp(1).getNanos());
         // WITH ORDINALITY
         executeQuery("SELECT * FROM sz_ts(1) WITH ORDINALITY");
         assertEquals(expectedTs, getStringValue(1));
@@ -225,8 +238,10 @@ public class FunctionOverloadTest extends SqlTestBase {
         // setof DATE / TIME
         executeQuery("SELECT * FROM sz_td(1)");
         assertEquals(expectedDate, getStringValue(1));
+        assertEquals(expectedDateMillis, rs.getDate(1).getTime());
         executeQuery("SELECT * FROM sz_tt(1)");
         assertEquals(expectedTime, getStringValue(1));
+        assertEquals(expectedTimeMillis, rs.getTime(1).getTime());
         // plpgsql的setof
         executeQuery("SELECT * FROM sz_pts(1)");
         assertEquals(expectedTs, getStringValue(1));
@@ -235,6 +250,9 @@ public class FunctionOverloadTest extends SqlTestBase {
         assertEquals(expectedTs, getStringValue(1));
         assertEquals(expectedDate, getStringValue(2));
         assertEquals(expectedTime, getStringValue(3));
+        assertEquals(expectedTsMillis, rs.getTimestamp(1).getTime());
+        assertEquals(expectedDateMillis, rs.getDate(2).getTime());
+        assertEquals(expectedTimeMillis, rs.getTime(3).getTime());
     }
 
     // 隐式转换矩阵: 只允许PostgreSQL里implicit的类型对，其余必须显式CAST
