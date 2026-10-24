@@ -1,0 +1,31 @@
+# Known, understood sqllogictest failures that are NOT regressions.
+#
+# Format: id <TAB> java-regex <TAB> reason
+# The regex is matched with find() against "<subtype>\t<sql>\t<detail>" of every failed record.
+# Because <sql> is clipped to 500 characters, a generated expression can lose the very token that
+# explains the failure; for those cases the signature gets one extra field "\tALL" appended when
+# the *unclipped* SQL contains an ALL token (see Failure.sqlHasAll in SltRunner.java).
+
+# Matching failures are subtracted before the baseline comparison, so they never fail CI, but the
+# per-rule hit count is printed on every run (see "[slt] allowlisted failures by rule") so the
+# noise can never silently grow.
+#
+# Keep every rule as narrow as possible: a rule that is too broad hides real bugs.
+#
+# --- the ALL quantifier: not supported by Lealone's parser -------------------------------
+# SELECT ALL / SUM(ALL x) / MIN(ALL x) appear in 78,212 records of the 137 file set. Lealone
+# parses ALL as a column or function name, which is a pure dialect gap, not a wrong result. This
+# is 98% of the raw failure count of the suite - it is the reason the suite needs an allowlist.
+ALL-COLUMN	Column "ALL" not found	ALL quantifier parsed as a column reference, e.g. SUM(ALL x) / MIN(ALL -51); Lealone has no ALL quantifier
+ALL-FUNC	Function "ALL" not found	ALL quantifier inside an expression, e.g. SELECT ALL SUM(...); parser reports it as unknown function ALL
+ALL-SYNTAX	^exception\t[^\t]*\t.*Syntax error.*\tALL	ALL quantifier used where Lealone expects a term, e.g. MAX(ALL 99); syntax error at "ALL 99"
+#
+# --- SQLite / MySQL only statement syntax -----------------------------------------------
+# Statement records are executed but never counted by the gate (baseline covers query results
+# only); these rules document why the statements fail in the full 137 file set.
+SQLITE-TRIGGER	^stmt_error\tCREATE TRIGGER.*	SQLite trigger syntax "CREATE TRIGGER t UPDATE ON tbl BEGIN ..."; Lealone requires BEFORE/AFTER and a FOR EACH ROW body
+SQLITE-REINDEX	^stmt_error\tREINDEX.*	REINDEX is SQLite specific; Lealone has no such statement
+SQLITE-REPLACE	^stmt_error\t(REPLACE INTO|INSERT OR REPLACE).*	REPLACE INTO / INSERT OR REPLACE is SQLite/MySQL specific; use MERGE or UPDATE+INSERT
+SQLITE-UPDATE-FROM	^stmt_error\tUPDATE.*FROM.*	UPDATE ... FROM (SQLite >= 3.33) is not supported
+SQLITE-UNTYPED	^stmt_error\tCREATE TABLE \w+ ?\([^)]*\)	SQLite allows untyped columns ("CREATE TABLE t(a,b,c)"); Lealone requires a data type
+SQLITE-TEXT-INDEX	Index on BLOB or CLOB column	TEXT maps to CLOB in Lealone, so a UNIQUE/index on a TEXT column fails; suite tables use TEXT for SQLite affinity

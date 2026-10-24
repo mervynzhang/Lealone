@@ -17,6 +17,16 @@
     <packaging>jar</packaging>
     <version>8.0.0-SNAPSHOT</version>
 
+    <properties>
+        <!--
+            The sqllogictest regression gate (com.lealone.test.slt.SltTest) is opt-in. This
+            exclude keeps it out of the default test cycle so that "mvn test" runs exactly the
+            same tests as before; the "slt" profile points the property at a pattern that
+            matches nothing and selects SltTest instead.
+        -->
+        <slt.test.exclude>**/slt/SltTest.java</slt.test.exclude>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>com.lealone</groupId>
@@ -36,6 +46,16 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- Unchanged for the default build: only SltTest is filtered out. -->
+                    <excludes>
+                        <exclude>${slt.test.exclude}</exclude>
+                    </excludes>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -93,4 +113,56 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            Optional sqllogictest regression gate. Not part of any default build:
+                mvn -o test -pl lealone-test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogictest/test
+            The suite checkout is an input, not a dependency; when -Dslt.dir does not exist the
+            test skips (JUnit Assume) instead of failing. See src/test/resources/slt/README.md.
+        -->
+        <profile>
+            <id>slt</id>
+            <properties>
+                <!-- Run only SltTest, and stop excluding it. -->
+                <slt.test.exclude>**/slt/__only_the_slt_profile__.java</slt.test.exclude>
+                <slt.dir>/tmp/sqllogictest/test</slt.dir>
+                <slt.timeout>120</slt.timeout>
+                <slt.out>${project.build.directory}/slt-report</slt.out>
+                <slt.base.dir>${project.build.directory}/slt-db</slt.base.dir>
+                <!-- Empty means "use the committed resource"; override on the command line for
+                     experiments (-Dslt.files=/tmp/my-list.txt). -->
+                <slt.files></slt.files>
+                <slt.baseline></slt.baseline>
+                <slt.allowlist></slt.allowlist>
+                <slt.updateBaseline>false</slt.updateBaseline>
+                <slt.baseline.out>${project.basedir}/src/test/resources/slt/baseline.txt</slt.baseline.out>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/slt/SltTest.java</include>
+                            </includes>
+                            <systemPropertyVariables>
+                                <slt.run>true</slt.run>
+                                <slt.dir>${slt.dir}</slt.dir>
+                                <slt.timeout>${slt.timeout}</slt.timeout>
+                                <slt.out>${slt.out}</slt.out>
+                                <lealone.base.dir>${slt.base.dir}</lealone.base.dir>
+                                <slt.files>${slt.files}</slt.files>
+                                <slt.baseline>${slt.baseline}</slt.baseline>
+                                <slt.allowlist>${slt.allowlist}</slt.allowlist>
+                                <slt.updateBaseline>${slt.updateBaseline}</slt.updateBaseline>
+                                <slt.baseline.out>${slt.baseline.out}</slt.baseline.out>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
