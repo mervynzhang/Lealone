@@ -313,6 +313,11 @@ public class ValueLob extends Value {
      */
     public void unlink(DataHandler dh) {
         if (small == null && tableId != LobStorage.TABLE_ID_SESSION_VARIABLE) {
+            // 调用方通常传 v.getHandler(), 但"已存储的LOB没有handler"这个状态确实存在
+            // (DataBuffer.readValue 反序列化出来就是null), 这时没有LOB存储可操作,
+            // 硬用会空指针; 保持"还挂在原表上"不做改动, 比抛空指针安全
+            if (dh == null)
+                return;
             dh.getLobStorage().setTable(this, LobStorage.TABLE_ID_SESSION_VARIABLE);
             tableId = LobStorage.TABLE_ID_SESSION_VARIABLE;
         }
