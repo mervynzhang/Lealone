@@ -23,4 +23,6 @@
 
 function_sql.setof_inline	create_function_sql.sql:353-376	10	select列表里的setof展开已支持, 但SQL函数的SETOF体不会内联进执行计划(EXPLAIN只有函数表), 且脚本无法断言多行计划文本
 function_sql.partition_ops	create_function_sql.sql:449-461	6	Lealone 无 CREATE OPERATOR CLASS/分区操作符类
+procedure.call_function	create_procedure.sql:236-237	2	CALL在Lealone里也用于调用函数(JDBC CallableStatement契约{call f(...)}), 与PG的"CALL只调过程"冲突
+procedure.call_random	create_procedure.sql:2-2	1	CALL在Lealone里也用于调用函数(JDBC CallableStatement契约{call f(...)}), 与PG的"CALL只调过程"冲突
 procedure.psql_meta	create_procedure.sql:14-21	1	Lealone客户端没有psql元命令(\df); pg_get_functiondef()本身已支持

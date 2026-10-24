@@ -21,10 +21,11 @@ call nonexistent();
 
 -- @case procedure.call_random
 -- @pg create_procedure.sql:2-2
--- 适配: PG 报 42809("random" is not a procedure); Lealone 的 CALL 现在也只调过程,
---       新增的 NOT_A_PROCEDURE_1 错误码是 90153, SQLState 同样是 42809
+-- 缺失: Lealone 的 CALL 也是 JDBC CallableStatement 的入口({call f(...)}), 必须能调函数,
+--       所以 CALL random() 会真的执行 random() 并返回一个随机数; PG 报 42809("random" is
+--       not a procedure)
 call random();
-> exception 90153
+-- PG 期望: 报 42809
 
 -- @case procedure.create_function_and_procedure
 -- @pg create_procedure.sql:4-12
@@ -395,12 +396,11 @@ rollback;
 
 -- @case procedure.call_function
 -- @pg create_procedure.sql:236-237
--- 适配: PG 报 42809("version"/"sum" is not a procedure), Lealone 报 90153(SQLState 42809)
+-- 缺失: 同 procedure.call_random: CALL 要兼容 JDBC CallableStatement, 所以函数也能调,
+--       这里两条都会成功执行; PG 报 42809("version"/"sum" is not a procedure)
 call version();
-> exception 90153
-
 call sum(1);
-> exception 90153
+-- PG 期望: 两条都报 42809
 
 -- @case procedure.alter_and_bad_def
 -- @pg create_procedure.sql:239-249
