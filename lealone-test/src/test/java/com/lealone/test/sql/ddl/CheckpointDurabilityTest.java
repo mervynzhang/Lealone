@@ -14,6 +14,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 
 import org.junit.Ignore;
+import org.junit.After;
 import org.junit.Test;
 
 import com.lealone.db.Database;
@@ -107,6 +108,29 @@ public class CheckpointDurabilityTest extends TestBase {
 
     private final java.util.Map<String, File> isoDirs = new java.util.HashMap<>();
     private final java.util.Map<String, File> dbDirs = new java.util.HashMap<>();
+
+    // 用例失败时(断言先于清理执行)会留下"已关闭但仍注册在 LealoneDatabase 里的库 + 复制出来的目录 + 备份包"。
+    // 同一JVM里后面的用例再动这些目录, 后台检查点就会对着已删除的目录反复报错, 表现为整个套件偶发红。
+    // 这里在用例结束后无条件收尾, 成功失败都一样。
+    @After
+    public void cleanupLeftovers() {
+        for (String dbName : dbDirs.keySet()) {
+            Database db = LealoneDatabase.getInstance().findDatabase(dbName.toUpperCase());
+            if (db != null)
+                db.close(false);
+        }
+        for (File isoDir : isoDirs.values())
+            FileUtils.deleteRecursive(isoDir.getAbsolutePath(), false);
+        for (File dbDir : dbDirs.values())
+            FileUtils.deleteRecursive(dbDir.getAbsolutePath(), false);
+        for (String dbName : dbDirs.keySet()) {
+            File zip = new File(TEST_DIR, dbName + ".zip");
+            if (zip.exists())
+                zip.delete();
+        }
+        isoDirs.clear();
+        dbDirs.clear();
+    }
 
     private void assertRestarted(String dbName, int expectedRows, int expectedChanged) throws Exception {
         File isoDir = isoDirs.get(dbName);
