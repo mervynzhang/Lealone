@@ -172,6 +172,9 @@ public class GenScript extends ScriptBase {
             result = createResult();
             deleteStore();
             openOutput();
+            if (out != null && isEncrypted()) {
+                writeMagic();
+            }
             if (out != null) {
                 buffer = new byte[Constants.IO_BUFFER_SIZE];
             }
@@ -665,7 +668,19 @@ public class GenScript extends ScriptBase {
         lineSeparator = lineSeparatorString.getBytes(charset);
     }
 
+    private static boolean isReadOnlySystemSchema(Schema schema) {
+        String name = schema.getName();
+        return Constants.SCHEMA_INFORMATION.equalsIgnoreCase(name)
+                || "PERFORMANCE_SCHEMA".equalsIgnoreCase(name);
+    }
+
     private boolean excludeSchema(Schema schema) {
+        // 只读的元数据schema不能导出: 里面的表导出后RUNSCRIPT回放会报
+        // "Access to the schema INFORMATION_SCHEMA is denied",整个导入随之中断，
+        // 用户表一条也建不出来。注意PUBLIC也是system schema，但它是用户的默认schema，必须导出
+        if (isReadOnlySystemSchema(schema)) {
+            return true;
+        }
         if (schemaNames != null && !schemaNames.contains(schema.getName())) {
             return true;
         }
