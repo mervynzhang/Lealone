@@ -830,6 +830,10 @@ public class SystemFunction extends BuiltInFunction {
                         return this;
                     }
                 }
+                // DECIMAL的精度和标度由声明决定，折叠成常量后不能按值的位数缩水
+                if (t == Value.DECIMAL) {
+                    return ValueExpression.get(v, p, s, d);
+                }
                 return ValueExpression.get(v);
             } catch (DbException e) {
                 // 常量折叠时数据类错误是正常的(CASE/COALESCE 里不会被求值的分支有除以0/转换失败)，

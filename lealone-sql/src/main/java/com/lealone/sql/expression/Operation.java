@@ -58,11 +58,17 @@ public class Operation extends Expression {
      */
     public static final int MODULUS = 6;
 
+    // DECIMAL除法结果支持的最大标度，与H2的NUMERIC最大标度一致
+    private static final int MAX_DIVIDE_SCALE = 100000;
+
     private int opType;
 
     private Expression left, right;
     private int dataType;
     private boolean convertRight = true;
+    // DECIMAL除法的结果标度和精度，divideScale为-1表示按值的默认标度计算
+    private int divideScale = -1;
+    private long dividePrecision;
 
     public Operation(int opType, Expression left, Expression right) {
         this.opType = opType;
@@ -168,6 +174,9 @@ public class Operation extends Expression {
         case DIVIDE:
             if (l == ValueNull.INSTANCE || r == ValueNull.INSTANCE) {
                 return ValueNull.INSTANCE;
+            }
+            if (divideScale >= 0) {
+                return l.divide(r, divideScale);
             }
             return l.divide(r);
         case MODULUS:
@@ -312,7 +321,9 @@ public class Operation extends Expression {
                         + getOperationToken() + " " + DataType.getDataType(r).name);
             } else {
                 dataType = Value.getHigherOrder(l, r);
-                if (DataType.isStringType(dataType)
+                if (opType == DIVIDE && dataType == Value.DECIMAL) {
+                    initDivideType();
+                } else if (DataType.isStringType(dataType)
                         && session.getDatabase().getMode().allowPlusForStringConcat) {
                     opType = CONCAT;
                 }
@@ -341,6 +352,24 @@ public class Operation extends Expression {
         right = temp;
     }
 
+    // 除法的精度和标度由操作数推导，取值规则与H2一致，避免DECIMAL除法产生过多小数位
+    private void initDivideType() {
+        long leftPrecision = left.getPrecision(), rightPrecision = right.getPrecision();
+        // 精度未知（比如还没赋值的参数）时不推导，按值的默认标度计算
+        if (leftPrecision <= 0 || rightPrecision <= 0) {
+            return;
+        }
+        int leftScale = left.getScale(), rightScale = right.getScale();
+        long scale = (long) leftScale - rightScale + 2 * rightPrecision;
+        if (scale < 0) {
+            scale = 0;
+        } else if (scale > MAX_DIVIDE_SCALE) {
+            scale = MAX_DIVIDE_SCALE;
+        }
+        divideScale = (int) scale;
+        dividePrecision = leftPrecision + rightScale - leftScale + divideScale;
+    }
+
     @Override
     public int getType() {
         return dataType;
@@ -352,6 +381,10 @@ public class Operation extends Expression {
             switch (opType) {
             case CONCAT:
                 return left.getPrecision() + right.getPrecision();
+            case DIVIDE:
+                if (divideScale >= 0) {
+                    return dividePrecision;
+                }
             default:
                 return Math.max(left.getPrecision(), right.getPrecision());
             }
@@ -376,6 +409,9 @@ public class Operation extends Expression {
     @Override
     public int getScale() {
         if (right != null) {
+            if (opType == DIVIDE && divideScale >= 0) {
+                return divideScale;
+            }
             return Math.max(left.getScale(), right.getScale());
         }
         return left.getScale();
