@@ -1917,6 +1917,16 @@ public class ErrorCode {
     public static final int PROCEDURE_NOT_FOUND_1 = 90151;
 
     /**
+     * The error with code <code>90153</code> is thrown when trying to call an object with CALL
+     * that is a function instead of a procedure.
+     * Example:
+     * <pre>
+     * CALL RANDOM()
+     * </pre>
+     */
+    public static final int NOT_A_PROCEDURE_1 = 90153;
+
+    /**
      * The error with code <code>90152</code> is thrown when a function name has
      * multiple overloads and the statement does not specify the parameter types.
      */
@@ -1994,6 +2004,8 @@ public class ErrorCode {
             return "42S22";
         case AMBIGUOUS_FUNCTION_NAME_1:
             return "42725";
+        case NOT_A_PROCEDURE_1:
+            return "42809";
 
         // 0A: feature not supported
 
