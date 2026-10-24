@@ -112,12 +112,11 @@ select cast('2020-13-01' as date) c;
 select 1/0 c;
 > exception 22012
 
--- LEALONE: 与H2不同，ROUND对负数按Math.round(向正无穷)舍入，-1.55保留1位得到-1.5、
--- -2.5得到-2.0，H2用HALF_UP得到-1.6和-3
+-- ROUND平局时远离0取整(HALF_UP)
 select round(1.55, 1) c1, round(-1.55, 1) c2, round(2.5) c3, round(-2.5) c4;
-> C1  C2   C3  C4
-> --- ---- --- ----
-> 1.6 -1.5 3.0 -2.0
+> C1  C2   C3 C4
+> --- ---- -- --
+> 1.6 -1.6 3  -3
 > rows: 1
 
 -- LEALONE: 与H2不同，FLOOR/CEILING返回DOUBLE并带.0后缀(1.0/2.0)，H2返回1和2
