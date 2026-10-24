@@ -43,9 +43,19 @@ public interface InternalSession extends Session {
         return false;
     }
 
-    // 等锁超时检查，超时返回错误，没超时返回null
+    // 等锁超时检查，超时返回错误(事务已经回滚)，没超时返回null。只能在执行语句的线程里调用
     default Throwable getLockTimeoutError() {
         return null;
+    }
+
+    // 只判断等锁是否超时，不改变session状态，可以在其他线程里调用
+    default boolean isLockWaitTimeout() {
+        return false;
+    }
+
+    // 等锁超时后把session标成就绪，让重试语句的线程自己抛超时错误
+    default boolean retryForLockTimeout() {
+        return false;
     }
 
     default boolean isQueryCommand() {
