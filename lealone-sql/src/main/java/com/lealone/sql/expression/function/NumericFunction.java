@@ -289,7 +289,9 @@ public class NumericFunction extends BuiltInFunction {
             // sql = "SELECT ROUND(12.235, 2)"; //12.24
             // sql = "SELECT ROUND(12.236, 2)"; //12.24
             double f = v1 == null ? 1. : Math.pow(10., v1.getDouble()); // 小数位是2，相当于先求10的2次方
-            result = ValueDouble.get(Math.round(v0.getDouble() * f) / f);
+            double d = v0.getDouble() * f;
+            // Math.round是朝+∞取整，平局时应该远离0，负数要单独处理
+            result = ValueDouble.get((d < 0 ? -Math.round(-d) : Math.round(d)) / f);
             break;
         }
         case TRUNCATE: {
