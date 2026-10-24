@@ -196,10 +196,14 @@ reset session authorization;
 
 -- @case function_sql.strict
 -- @pg create_function_sql.sql:124-131
--- 适配: PG 的 F_2 显式写了 CALLED ON NULL INPUT, Lealone 不认识这个关键字(默认行为就是它), 这里不抄 F_2;
---       F_3/F_4 的 RETURNS NULL ON NULL INPUT / STRICT 现在都支持, 用调用验证"入参为 NULL 时不执行函数体"
+-- 适配: F_2 的 CALLED ON NULL INPUT 现在能解析并持久化了, 所以补回来;
+--       F_3/F_4 的 RETURNS NULL ON NULL INPUT / STRICT 用调用验证"入参为 NULL 时不执行函数体"
 create function functest_F_1(a int) returns boolean language 'sql'
     as 'select a > 50';
+> update count: 0
+
+create function functest_F_2(a int) returns boolean language 'sql'
+    called on null input as 'select a is null';
 > update count: 0
 
 create function functest_F_3(a int) returns boolean language 'sql'
@@ -215,6 +219,13 @@ select functest_F_1(null) r;
 > R
 > ----
 > null
+> rows: 1
+
+-- 显式写 CALLED ON NULL INPUT 和默认行为一样: 函数体照常执行, 所以能算出 TRUE
+select functest_F_2(null) r;
+> R
+> ----
+> TRUE
 > rows: 1
 
 -- STRICT / RETURNS NULL ON NULL INPUT: 入参 NULL 时函数体不执行, 直接返回 NULL
