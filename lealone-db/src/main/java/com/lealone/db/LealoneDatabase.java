@@ -87,9 +87,10 @@ public class LealoneDatabase extends Database
      * @return 还没执行完的索引操作所属事务的最小事务id，没有就返回Long.MAX_VALUE
      */
     public long flushIndexOperations() {
-        long minTid = Long.MAX_VALUE;
+        long minTid = super.flushIndexOperations();
         for (Database db : getDatabases()) {
-            if (db.isInitialized()) {
+            // getDatabases()包含自己，不能递归调用自己
+            if (db != this && db.isInitialized()) {
                 long tid = db.flushIndexOperations();
                 if (tid < minTid)
                     minTid = tid;
