@@ -241,12 +241,14 @@ public class SqlFunction extends FunctionAlias {
         if (variadic) {
             int fixedCount = inputParameterCount - 1;
             for (int i = 0; i < fixedCount; i++) {
-                values[inputIndexes[i]] = args[i].getValue(session);
+                int index = inputIndexes[i];
+                values[index] = convertArgument(index, args[i].getValue(session));
             }
             values[inputIndexes[fixedCount]] = getVariadicValue(session, args, fixedCount);
         } else {
             for (int i = 0; i < inputParameterCount; i++) {
-                values[inputIndexes[i]] = args[i].getValue(session);
+                int index = inputIndexes[i];
+                values[index] = convertArgument(index, args[i].getValue(session));
             }
         }
         if (strict) {
@@ -292,21 +294,63 @@ public class SqlFunction extends FunctionAlias {
 
     // 把VARIADIC参数对应的多个实参打包成一个数组值
     private Value getVariadicValue(ServerSession session, IExpression[] args, int fixedCount) {
+        int parameterIndex = inputIndexes[fixedCount];
+        int componentType = parameterComponentTypes[parameterIndex];
         int extraCount = args.length - fixedCount;
         if (extraCount > 0) {
             Value first = args[fixedCount].getValue(session);
             // 只传一个数组值时直接当成数组用, 不再多包一层
             if (extraCount == 1 && first.getType() == Value.ARRAY) {
-                return first;
+                return convertArgument(parameterIndex, first);
             }
             Value[] list = new Value[extraCount];
-            list[0] = first;
+            list[0] = convertValue(parameterIndex, first, componentType);
             for (int i = 1; i < extraCount; i++) {
-                list[i] = args[fixedCount + i].getValue(session);
+                list[i] = convertValue(parameterIndex, args[fixedCount + i].getValue(session),
+                        componentType);
             }
             return ValueArray.get(list);
         }
         return ValueArray.get(new Value[0]);
+    }
+
+    /**
+     * 按参数声明的类型转换实参的值。PostgreSQL在函数调用时按声明类型做隐式转换，
+     * 类型不兼容时报错；这里用DATA_CONVERSION_ERROR_1表示这种错误。
+     */
+    private Value convertArgument(int parameterIndex, Value v) {
+        int type = parameterTypeIds[parameterIndex];
+        int componentType = parameterComponentTypes[parameterIndex];
+        if (type == Value.ARRAY) {
+            if (componentType < 0 || componentType == Value.UNKNOWN || v == ValueNull.INSTANCE) {
+                return v;
+            }
+            if (v.getType() != Value.ARRAY) {
+                return convertValue(parameterIndex, v, type);
+            }
+            Value[] list = ((ValueArray) v).getList();
+            Value[] converted = new Value[list.length];
+            for (int i = 0; i < list.length; i++) {
+                converted[i] = convertValue(parameterIndex, list[i], componentType);
+            }
+            return ValueArray.get(converted);
+        }
+        return convertValue(parameterIndex, v, type);
+    }
+
+    private Value convertValue(int parameterIndex, Value v, int targetType) {
+        if (v == ValueNull.INSTANCE || targetType <= Value.NULL || targetType == Value.UNKNOWN
+                || v.getType() == targetType) {
+            return v;
+        }
+        try {
+            return v.convertTo(targetType);
+        } catch (DbException e) {
+            String message = "parameter " + parameterNames[parameterIndex] + ": can not convert "
+                    + v.getSQL() + " (" + DataType.getDataType(v.getType()).name + ") to "
+                    + parameterTypes[parameterIndex];
+            throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, e, message);
+        }
     }
 
     // 多个OUT参数时，把函数体返回的第一行包装成一个结果集

@@ -210,6 +210,55 @@ public class PgFunctionParamTest extends SqlTestBase {
         assertEquals(2, getIntValue(1));
     }
 
+    // 调用期类型转换: 实参按参数声明的类型转换, 类型不兼容时报错
+    @Test
+    public void testArgumentTypeConversion() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION p_conv_int(a INT) RETURNS INT AS $$ SELECT a + 1 $$");
+        // 字符串实参按声明类型转成INT
+        executeQuery("SELECT p_conv_int('5')");
+        assertEquals(6, getIntValue(1));
+        // 不能转成INT的实参报类型转换错误
+        executeQueryThanAssertErrorCode("SELECT p_conv_int('abc')",
+                ErrorCode.DATA_CONVERSION_ERROR_1);
+        executeQueryThanAssertErrorCode("SELECT p_conv_int('2020-01-02')",
+                ErrorCode.DATA_CONVERSION_ERROR_1);
+
+        // 按声明类型转成VARCHAR
+        executeUpdate(
+                "CREATE OR REPLACE FUNCTION p_conv_str(a VARCHAR) RETURNS VARCHAR AS $$ SELECT a $$");
+        executeQuery("SELECT p_conv_str(42)");
+        assertEquals("42", getStringValue(1));
+
+        // 字符串转DATE
+        executeUpdate(
+                "CREATE OR REPLACE FUNCTION p_conv_date(a DATE) RETURNS DATE AS $$ SELECT a $$");
+        executeQuery("SELECT p_conv_date('2020-01-02')");
+        assertEquals("2020-01-02", getStringValue(1));
+
+        // INOUT参数也要经过转换
+        executeUpdate(
+                "CREATE OR REPLACE FUNCTION p_conv_inout(INOUT x INT) AS $$ SELECT x * 2 $$");
+        executeQuery("SELECT p_conv_inout('21')");
+        assertEquals(42, getIntValue(1));
+
+        // 非字面量的实参在运行时转换
+        executeUpdate("DROP TABLE IF EXISTS p_conv_t");
+        executeUpdate("CREATE TABLE p_conv_t(id INT PRIMARY KEY, s VARCHAR(20))");
+        executeUpdate("INSERT INTO p_conv_t VALUES(1, '10')");
+        executeQuery("SELECT p_conv_int(s) FROM p_conv_t WHERE id = 1");
+        assertEquals(11, getIntValue(1));
+
+        // VARIADIC展开出来的每个实参也按数组元素类型转换
+        executeUpdate("CREATE OR REPLACE FUNCTION p_var_count(VARIADIC nums INT[]) RETURNS INT "
+                + "AS $$ SELECT ARRAY_LENGTH(nums) $$");
+        executeUpdate("CREATE OR REPLACE FUNCTION p_var_first(VARIADIC nums INT[]) RETURNS INT "
+                + "AS $$ SELECT ARRAY_GET(nums, 1) $$");
+        executeQueryThanAssertErrorCode("SELECT p_var_count('a')",
+                ErrorCode.DATA_CONVERSION_ERROR_1);
+        executeQuery("SELECT p_var_first('7', '8')");
+        assertEquals(7, getIntValue(1));
+    }
+
     // 从SCRIPT的输出里找出指定函数的CREATE FUNCTION语句
     private String getCreateSql(String functionName) {
         String prefix = "CREATE FUNCTION " + functionName;
