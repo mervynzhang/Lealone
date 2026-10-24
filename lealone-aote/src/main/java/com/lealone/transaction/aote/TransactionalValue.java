@@ -32,6 +32,8 @@ public class TransactionalValue extends LockableBase {
         final Object value;
         OldValue next;
         boolean useLast;
+        // insert时value是插入后的新值，update和delete时value是提交前的旧值
+        boolean insert;
 
         public OldValue(long tid, Object key, Object value) {
             this.tid = tid;
@@ -178,12 +180,19 @@ public class TransactionalValue extends LockableBase {
                         return maybeDeleted(lockable);
                     }
                 }
+                // 版本链里存的是提交前的旧值，所以一条记录的value只对
+                // [下一条记录的tid, 本条记录的tid) 之间的快照可见
                 while (oldValue != null) {
-                    if (tid >= oldValue.tid)
+                    OldValue next = oldValue.next;
+                    long lower = next != null ? next.tid : 0;
+                    if (tid >= lower && tid < oldValue.tid) {
+                        if (oldValue.insert)
+                            return SIGHTLESS; // insert成功后的记录，旧事务看不到
                         return lockable.copy(oldValue.value, lock);
-                    oldValue = oldValue.next;
+                    }
+                    oldValue = next;
                 }
-                return SIGHTLESS; // insert成功后的记录，旧事务看不到
+                return SIGHTLESS;
             }
             if (t != null) {
                 if (lockOwner.getOldValue() != null)
@@ -280,6 +289,7 @@ public class TransactionalValue extends LockableBase {
             Object value = lockable.getLockedValue();
             if (isInsert) {
                 OldValue v = new OldValue(commitTimestamp, key, value);
+                v.insert = true;
                 oldValueCache.put(lockable, v);
             } else {
                 long maxTid = te.getMaxRepeatableReadTransactionId();
