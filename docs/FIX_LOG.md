@@ -111,7 +111,15 @@
 
 | 项 | 观察 |
 |---|---|
-| `JdbcConnectionTest` 偶发挂死 | 已修过一次（`e215f042a`：客户端事件循环注册失败时挂死整个套件），并在 `ClientTestBase` 加了 `@Rule Timeout(300s)`，让它变成失败而不是永久挂住。本轮全量两连跑里**又出现 1 次**（第 1 次 378 项中 `run(JdbcConnectionTest)` 超时 300 秒，第 2 次全绿），说明**还有第二条挂死路径**没被覆盖。目前没有线程栈；下一步应在超时时打印所有线程栈（`Thread.getAllStackTraces()`）定位，而不是靠猜 |
+| `JdbcConnectionTest` / `JdbcPreparedStatementTest` 偶发挂死（**根因已抓到，见下**） | 已修过一次（`e215f042a`：客户端事件循环注册失败时挂死整个套件），并在 `ClientTestBase` 加了 `@Rule Timeout(300s)`，让它变成失败而不是永久挂住。本轮全量两连跑里**又出现 1 次**（第 1 次 378 项中 `run(JdbcConnectionTest)` 超时 300 秒，第 2 次全绿），说明**还有第二条挂死路径**没被覆盖。目前没有线程栈；下一步应在超时时打印所有线程栈（`Thread.getAllStackTraces()`）定位，而不是靠猜 |
+
+**根因（第30轮用新的 `DiagnosticTimeout` 抓到线程栈）**：挂死不在用例主体，而在 `tearDown`：
+`SqlTestBase.tearDownAfter` → `JdbcUtils.closeSilently` → `JdbcConnection.close()` →
+`ClientSession.close()` → `ClientSession.execute(...)` 里 **`latch.await()`（无超时）** 等调度器执行关闭任务，
+而线程栈显示当时所有 `CScheduleService-*` 客户端调度线程都停在 `NioEventLoop.select`（空闲），
+任务队列没被处理，于是这个 latch 永远等不到 —— 测试的 `NETWORK_TIMEOUT` 又是 `Integer.MAX_VALUE`，
+没有任何兜底。修复方向：关闭连接必须**有界等待**（超时后强制关闭 socket 并记录告警），或在
+`execute` 的 latch 等待上给出超时 + 兜底执行，不能永久阻塞。
 
 ## 二半、方法论警示（验证时踩过的坑，必须记住）
 
