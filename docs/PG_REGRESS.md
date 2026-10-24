@@ -144,14 +144,19 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 
 ## 七、剩余缺口与缺陷（都已实测复现）
 
-### N1. 过程的 OUT 实参会被求值
+### N1.（已修复）过程的 OUT 实参会被求值
 
 ```sql
 create procedure ptest9(out a int) as $$ INSERT INTO cp_test_out VALUES (1,'a'); SELECT 1; $$;
-call ptest9(1/0);   -- Lealone: 22012 Division by zero; PG: 正常返回(OUT 实参不求值)
+call ptest9(1/0);   -- 以前: 22012 Division by zero; 现在: 正常返回(OUT 位置的实参只占位、不求值)
 ```
 
-PG 文档明确写了 OUT 位置的表达式不会被求值。用例 `procedure.out_params`（这一句按 Lealone 实际行为断言 22012）。
+PG 文档明确写了 OUT 位置的表达式不会被求值。修复点是 `YieldableCallProcedure.evalArgs()`：
+实参个数覆盖全部参数时，OUT 位置直接填 `ValueNull`，不再求值；INOUT 位置仍然求值
+（`CALL p(inout a int)` 写 `1/0` 照样报 22012）。用例 `procedure.out_params` 已按 PG 语义加回
+`call ptest9(1/0)` 这一句；`call ptest9(1./0.)` PG 报的是"找不到 ptest9(numeric)过程"(类型不匹配)，
+Lealone 允许 numeric 隐式转成 int，仍按 Lealone 实际行为断言成功并注明是适配。
+回归用例：`com.lealone.test.sql.ddl.ProcedureOutArgTest`。
 
 ### N2. 无名参数的报错很误导
 

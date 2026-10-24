@@ -238,8 +238,7 @@ call ptest8('');
 -- @case procedure.out_params
 -- @pg create_procedure.sql:183-197
 -- 适配: 过程体里用 ? 按位置引用参数; PG 的 ptest9 往 cp_test 插行, 后面的用例还要用 cp_test,
---       这里换成独立的 cp_test_out(语句与语义不变); PG 里 CALL ptest9(1/0) 不报错(OUT 实参不求值),
---       Lealone 会求值, 这里按 Lealone 的实际行为断言 22012, 差异记录在 docs
+--       这里换成独立的 cp_test_out(语句与语义不变)
 create table cp_test_out (a int, b text);
 > update count: 0
 
@@ -252,14 +251,28 @@ call ptest9(NULL);
 > 1
 > rows: 1
 
+-- OUT 位置的实参只占位不求值, 所以 1/0 不会报除零错误
+call ptest9(1/0);
+> A
+> -
+> 1
+> rows: 1
+
+-- 适配: PG 这里按 numeric 实参找不到过程(procedure ptest9(numeric) does not exist),
+--       Lealone 允许 numeric 隐式转成 int, 按 Lealone 的实际行为断言成功(仍不求值)
 call ptest9(1./0.);
-> exception 22012
+> A
+> -
+> 1
+> rows: 1
 
 select * from cp_test_out;
 > A B
 > - -
 > 1 a
-> rows: 1
+> 1 a
+> 1 a
+> rows: 3
 
 -- @case procedure.out_params_named
 -- @pg create_procedure.sql:199-212

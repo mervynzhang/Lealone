@@ -326,9 +326,6 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
 
     private void evalArgs() {
         Expression[] args = call.getArgs();
-        argValues = new Value[args.length];
-        for (int i = 0, len = args.length; i < len; i++)
-            argValues[i] = args[i].getValue(session);
         int inputCount = procedure.getInputParameterCount();
         int parameterCount = procedure.getParameterCount();
         // PostgreSQL允许给OUT参数写上NULL占位，也可以省略，所以两种实参个数都接受
@@ -340,6 +337,14 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         }
         // 实参只给入参时按入参顺序对应，实参覆盖所有参数时跳过OUT参数
         boolean overAllParameters = args.length != inputCount;
+        argValues = new Value[args.length];
+        for (int i = 0, len = args.length; i < len; i++) {
+            // PostgreSQL的OUT位置的实参只占位、不求值，所以CALL p(1/0)不会报除零错误
+            if (overAllParameters && procedure.getParameterMode(i) == SqlProcedure.PARAM_OUT)
+                argValues[i] = ValueNull.INSTANCE;
+            else
+                argValues[i] = args[i].getValue(session);
+        }
         inputArgIndexes = new int[inputCount];
         for (int i = 0; i < inputCount; i++) {
             inputArgIndexes[i] = overAllParameters ? procedure.getInputParameterIndex(i) : i;
