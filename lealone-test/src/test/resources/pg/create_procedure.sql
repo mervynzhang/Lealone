@@ -145,28 +145,38 @@ select * from cp_test;
 > rows: 4
 
 -- @case procedure.inout_params
--- @pg create_procedure.sql:79-102
--- 缺失: Lealone 的 CREATE PROCEDURE 只接受 IN 参数(写 INOUT/OUT 会报 42102 Table "X" not found);
---       同样的能力在 CREATE FUNCTION 里是支持的(见 plpgsql.inout_return / plpgsql.multi_out)
-create procedure ptest4a(inout a int, inout b int)
-language sql
-as $$
-select 1, 2;
-$$;
-call ptest4a(null, null);
-create procedure ptest4b(inout b int, inout a int)
-language sql
-as $$
-call ptest4a(a, b);
-$$;
-create procedure ptest4c(inout comp int8_tbl)
-language sql
-as $$
-select row(1, 2);
-$$;
-call ptest4c(null);
-drop procedure ptest4a, ptest4c;
--- PG 期望: CALL ptest4a(null,null) 返回 (1,2); ptest4b 里嵌套调用报 0A000
+-- @pg create_procedure.sql:77-102
+-- 适配: 过程体里用 ? 按位置引用参数; ptest4c 是单个 INOUT 参数且类型是复合类型的情况
+create procedure ptest4a(inout a int, inout b int) as $$ SELECT 1, 2; $$;
+> update count: 0
+
+call ptest4a(NULL, NULL);
+> A B
+> - -
+> 1 2
+> rows: 1
+
+-- PG 的 ptest4b(INOUT 交叉传递 + 嵌套 CALL) 在 PG 里就是 "error, not supported";
+-- Lealone 在 CREATE 阶段直接拒绝: 带 OUT/INOUT 的过程体最后一条语句必须是查询, 所以这里不放进来
+
+-- 单个 INOUT 参数是复合类型的情况(以前会解析混乱)
+create type int8_tbl as (q1 bigint, q2 bigint);
+> update count: 0
+
+create procedure ptest4c(inout comp int8_tbl) as $$ SELECT ROW(1, 2); $$;
+> update count: 0
+
+call ptest4c(NULL);
+> COMP
+> ------
+> (1, 2)
+> rows: 1
+
+drop procedure ptest4a;
+> update count: 0
+
+drop procedure ptest4c;
+> update count: 0
 
 -- @case procedure.named_default
 -- @pg create_procedure.sql:107-121
@@ -226,25 +236,40 @@ call ptest8('');
 > update count: 0
 
 -- @case procedure.out_params
--- @pg create_procedure.sql:185-212
--- 缺失: CREATE PROCEDURE 只接受 IN 参数(42102), 也不支持命名实参/DEFAULT(VARIADIC/OUT 在 CREATE FUNCTION 里已支持)
-create procedure ptest9(out a int)
-language sql
-as $$
-insert into cp_test values (1, 'a');
-select 1;
-$$;
-call ptest9(null);
-call ptest9(1/0);
+-- @pg create_procedure.sql:183-197
+-- 适配: 过程体里用 ? 按位置引用参数; PG 的 ptest9 往 cp_test 插行, 后面的用例还要用 cp_test,
+--       这里换成独立的 cp_test_out(语句与语义不变); PG 里 CALL ptest9(1/0) 不报错(OUT 实参不求值),
+--       Lealone 会求值, 这里按 Lealone 的实际行为断言 22012, 差异记录在 docs
+create table cp_test_out (a int, b text);
+> update count: 0
+
+create procedure ptest9(out a int) as $$ INSERT INTO cp_test_out VALUES (1, 'a'); SELECT 1; $$;
+> update count: 0
+
+call ptest9(NULL);
+> A
+> -
+> 1
+> rows: 1
+
 call ptest9(1./0.);
-create procedure ptest10(out a int, in b int, in c int)
-language sql as $$ select b - c $$;
+> exception 22012
+
+select * from cp_test_out;
+> A B
+> - -
+> 1 a
+> rows: 1
+
+-- @case procedure.out_params_named
+-- @pg create_procedure.sql:199-212
+-- 缺失: Lealone 不支持命名实参(a => null)和过程的 VARIADIC 参数, 也不支持同名过程按
+--       OUT/IN 参数区分重载(报 90150 "Procedure already exists")
+create procedure ptest10(out a int, in b int, in c int) as $$ SELECT ? - ? $$;
 call ptest10(null, 7, 4);
-call ptest10(a => null, b => 8, c => 2);
-create procedure ptest11(a out int, variadic b int[]) language sql
-  as $$ select b[1] + b[2] $$;
+create procedure ptest11(a out int, variadic b int[]) as $$ SELECT ? + ? $$;
 call ptest11(null, 11, 12, 13);
--- PG 期望: ptest9(null) 返回 (1); ptest10(null,7,4) 返回 (3); ptest11 返回 (25)
+-- PG 期望: ptest10 的位置调用返回 3, 命名调用返回 6; ptest11 返回 36
 
 -- @case procedure.ambiguous_drop
 -- @pg create_procedure.sql:216-232
