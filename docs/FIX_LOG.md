@@ -41,6 +41,13 @@
 | 4 | `ROUND(x, 负精度)` 输出科学计数法且标度为负（`ROUND(123.456,-1)` 得 `1.2E+2`、`DECIMAL(2,-1)`），JDBC `getScale()` 非法 | DECIMAL 分支按负精度舍入后把标度归到 0 | 新增 `ValueSemanticsTest.testRoundNegativeScale`（4 组断言含平局远离 0）；回退修复后正好该用例变红 | 已修复 |
 | 3 | 二级索引"复用游标缓存行"的优化被自己的 `row = null` 抵消，覆盖索引查询每返回一行读两次主表 | 删掉 `next()` 里的 `row = null`（每条索引项开始校验时 `getIndexKey` 会自己清 row，所以不会读到上一条的行） | 新增 `CoveredIndexScanTest` 2 例；插桩实测 500 行查询：修复后主表读 500 次（1 次/行），恢复该行后 1000 次（2 次/行） | 已修复 |
 
+### 追查结论：没有 data handler 的 LOB（第 38/40/43/44 项同源）
+
+- 产生点确定：`DataBuffer.readValue` 反序列化"已存储 LOB"时 handler 传 null；写入路径（`onAddSucceeded`）会补，读页面路径曾经没补。
+- 已做：崩溃点补齐（`GenScript`）+ 留 `info` 诊断（表名/rowKey/lobId/tableId）+ `unlink`/`link` 的空 handler 保护 + 裸 NPE 改成带上下文的错误。
+- **现状**：自 `closeIfNeeded`/`removeSession`（第 39/42 项）修好之后，全量套件**连续 6 轮全绿**，诊断日志一次都没触发 —— 原先它能被复现出来，很可能正是那些"库没真正关闭"的状态造成的。保留诊断，若再现可直接定位到表。
+- 已尝试但**未采纳**的改法：在 `RowType.read` 读页面时统一补 handler（无法构造出"不加这个改动就失败"的用例，按"未验证不改"放弃）；`ShutdownDatabase`/`LealoneDatabase.gc` 的 `getSessionCount()` 判据（SHUTDOWN 的执行会话本身就还在，改判据无法证明必要）。
+
 ## 二、待修复（按优先级）
 
 ### P0 静默错数据 / 打崩 / 丢数据
@@ -68,6 +75,7 @@
 | 26 | ~~**重启后丢更新（潜伏，观测条件已消除）**~~ **已由第 27 项修复（真正根因是 `Database.close` 被内部 session 静默挡掉）**。以下为当时排除过程的记录：：全量套件里 `CheckpointDurabilityTest.testBackupThenUpdate` 期望 `2000,100` 实得 `2000,0`（行在、100 条更新没了）；日志抓到 `Failed to execute save: Directory does not exist: .../db_47/t_47_0`（某个已失效数据库在后台检查点里抛异常）。触发条件已定位为"同一 JVM 里前面有用例遗留了开着的库、而它的存储目录后来被删掉"；把那个用例（`SltGateStatementTest`）移出普通套件后，全量套件恢复确定性（360 项 × 2 轮全绿） | `CheckpointService.save`（已修"单 map 失败中止整轮"）、`Database.close`、后台检查点与关闭的竞争 | **已排除的假设**：① 多一个嵌入式库在场（8/8 正确，含显式 `close(false)`）；② CPU 高负载放大竞争窗口（单跑 6/6 绿）；③ `close(false)` 异步不刷盘（代码确认是同步 `table.close` + `Storage.close`）。**仍待查**：后台检查点与 `Database.close` 的竞争（需要"遗留库"这一前置条件） |
 | 25 | ~~SLT 门禁偶发、原始代码同样复现~~ **更正：这是本批两个修复叠加引入的回归，不是既有缺陷**（原结论基于未 install 的对照，见第 23 条方法论警示）。已作为第 22 条修复 | — | — |
 | 35 | JDBC 客户端的 trace 文件按默认相对路径 `trace.db/` 写到**模块目录**（`lealone-test/trace.db/TraceTestDB.*.trace.db`），在源码树里留下未跟踪残留 | 在 `lealone-test/pom.xml` 的 surefire 配置里把 `client.trace.directory` 指到 `${project.build.directory}/test-data/trace.db`（该目录已被测试启动时的自动清理覆盖） | 修复前跑 `TraceTest` 会在 `lealone-test/trace.db/` 留下 `TraceTestDB.*.trace.db`；修复后同一用例的 trace 落在 `target/test-data/` 下，模块目录干净、`git status` 无残留。补充：`TestBase` 的静态初始化本来也会设置 `client.trace.directory`，所以这条更像"双保险"，残留也可能来自手工探针进程（用仓库根当 CWD） | 已修复 |
+| 44 | `ValueLob.link(DataHandler, int)` 在 `dh == null` 时会空指针（小 LOB 分支要调 `dh.getMaxLengthInplaceLob()`）。和 `unlink` 同一类：反序列化出来的"已存储 LOB"就是没有 handler | `link` 在 `dh == null` 时原样返回（没有 LOB 存储可操作，不做改动） | 新增 `LobLinkWithoutHandlerTest`：`link(null, 9)` 必须原样返回、表 id 不变，小 LOB 路径也不能崩；回退修复后用例报错（NPE），带修复通过 | 已修复 |
 | 43 | `ValueLob.unlink(DataHandler)` 在传入的 handler 为 null 时直接 `dh.getLobStorage()` 空指针。会话提交/回滚时会调 `unlink(v.getHandler())`，而"已存储 LOB 没有 handler"这个状态确实存在（`DataBuffer.readValue` 反序列化出来就是 null，前面已两次在套件里证实），等于给提交/回滚路径埋了一个 NPE | `unlink` 在 `dh == null` 时保持原状（LOB 仍挂在原表上）直接返回；新增 `LobUnlinkWithoutHandlerTest`（无 handler 的已存储 LOB 调 `unlink(null)` 不能崩、表 id 不变；小 LOB 路径不受影响） | 回退修复后用例报错（NPE），带修复通过 | 已修复 |
 | 42 | `Database.removeSession()` 在**最后一个用户连接断开**时也用 `!userSessions.isEmpty()`（准确说是 `userSessions.isEmpty()`）判断，内部 session 会让库永远不自动关闭 —— 这是第 39 项在"断开连接"这条真正触发路径上的同一缺陷 | 判据改 `getUserSessionCount() == 0` | 在同一用例类里补 `testLastUserSessionDisconnectClosesDatabase`：`SET DB_CLOSE_DELAY 0` + 内部 session 存活时关掉最后一个用户连接，断言库自动关闭；回退修复后报 `最后一个用户连接断开后, 库应该自动关闭`，带修复 2/2 通过 | 已修复 |
 | 41 | **客户端用例偶发永久挂死（测试基建，P0 级干扰）**：TCP 客户端在"事件循环注册失败"（连接已被关闭 / `SelectionKey` 已 cancel）后，这个 session 再也收不到响应，调用方一直等下去 —— 整个套件跟着挂死（实测卡在 `JdbcConnectionTest`/`JdbcPreparedStatementTest`，频率约 1/5，每次白跑 20 分钟）。根因一侧：`NioEventLoop.register` 只接 `ClosedChannelException`，`CancelledKeyException`/`IllegalStateException("key is cancelled")` 以裸运行时异常逃出，只在日志里留一条 `Failed to run async session task` | ① `NioEventLoop.register` 把这两类也转成带上下文的 `DbException`；② `ClientTestBase` 加 `@Rule Timeout(300s)`，把"挂死"变成"明确的失败" | 护栏有效性：临时把超时改成 1 秒 + 一个 sleep 3 秒的探针用例，用例在 **1.087 秒**时以超时错误失败（探针已删除）；全量套件见批次末尾 | 已修复（护栏+上下文） |
