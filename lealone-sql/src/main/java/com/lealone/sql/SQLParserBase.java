@@ -5312,8 +5312,22 @@ public class SQLParserBase implements SQLParser {
                 }
                 if (currentTokenType == END)
                     throw getSyntaxError();
-                StatementBase statement = parseStatement();
-                buff.appendExceptFirst("; ").append(statement.getSQL());
+                // 标准块体里允许空语句(PostgreSQL的;;)
+                if (readIf(";"))
+                    continue;
+                if (readIf("RETURN")) {
+                    // 块体里的RETURN: RETURN <表达式>等价于SELECT <表达式>, RETURN QUERY <查询>直接返回查询
+                    if (readIf("QUERY")) {
+                        StatementBase query = parseStatement();
+                        buff.appendExceptFirst("; ").append(query.getSQL());
+                    } else {
+                        buff.appendExceptFirst("; ").append("SELECT ")
+                                .append(readReturnExpressionText());
+                    }
+                } else {
+                    StatementBase statement = parseStatement();
+                    buff.appendExceptFirst("; ").append(statement.getSQL());
+                }
                 if (readIf(";"))
                     continue;
                 if (!isToken("END"))
@@ -5323,6 +5337,38 @@ public class SQLParserBase implements SQLParser {
             parameters = outerParameters;
         }
         return buff.toString();
+    }
+
+    // SQL标准函数体: RETURN <表达式> 等价于 SELECT <表达式>
+    private String parseReturnBody() {
+        if (readIf("QUERY")) {
+            // RETURN QUERY <查询>: 查询本身就是函数体
+            StringBuilder buff = new StringBuilder();
+            while (true) {
+                if (currentTokenType == END || isToken(";"))
+                    break;
+                buff.append(originalSQL, lastParseIndex, parseIndex);
+                read();
+            }
+            readIf(";");
+            String query = buff.toString().trim();
+            if (query.isEmpty())
+                throw getSyntaxError();
+            return query;
+        }
+        return "SELECT " + readReturnExpressionText();
+    }
+
+    // 读取RETURN后面到分号(或END)之前的表达式原文, 参数名留给函数体解析器改写成?
+    private String readReturnExpressionText() {
+        int start = lastParseIndex;
+        while (currentTokenType != END && !isToken(";") && !isToken("END")) {
+            read();
+        }
+        String text = originalSQL.substring(start, lastParseIndex).trim();
+        if (text.isEmpty())
+            throw getSyntaxError();
+        return text;
     }
 
     protected StatementBase parseDropProcedure() {
@@ -5578,8 +5624,12 @@ public class SQLParserBase implements SQLParser {
         }
         String body;
         boolean atomicBody = false;
-        if (readIf("BEGIN")) {
-            read("ATOMIC");
+        if (readIf("RETURN")) {
+            // SQL标准函数体: RETURN <表达式> 等价于 SELECT <表达式>, RETURN QUERY <查询>直接返回查询
+            body = parseReturnBody();
+        } else if (readIf("BEGIN")) {
+            // BEGIN ATOMIC ... END是SQL标准块体; 不写ATOMIC的BEGIN RETURN ...; END也是标准写法
+            readIf("ATOMIC");
             body = parseAtomicBody();
             atomicBody = true;
         } else {

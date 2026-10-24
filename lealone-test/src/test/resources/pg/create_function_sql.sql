@@ -293,17 +293,58 @@ select pg_get_functiondef('functest_F_2'::regproc);
 
 -- @case function_sql.sql_body_return
 -- @pg create_function_sql.sql:159-170
--- 缺失: Lealone 无 SQL 标准函数体(RETURN <表达式>)和 BEGIN ATOMIC 体
+-- 适配: 补上调用断言; S_2 的 text[] 参数用 int[] 代替(PG 的 ARRAY['1','2'] 字面量 Lealone 还不支持,
+--       这里只验证 RETURN a[1] 这种数组元素表达式能建出来)
 create function functest_S_1(a text, b date) returns boolean
     language sql
-    return a = 'abcd' and b > '2001-01-01';
+    return a = 'abcd' and b > date '2001-01-01';
+> update count: 0
+
+create function functest_S_2(a int[]) returns int
+    return a[1];
+> update count: 0
+
 create function functest_S_3() returns boolean
     return false;
+> update count: 0
+
+-- BEGIN 块体里允许空语句(;;)，RETURN <表达式>就是返回值
 create function functest_S_3a() returns boolean
     begin atomic
         ;;return false;;
     end;
--- PG 期望: 3 个函数创建成功, select functest_S_1(...) 返回 t
+> update count: 0
+
+-- 不带ATOMIC的标准块体写法
+create function functest_S_3b() returns boolean
+    begin
+        return false;
+    end;
+> update count: 0
+
+select functest_S_1('abcd', date '2001-02-01') r;
+> R
+> ----
+> TRUE
+> rows: 1
+
+select functest_S_3() r;
+> R
+> -----
+> FALSE
+> rows: 1
+
+select functest_S_3a() r;
+> R
+> -----
+> FALSE
+> rows: 1
+
+select functest_S_3b() r;
+> R
+> -----
+> FALSE
+> rows: 1
 
 -- @case function_sql.sql_body_atomic
 -- @pg create_function_sql.sql:171-195
@@ -399,14 +440,28 @@ select pg_get_functiondef('functest_S_15'::regproc);
 
 -- @case function_sql.sql_body_view
 -- @pg create_function_sql.sql:232-242
--- 缺失: Lealone 无 SQL 标准函数体(RETURN (SELECT ...))
+-- 适配: 补上结果断言(RETURN 的表达式是子查询, 函数体里引用了视图)
 create table functest3 (a int);
+> update count: 0
+
 insert into functest3 values (1), (2);
+> update count: 2
+
 create view functestv3 as select * from functest3;
+> update count: 0
+
 create function functest_S_14() returns bigint
     return (select count(*) from functestv3);
-select functest_S_14();
--- PG 期望: 2
+> update count: 0
+
+select functest_S_14() r;
+> R
+> -
+> 2
+> rows: 1
+
+drop table functest3 cascade;
+> update count: 0
 
 -- @case function_sql.sql_body_tempseq
 -- @pg create_function_sql.sql:244-253

@@ -32,6 +32,11 @@ public class AtomicBodyTest extends SqlTestBase {
         executeUpdate("DROP FUNCTION IF EXISTS fab1");
         executeUpdate("DROP FUNCTION IF EXISTS fab2");
         executeUpdate("DROP FUNCTION IF EXISTS fab3");
+        executeUpdate("DROP FUNCTION IF EXISTS fre1");
+        executeUpdate("DROP FUNCTION IF EXISTS fre2");
+        executeUpdate("DROP FUNCTION IF EXISTS fre3");
+        executeUpdate("DROP FUNCTION IF EXISTS fre4");
+        executeUpdate("DROP FUNCTION IF EXISTS fre5");
         executeUpdate("DROP TABLE IF EXISTS pab_t");
         executeUpdate("CREATE TABLE pab_t(id int primary key, v int)");
     }
@@ -43,6 +48,7 @@ public class AtomicBodyTest extends SqlTestBase {
         testProcedureAtomicBodyWithOutParams();
         testFunctionAtomicBody();
         testFunctionAtomicBodyRows();
+        testReturnBody();
         testUnsupported();
         testScriptRoundTrip();
         init();
@@ -128,6 +134,51 @@ public class AtomicBodyTest extends SqlTestBase {
         assertNull(getStringValue(1, true));
         executeQuery("SELECT v FROM pab_t WHERE id = 99");
         assertEquals(99, getIntValue(1, true));
+    }
+
+    // SQL标准函数体: RETURN <表达式> / RETURN QUERY <查询> / BEGIN RETURN ...; END
+    private void testReturnBody() throws Exception {
+        // 单表达式形式，等价于 SELECT <表达式>
+        executeUpdate("CREATE FUNCTION fre1(a INT) RETURNS INT RETURN a + 1");
+        executeQuery("SELECT fre1(4)");
+        assertEquals(5, getIntValue(1, true));
+        // 带语言的完整写法
+        executeUpdate("CREATE FUNCTION fre2(a TEXT, b DATE) RETURNS BOOLEAN LANGUAGE SQL "
+                + "RETURN a = 'abcd' AND b > DATE '2001-01-01'");
+        executeQuery("SELECT fre2('abcd', DATE '2001-02-01')");
+        assertEquals(true, getBooleanValue(1, true));
+        // 表达式里可以是子查询
+        executeUpdate("CREATE FUNCTION fre3() RETURNS INT RETURN (SELECT count(*) FROM pab_t)");
+        executeUpdate("DELETE FROM pab_t");
+        executeUpdate("INSERT INTO pab_t VALUES(1, 1)");
+        executeUpdate("INSERT INTO pab_t VALUES(2, 2)");
+        executeQuery("SELECT fre3()");
+        assertEquals(2, getIntValue(1, true));
+        // RETURNS TABLE + RETURN QUERY
+        executeUpdate("CREATE FUNCTION fre4() RETURNS TABLE(x INT) RETURN QUERY SELECT 7");
+        executeQuery("SELECT * FROM fre4()");
+        assertEquals(7, getIntValue(1, true));
+        // 不带ATOMIC的标准块体，以及块体里的空语句(;;)
+        executeUpdate("CREATE FUNCTION fre5(a INT) RETURNS INT BEGIN RETURN a * 3; END");
+        executeQuery("SELECT fre5(3)");
+        assertEquals(9, getIntValue(1, true));
+        executeUpdate("DROP FUNCTION fre5");
+        executeUpdate("CREATE FUNCTION fre5(a INT) RETURNS INT BEGIN RETURN -a; END");
+        executeQuery("SELECT fre5(3)");
+        assertEquals(-3, getIntValue(1, true));
+        // RETURNS VOID + RETURN null
+        executeUpdate("DROP FUNCTION IF EXISTS fre6");
+        executeUpdate("CREATE FUNCTION fre6() RETURNS VOID RETURN null");
+        executeQuery("SELECT fre6()");
+        assertNull(getStringValue(1, true));
+
+        // SCRIPT里单表达式形式被规范化成 AS 'SELECT ...'，块体形式还是BEGIN ATOMIC
+        String ddl = getCreateFunctionSql("FRE1");
+        assertNotNull(ddl);
+        assertTrue(ddl, ddl.contains("AS 'SELECT a + 1'"));
+        String ddl5 = getCreateFunctionSql("FRE5");
+        assertNotNull(ddl5);
+        assertTrue(ddl5, ddl5.contains("BEGIN ATOMIC SELECT -a; END"));
     }
 
     private void testUnsupported() throws Exception {
