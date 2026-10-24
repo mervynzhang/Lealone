@@ -176,6 +176,7 @@ public class SqlFunction extends FunctionAlias {
             }
             this.returnType = Value.RESULT_SET;
             this.returnTypeSql = "RECORD";
+            this.hasDeclaredReturnType = true;
             return;
         }
         // RETURNS SETOF/RETURNS TABLE声明的结果列，和OUT/INOUT参数不能同时用
