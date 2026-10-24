@@ -24,6 +24,8 @@ import com.lealone.common.trace.TraceSystem;
 import com.lealone.common.util.SmallLRUCache;
 import com.lealone.db.ConnectionInfo;
 import com.lealone.db.ConnectionSetting;
+import com.lealone.common.logging.Logger;
+import com.lealone.common.logging.LoggerFactory;
 import com.lealone.db.Constants;
 import com.lealone.db.DataHandler;
 import com.lealone.db.Database;
@@ -78,6 +80,8 @@ import com.lealone.transaction.Transaction;
  * @author zhh
  */
 public class ServerSession extends SessionBase implements InternalSession {
+
+    private static final Logger logger = LoggerFactory.getLogger(ServerSession.class);
     /**
      * The prefix of generated identifiers. It may not have letters, because
      * they are case sensitive.
@@ -578,7 +582,14 @@ public class ServerSession extends SessionBase implements InternalSession {
     }
 
     private void rollbackCurrentCommand(InternalSession newSession) {
-        rollbackTo(currentCommandSavepointId);
+        try {
+            rollbackTo(currentCommandSavepointId);
+        } catch (Throwable t) {
+            // 这里是语句异常处理的收尾路径: 回滚保存点失败(比如事务已经被别的线程结束掉)
+            // 不能把异常抛出去——抛出去会让语句永远结束不了, 客户端只能一直等。
+            // 但必须留痕, 而且要保证下面的解锁照常执行, 否则锁会泄漏。
+            logger.warn("Failed to rollback to savepoint in rollbackCurrentCommand", t);
+        }
         int size = locks.size();
         if (currentCommandLockIndex < size) {
             // 只解除当前语句拥有的锁
