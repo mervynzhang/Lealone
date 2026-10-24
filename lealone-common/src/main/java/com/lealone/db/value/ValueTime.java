@@ -57,7 +57,8 @@ public class ValueTime extends Value {
      * @return the value
      */
     public static ValueTime get(Time time) {
-        return fromNanos(DateTimeUtils.nanosFromDate(time.getTime()));
+        // TIME是不带时区的墙上时间, 不能用DateTimeUtils里缓存了时区的Calendar来拆字段
+        return fromNanos(time.toLocalTime().toNanoOfDay());
     }
 
     /**

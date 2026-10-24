@@ -11,6 +11,7 @@ import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.Calendar;
 import java.util.TimeZone;
 
@@ -68,11 +69,13 @@ public class ValueTimestamp extends Value {
      * @return the value
      */
     public static ValueTimestamp get(Timestamp timestamp) {
-        long ms = timestamp.getTime();
-        long nanos = timestamp.getNanos() % 1000000;
-        long dateValue = DateTimeUtils.dateValueFromDate(ms);
-        nanos += DateTimeUtils.nanosFromDate(ms);
-        return fromDateValueAndNanos(dateValue, nanos);
+        // TIMESTAMP是不带时区的墙上时间, 直接取java.sql.Timestamp表示的年月日时分秒。
+        // 不能走DateTimeUtils.dateValueFromDate/nanosFromDate: 那用的是缓存下来的Calendar
+        // (第一次用到时的时区)，运行期默认时区变过之后会和显式CAST差一个时区量
+        LocalDateTime dateTime = timestamp.toLocalDateTime();
+        long dateValue = DateTimeUtils.dateValue(dateTime.getYear(), dateTime.getMonthValue(),
+                dateTime.getDayOfMonth());
+        return fromDateValueAndNanos(dateValue, dateTime.toLocalTime().toNanoOfDay());
     }
 
     /**

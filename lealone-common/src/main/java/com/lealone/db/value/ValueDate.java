@@ -9,6 +9,7 @@ import java.nio.ByteBuffer;
 import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.time.LocalDate;
 
 import com.lealone.common.exceptions.DbException;
 import com.lealone.common.util.DataUtils;
@@ -57,7 +58,11 @@ public class ValueDate extends Value {
      * @return the value
      */
     public static ValueDate get(Date date) {
-        return fromDateValue(DateTimeUtils.dateValueFromDate(date.getTime()));
+        // DATE是不带时区的墙上时间, 不能用DateTimeUtils里缓存了时区的Calendar来拆字段
+        LocalDate localDate = date.toLocalDate();
+        return fromDateValue(
+                DateTimeUtils.dateValue(localDate.getYear(), localDate.getMonthValue(),
+                        localDate.getDayOfMonth()));
     }
 
     /**
