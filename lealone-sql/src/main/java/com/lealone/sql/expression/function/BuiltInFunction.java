@@ -241,7 +241,10 @@ public abstract class BuiltInFunction extends Function {
     public int getCost() {
         int cost = 3;
         for (Expression e : args) {
-            cost += e.getCost();
+            // 搜索式CASE的第一个参数是null占位符
+            if (e != null) {
+                cost += e.getCost();
+            }
         }
         return cost;
     }
