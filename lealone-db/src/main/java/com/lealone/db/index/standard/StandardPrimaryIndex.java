@@ -402,14 +402,22 @@ public class StandardPrimaryIndex extends StandardDataIndex<Row, Row> {
 
         @Override
         public boolean next() {
-            if (cursor.next()) {
-                if (last != null && cursor.getValue().getKey() > last.getKey()) {
+            while (cursor.next()) {
+                Row r = cursor.getValue();
+                // 墓碑行(基表行已删除，列值为null)不是有效结果，必须跳过，
+                // 否则会产出一行全NULL的脏数据
+                if (r == null || r.getColumns() == null) {
+                    continue;
+                }
+                if (last != null && r.getKey() > last.getKey()) {
                     row = null;
                     return false;
                 }
-                createRow();
+                row = r;
+                table.alterRowsIfNeeded(session, row, false);
                 return true;
             }
+            row = null;
             return false;
         }
 
