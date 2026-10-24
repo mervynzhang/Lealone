@@ -5,8 +5,11 @@
  */
 package com.lealone.db.result;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
+import java.io.StringReader;
 import java.math.BigDecimal;
 import java.net.URL;
 import java.sql.Array;
@@ -28,12 +31,20 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Map;
+import java.util.UUID;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.common.util.IOUtils;
 import com.lealone.common.util.MathUtils;
 import com.lealone.common.util.Utils;
+import com.lealone.db.Constants;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.value.DataType;
+import com.lealone.db.value.ReadonlyBlob;
+import com.lealone.db.value.ReadonlyClob;
+import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueNull;
+import com.lealone.db.value.ValueUuid;
 
 /**
  * This class is a simple result set and meta data implementation.
@@ -51,6 +62,10 @@ import com.lealone.db.value.DataType;
  * rs.addRow(0, &quot;Hello&quot; });
  * rs.addRow(1, &quot;World&quot; });
  * </pre>
+ *
+ * 列值可以是普通Java对象, 也可以是Value/Reader/InputStream: CLOB/BLOB列里
+ * Value.getObject()给出的Reader/InputStream会按Reader读成String、按InputStream读成byte[],
+ * 不会强转成Clob/Blob, 读过的值会缓存回当前行, 同一个值可以反复读取。
  */
 public class SimpleResultSet implements ResultSet, ResultSetMetaData {
 
@@ -530,14 +545,21 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
      */
     @Override
     public InputStream getBinaryStream(int columnIndex) throws SQLException {
-        return asInputStream(get(columnIndex));
+        return asInputStream(normalizeLob(columnIndex));
     }
 
+    // 列值可能是Blob/InputStream/Value: Value.getObject()对BLOB返回InputStream
     private static InputStream asInputStream(Object o) throws SQLException {
         if (o == null) {
             return null;
+        } else if (o instanceof byte[]) {
+            return new ByteArrayInputStream((byte[]) o);
+        } else if (o instanceof InputStream) {
+            return (InputStream) o;
         } else if (o instanceof Blob) {
             return ((Blob) o).getBinaryStream();
+        } else if (o instanceof Value) {
+            return ((Value) o).getInputStream();
         }
         return (InputStream) o;
     }
@@ -563,7 +585,23 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
      */
     @Override
     public Blob getBlob(int columnIndex) throws SQLException {
-        return (Blob) get(columnIndex);
+        return asBlob(normalizeLob(columnIndex));
+    }
+
+    // 列值是InputStream/Value时包成只读Blob, 不让调用方拿到InputStream
+    private static Blob asBlob(Object o) throws SQLException {
+        if (o == null) {
+            return null;
+        } else if (o instanceof Blob) {
+            return (Blob) o;
+        } else if (o instanceof byte[]) {
+            return new ReadonlyBlob((byte[]) o);
+        } else if (o instanceof InputStream) {
+            return new ReadonlyBlob((InputStream) o);
+        } else if (o instanceof Value) {
+            return new ReadonlyBlob((Value) o);
+        }
+        return (Blob) o;
     }
 
     /**
@@ -639,7 +677,40 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
      */
     @Override
     public byte[] getBytes(int columnIndex) throws SQLException {
-        return (byte[]) get(columnIndex);
+        return asBytes(normalizeLob(columnIndex));
+    }
+
+    // 列值可能是Blob/InputStream/Value: Value.getObject()对BLOB返回InputStream, 不能直接强转成byte[]
+    private static byte[] asBytes(Object o) throws SQLException {
+        if (o == null) {
+            return null;
+        } else if (o instanceof byte[]) {
+            return (byte[]) o;
+        } else if (o instanceof Blob) {
+            Blob b = (Blob) o;
+            return b.getBytes(1, MathUtils.convertLongToInt(b.length()));
+        } else if (o instanceof InputStream) {
+            return readBytes((InputStream) o);
+        } else if (o instanceof String) {
+            return ((String) o).getBytes(Constants.UTF8);
+        } else if (o instanceof UUID) {
+            // UUID列的Value.getObject()是java.util.UUID, 但读取方(DataType.readValue)用getBytes
+            UUID uuid = (UUID) o;
+            ValueUuid value = ValueUuid.get(uuid.getMostSignificantBits(),
+                    uuid.getLeastSignificantBits());
+            return value.getBytes();
+        } else if (o instanceof Value) {
+            return ((Value) o).getBytes();
+        }
+        return (byte[]) o;
+    }
+
+    private static byte[] readBytes(InputStream in) throws SQLException {
+        try {
+            return IOUtils.readBytesAndClose(in, -1);
+        } catch (IOException e) {
+            throw DbException.toSQLException(e);
+        }
     }
 
     /**
@@ -663,14 +734,21 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
      */
     @Override
     public Reader getCharacterStream(int columnIndex) throws SQLException {
-        return asReader(get(columnIndex));
+        return asReader(normalizeLob(columnIndex));
     }
 
+    // 列值可能是Clob/Reader/Value: Value.getObject()对CLOB返回Reader
     private static Reader asReader(Object o) throws SQLException {
         if (o == null) {
             return null;
+        } else if (o instanceof String) {
+            return new StringReader((String) o);
+        } else if (o instanceof Reader) {
+            return (Reader) o;
         } else if (o instanceof Clob) {
             return ((Clob) o).getCharacterStream();
+        } else if (o instanceof Value) {
+            return ((Value) o).getReader();
         }
         return (Reader) o;
     }
@@ -698,8 +776,23 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
      */
     @Override
     public Clob getClob(int columnIndex) throws SQLException {
-        Clob c = (Clob) get(columnIndex);
-        return c == null ? null : c;
+        return asClob(normalizeLob(columnIndex));
+    }
+
+    // 列值是Reader/Value时包成只读Clob, 不让调用方拿到Reader
+    private static Clob asClob(Object o) throws SQLException {
+        if (o == null) {
+            return null;
+        } else if (o instanceof Clob) {
+            return (Clob) o;
+        } else if (o instanceof String) {
+            return new ReadonlyClob((String) o);
+        } else if (o instanceof Reader) {
+            return new ReadonlyClob((Reader) o);
+        } else if (o instanceof Value) {
+            return new ReadonlyClob((Value) o);
+        }
+        return (Clob) o;
     }
 
     /**
@@ -919,7 +1012,28 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
      */
     @Override
     public Object getObject(int columnIndex) throws SQLException {
-        return get(columnIndex);
+        Object o = normalizeLob(columnIndex);
+        if (o instanceof Value) {
+            // 直接放进去的Value透传给JDBC层, CLOB/BLOB包成只读的JDBC对象
+            Value v = (Value) o;
+            if (v.getType() == Value.CLOB) {
+                return new ReadonlyClob(v);
+            } else if (v.getType() == Value.BLOB) {
+                return new ReadonlyBlob(v);
+            }
+            return v.getObject();
+        }
+        // CLOB/BLOB列返回JDBC对象, 不要返回Reader/InputStream
+        int sqlType = columns.get(columnIndex - 1).sqlType;
+        if (sqlType == Types.CLOB && o instanceof String) {
+            return new ReadonlyClob((String) o);
+        } else if (sqlType == Types.BLOB && o instanceof byte[]) {
+            return new ReadonlyBlob((byte[]) o);
+        }
+        if (o == null) {
+            wasNull = true;
+        }
+        return o;
     }
 
     /**
@@ -1059,16 +1173,34 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
      */
     @Override
     public String getString(int columnIndex) throws SQLException {
-        Object o = get(columnIndex);
+        return asString(normalizeLob(columnIndex));
+    }
+
+    // 列值可能是Clob/Reader/Value: Value.getObject()对CLOB返回Reader, 不能直接强转成Clob
+    private static String asString(Object o) throws SQLException {
         if (o == null) {
             return null;
-        }
-        switch (columns.get(columnIndex - 1).sqlType) {
-        case Types.CLOB:
+        } else if (o instanceof String) {
+            return (String) o;
+        } else if (o instanceof Clob) {
             Clob c = (Clob) o;
             return c.getSubString(1, MathUtils.convertLongToInt(c.length()));
+        } else if (o instanceof Reader) {
+            return readString((Reader) o);
+        } else if (o instanceof byte[]) {
+            return new String((byte[]) o, Constants.UTF8);
+        } else if (o instanceof Value) {
+            return ((Value) o).getString();
         }
         return o.toString();
+    }
+
+    private static String readString(Reader in) throws SQLException {
+        try {
+            return IOUtils.readStringAndClose(in, -1);
+        } catch (IOException e) {
+            throw DbException.toSQLException(e);
+        }
     }
 
     /**
@@ -2341,6 +2473,30 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
         Object o = columnIndex < currentRow.length ? currentRow[columnIndex] : null;
         wasNull = o == null;
         return o;
+    }
+
+    // Reader/InputStream只能读一次, 统一读出来换成String/byte[]缓存回当前行
+    private Object normalizeLob(int columnIndex) throws SQLException {
+        Object o = get(columnIndex);
+        if (o == ValueNull.INSTANCE) {
+            // ValueNull是SQL的NULL值, 按null处理
+            wasNull = true;
+            return null;
+        } else if (o instanceof Reader) {
+            o = readString((Reader) o);
+            replaceCurrentRowValue(columnIndex, o);
+        } else if (o instanceof InputStream) {
+            o = readBytes((InputStream) o);
+            replaceCurrentRowValue(columnIndex, o);
+        }
+        return o;
+    }
+
+    // 把已经读出来的值写回当前行, 这样同一个Reader/InputStream不会因为二次读取拿到空值
+    private void replaceCurrentRowValue(int columnIndex, Object value) {
+        if (currentRow != null && columnIndex - 1 < currentRow.length) {
+            currentRow[columnIndex - 1] = value;
+        }
     }
 
     private Column getColumn(int i) throws SQLException {
