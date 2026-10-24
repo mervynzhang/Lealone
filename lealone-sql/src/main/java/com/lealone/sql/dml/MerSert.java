@@ -192,6 +192,7 @@ public abstract class MerSert extends ManipulationStatement {
                 throw DbException.get(ErrorCode.COLUMN_COUNT_DOES_NOT_MATCH);
             }
         }
+        prepareReturning();
         if (session.isReplicationMode())
             session.setDeterministic(isDeterministic());
         return this;
@@ -200,6 +201,18 @@ public abstract class MerSert extends ManipulationStatement {
     @Override
     public int update() {
         return syncExecute(createYieldableUpdate(null));
+    }
+
+    // 带RETURNING时按查询语句执行；同步入口供PL/pgSQL等同步执行的场景使用
+    @Override
+    public Result query(int maxRows) {
+        return syncExecute(createYieldableQuery(maxRows, false, null));
+    }
+
+    @Override
+    public YieldableBase<Result> createYieldableQuery(int maxRows, boolean scrollable,
+            AsyncResultHandler<Result> asyncHandler) {
+        return new YieldableReturningQuery(this, maxRows, scrollable, asyncHandler);
     }
 
     protected static abstract class YieldableMerSert extends YieldableLoopUpdateBase
@@ -318,8 +331,11 @@ public abstract class MerSert extends ManipulationStatement {
             if (!done) { // add row
                 onPendingOperationStart();
                 table.addRow(session, newRow, ar -> {
-                    if (fireRow && ar.isSucceeded()) {
-                        fireAfterRow(table, null, newRow);
+                    if (ar.isSucceeded()) {
+                        if (fireRow)
+                            fireAfterRow(table, null, newRow);
+                        // 写成功之后才有返回行
+                        addReturningRow(newRow);
                     }
                     onPendingOperationComplete(ar);
                 });

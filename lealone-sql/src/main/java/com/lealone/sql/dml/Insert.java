@@ -42,6 +42,7 @@ public class Insert extends MerSert {
         }
         buff.append(")\n");
         getValuesPlanSQL(buff);
+        appendReturningSQL(buff);
         return buff.toString();
     }
 

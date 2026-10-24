@@ -326,15 +326,24 @@ select reraise_test() r;
 
 -- @case plpgsql.record
 -- @pg plpgsql.sql:2313-2321
--- 缺失: 这段用的是 INSERT ... RETURNING * INTO x record, Lealone 引擎没有 DML RETURNING,
---       record 变量本身的 SELECT INTO / x.f1 读写已经可以用
-create or replace function stricttest() returns void as $$
-declare x record;
-begin
-  insert into foo values(5,6) returning * into x;
-  raise notice 'x.f1 = %, x.f2 = %', x.f1, x.f2;
-end$$ language plpgsql;
--- PG 期望: 打印 x.f1 = 5, x.f2 = 6
+-- 适配: 函数体改成单行(runner按行切分语句); foo表在这段之前没有创建, 这里补上;
+--       INSERT ... RETURNING * INTO record 现在已支持, RAISE NOTICE 打印到日志
+create table foo(f1 int, f2 int);
+> update count: 0
+
+create or replace function stricttest() returns void as $$ declare x record; begin insert into foo values(5,6) returning * into x; raise notice 'x.f1 = %, x.f2 = %', x.f1, x.f2; end $$ language plpgsql;
+> update count: 0
+
+select stricttest();
+> STRICTTEST()
+> ------------
+> rows: 1
+
+select * from foo;
+> F1 F2
+> -- --
+> 5  6
+> rows: 1
 
 -- @case plpgsql.out_params_exception
 -- @pg plpgsql.sql:3609-3638

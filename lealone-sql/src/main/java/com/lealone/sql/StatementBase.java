@@ -20,6 +20,7 @@ import com.lealone.db.async.AsyncResultHandler;
 import com.lealone.db.async.Future;
 import com.lealone.db.command.CommandParameter;
 import com.lealone.db.result.Result;
+import com.lealone.db.row.Row;
 import com.lealone.db.scheduler.SchedulerThread;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.session.SessionStatus;
@@ -516,6 +517,33 @@ public abstract class StatementBase implements PreparedSQLStatement, ParsedSQLSt
     @Override
     public boolean isQuery() {
         return false;
+    }
+
+    /**
+     * 是否修改数据的DML语句。带RETURNING的DML同时isQuery()为true，
+     * 但执行失败时仍然要像更新语句一样回滚当前命令。
+     *
+     * @return true if it is a DML statement
+     */
+    public boolean isDML() {
+        switch (getType()) {
+        case SQLStatement.INSERT:
+        case SQLStatement.UPDATE:
+        case SQLStatement.DELETE:
+        case SQLStatement.MERGE:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    /**
+     * 计算RETURNING表达式的值，只有带RETURNING的DML才支持。
+     *
+     * @return the values or null
+     */
+    public Value[] evalReturning(Row row) {
+        return null;
     }
 
     /**

@@ -142,6 +142,7 @@ import com.lealone.sql.dml.ExecuteStatement;
 import com.lealone.sql.dml.Explain;
 import com.lealone.sql.dml.GenScript;
 import com.lealone.sql.dml.Insert;
+import com.lealone.sql.dml.ManipulationStatement;
 import com.lealone.sql.dml.Merge;
 import com.lealone.sql.dml.NoOperation;
 import com.lealone.sql.dml.Restore;
@@ -865,6 +866,7 @@ public class SQLParserBase implements SQLParser {
             Expression limit = readTerm().optimize(session);
             command.setLimit(limit);
         }
+        parseReturning(filter.getTable(), filter.getTableAlias(), command);
         setSQL(command, "UPDATE", start);
         return command;
     }
@@ -902,6 +904,7 @@ public class SQLParserBase implements SQLParser {
             limit = readTerm().optimize(session);
         }
         command.setLimit(limit);
+        parseReturning(filter.getTable(), filter.getTableAlias(), command);
         setSQL(command, "DELETE", start);
         return command;
     }
@@ -1085,6 +1088,7 @@ public class SQLParserBase implements SQLParser {
             if (isSelect()) {
                 command.setQuery(parseSelect());
                 read(")");
+                parseReturning(table, null, command);
                 return command;
             }
             Column[] columns = parseColumnList(table);
@@ -1113,6 +1117,7 @@ public class SQLParserBase implements SQLParser {
         } else {
             command.setQuery(parseSelect());
         }
+        parseReturning(table, null, command);
         return command;
     }
 
@@ -1127,6 +1132,7 @@ public class SQLParserBase implements SQLParser {
             if (isSelect()) {
                 command.setQuery(parseSelect());
                 read(")");
+                parseReturning(table, null, command);
                 return command;
             }
             columns = parseColumnList(table);
@@ -1175,7 +1181,27 @@ public class SQLParserBase implements SQLParser {
         } else {
             command.setQuery(parseSelect());
         }
+        parseReturning(table, null, command);
         return command;
+    }
+
+    // 解析RETURNING子句，返回实际影响行的指定列/表达式
+    private void parseReturning(Table table, String alias, ManipulationStatement command) {
+        if (!readIf("RETURNING"))
+            return;
+        ArrayList<Expression> expressions = Utils.newSmallArrayList();
+        if (readIf("*")) {
+            for (Column column : table.getColumns())
+                expressions.add(new ExpressionColumn(database, null, alias, column.getName()));
+        } else {
+            do {
+                Expression e = readExpression();
+                if (readIf("AS"))
+                    e = new Alias(e, readColumnIdentifier(), true);
+                expressions.add(e);
+            } while (readIf(","));
+        }
+        command.setReturning(table, alias, expressions.toArray(new Expression[0]));
     }
 
     protected StatementBase parseTruncate() {

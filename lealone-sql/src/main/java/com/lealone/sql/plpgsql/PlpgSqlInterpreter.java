@@ -609,6 +609,8 @@ public class PlpgSqlInterpreter {
 
     private void executeSql(SqlExec node) {
         PlpgSqlSqlExecutor.SelectInto selectInto = PlpgSqlSqlExecutor.splitSelectInto(node.sql);
+        if (selectInto == null)
+            selectInto = PlpgSqlSqlExecutor.splitReturningInto(node.sql);
         if (selectInto != null) {
             executeSelectInto(selectInto);
             return;
@@ -678,7 +680,7 @@ public class PlpgSqlInterpreter {
         Value[] row = rows.get(0);
         if (row.length != selectInto.targets.length)
             throw PlpgSqlException.raise("42804",
-                    "SELECT INTO has " + row.length + " columns but " + selectInto.targets.length
+                    "INTO has " + row.length + " columns but " + selectInto.targets.length
                             + " variables");
         for (int i = 0; i < row.length; i++) {
             PlpgSqlVariable variable = findVariable(selectInto.targets[i], false);

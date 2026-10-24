@@ -63,6 +63,7 @@ public class Delete extends UpDel {
             tableFilter.createColumnIndexes(condition);
         }
         tableFilter.preparePlan(session, 1);
+        prepareReturning();
 
         if (session.isReplicationMode())
             session.setDeterministic(isDeterministic());
@@ -102,10 +103,15 @@ public class Delete extends UpDel {
             }
             if (!done) { // remove row
                 Value[] oldColumns = oldRow.getColumns(); // oldRow对象会改变，所以提前保留旧值
+                long rowKey = oldRow.getKey();
                 onPendingOperationStart();
                 table.removeRow(session, oldRow, true, ar -> {
-                    if (fireRow && ar.isSucceeded()) {
-                        fireAfterRow(table, new Row(oldRow.getKey(), oldColumns), null);
+                    if (ar.isSucceeded()) {
+                        Row oldRowSnapshot = new Row(rowKey, oldColumns);
+                        if (fireRow)
+                            fireAfterRow(table, oldRowSnapshot, null);
+                        // 写成功之后才有返回行，DELETE返回的是被删除的旧行
+                        addReturningRow(oldRowSnapshot);
                     }
                     onPendingOperationComplete(ar);
                 });

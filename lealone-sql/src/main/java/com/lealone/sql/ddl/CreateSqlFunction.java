@@ -280,6 +280,10 @@ public class CreateSqlFunction extends SchemaStatement {
         ServerSession nestedSession = session.createNestedSession();
         nestedSession.setCurrentSchemaName(session.getCurrentSchemaName());
         PreparedSQLStatement stmt = nestedSession.prepareStatement(bodySql);
+        // DML函数体必须带RETURNING才能当查询用
+        if (!stmt.isQuery())
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "function body must be a query or a DML statement with RETURNING");
         Result meta = stmt.getMetaData().get();
         if (meta == null)
             return;

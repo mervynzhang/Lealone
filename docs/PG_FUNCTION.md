@@ -78,9 +78,12 @@ SELECT var_count(1, 2, 3);  -- 3
 
 ## 二、语义
 
-1. **函数体是单条查询**：`SELECT` / `VALUES` / `TABLE` / `WITH ... SELECT` / `(SELECT ...)`。
+1. **函数体是单条查询，或带 `RETURNING` 的 DML**：
+   `SELECT` / `VALUES` / `TABLE` / `WITH ... SELECT` / `(SELECT ...)`，
+   以及 `INSERT` / `UPDATE` / `DELETE` / `MERGE ... RETURNING ...`（见 `RETURNING.md`）。
    创建时就校验第一条 token 是上面这些关键字，并且函数体里出现 `;` 或 `?` 会直接拒绝
    （防止一次执行多条语句、以及用户写的 `?` 和参数名替换出来的 `?` 混在一起）。
+   不带 `RETURNING` 的 DML 函数体会在建函数时报 `FEATURE_NOT_SUPPORTED`。
    建函数时还会在一个嵌套 session 里 prepare 一次函数体（**不执行**）：语法错误、列/表不存在、
    常量返回值类型不匹配都在 `CREATE` 时报出；只有 setof/table/多个 OUT 参数的结果列形状留到调用时校验。
    数据库启动回放 `sys(meta)` 时会跳过这个校验（此时函数体引用的表可能还没建出来），
@@ -232,7 +235,7 @@ SELECT var_count(1, 2, 3);  -- 3
 - `ALTER FUNCTION ... SET SCHEMA`（换 schema）、`SET configuration_parameter FROM CURRENT`
 - `DROP FUNCTION ... CASCADE/RESTRICT`
 - `SET`/`RESET` 只落 DDL，不真正影响函数体执行时的会话参数（见2.8节）
-- `LANGUAGE plpgsql` 等块语言与 `BEGIN ... END` 函数体、函数体里的 DML
+- 其它块语言；函数体里**不带 `RETURNING` 的 DML**（带 `RETURNING` 的 DML 已支持，见 `RETURNING.md`）
 - `LATERAL`：函数表实参不能引用同一 FROM 里其它表的列
 - 多维数组参数（`INT[][]`）、`OUT` 参数是数组类型时的返回列类型推导（只按 `Value.ARRAY` 处理）
 

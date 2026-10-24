@@ -23,7 +23,8 @@ CALL sp_ins(1, 10);
 
 - **原子性**：整个过程是一条语句粒度的原子单元。过程体里任何一条语句失败，整个过程回滚。
 - **事务**：过程体里禁止 `COMMIT` / `ROLLBACK` / `SAVEPOINT` 等事务语句，违反时抛 `FEATURE_NOT_SUPPORTED`。
-- **返回**：过程体最后一条是查询时返回该结果集；否则返回各更新语句的更新数之和。
+- **返回**：过程体最后一条是查询（或带 `RETURNING` 的 DML）时返回该结果集；否则返回各更新语句的更新数之和。
+  DML `RETURNING` 的语义见 `RETURNING.md`。
 - **不是函数**：过程不能出现在表达式里，`SELECT sp_ins(1, 2)` 报 `FUNCTION_NOT_FOUND_1`。
 - **持久化**：过程体随 schema 元数据一起持久化，重开库后仍可用。
 
@@ -36,6 +37,7 @@ CALL sp_ins(1, 10);
 | 多语句过程体 | `CALL` 返回更新数 2，两行都写入 |
 | 带参过程 | 参数按位置绑定，写入对调用方可见（自动提交模式下） |
 | 过程体是查询 | `CALL` 返回结果集；`Statement.execute()` 返回 true，`getResultSet()` 能拿到行 |
+| 过程体是带 `RETURNING` 的 DML | `CALL` 返回实际影响的行（和查询一样）；不带 `RETURNING` 时仍是更新计数 |
 | 只有更新语句的过程 | `Statement.execute()` 返回 false，`getUpdateCount()` 是累计更新数 |
 | 过程体里嵌套 `CALL` | 支持，内外层语句各自独立绑定 `?` 参数 |
 | 过程体第二条语句违反主键 | 抛 `DUPLICATE_KEY_1`，且**第一条语句的插入已回滚** |

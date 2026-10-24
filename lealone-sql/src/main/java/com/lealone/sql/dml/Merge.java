@@ -16,6 +16,7 @@ import com.lealone.db.api.Trigger;
 import com.lealone.db.async.AsyncResultHandler;
 import com.lealone.db.auth.Right;
 import com.lealone.db.index.Index;
+import com.lealone.db.result.Result;
 import com.lealone.db.row.Row;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
@@ -69,6 +70,7 @@ public class Merge extends MerSert {
         }
         buff.append('\n');
         getValuesPlanSQL(buff);
+        appendReturningSQL(buff);
         return buff.toString();
     }
 
@@ -99,6 +101,7 @@ public class Merge extends MerSert {
             buff.appendExceptFirst(" AND ");
             buff.append(c.getSQL()).append("=?");
         }
+        appendReturningSQL(buff);
         String sql = buff.toString();
         update = (StatementBase) session.prepareStatement(sql);
         return this;
@@ -152,6 +155,28 @@ public class Merge extends MerSert {
                 p.setValue(v);
             }
             // 先更新，如果没有记录被更新，说明是一条新的记录，接着再插入
+            if (mergeStatement.isReturning()) {
+                // 带RETURNING时用查询方式执行内层UPDATE，更新成功的行就是返回行
+                Result result = mergeStatement.update.query(0);
+                try {
+                    int count = result.getRowCount();
+                    if (count > 0) {
+                        updateCount += count;
+                        int columnCount = result.getVisibleColumnCount();
+                        while (result.next()) {
+                            Value[] current = result.currentRow();
+                            Value[] values = new Value[columnCount];
+                            System.arraycopy(current, 0, values, 0, columnCount);
+                            addReturningRow(values);
+                        }
+                    } else {
+                        addRowInternal(row);
+                    }
+                } finally {
+                    result.close();
+                }
+                return;
+            }
             int count = mergeStatement.update.update();
             if (count > 0) {
                 updateCount += count;

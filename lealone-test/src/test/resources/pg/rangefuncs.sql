@@ -162,11 +162,22 @@ select count(*) c from rngfunc r join rngtbl2(1) t on r.rngfuncid = t.id;
 
 -- @case rangefuncs.insert_returning
 -- @pg rangefuncs.sql:456-476
--- 缺失: Lealone 函数体只允许单条查询, 不支持 INSERT ... RETURNING
-create temp table tt(f1 serial, data text);
-create function insert_tt(text) returns int as
-$$ insert into tt(data) values($1) returning f1 $$
-language sql;
+-- 适配: Lealone 函数参数要有名字(用 x 代替 $1); temp表的serial sequence在函数体的
+--       嵌套session里找不到, 所以用普通表; Lealone 的SQL函数体已支持带RETURNING的DML
+create table tt(f1 serial, data text);
+> update count: 0
+
+create function insert_tt(x text) returns int as $$ insert into tt(data) values(x) returning f1 $$ language sql;
+> update count: 0
+
 select insert_tt('foo');
+> INSERT_TT('foo')
+> ----------------
+> 1
+> rows: 1
+
 select * from tt;
--- PG 期望: 返回新行的 f1, tt 里多一行
+> F1 DATA
+> -- ----
+> 1  foo
+> rows: 1

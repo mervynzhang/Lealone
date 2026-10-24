@@ -81,18 +81,20 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
         return bodySql.toString();
     }
 
-    // 函数体只能是单个查询语句
+    // 函数体只能是单个查询语句，或者带RETURNING的DML语句
     private static void checkBody(ArrayList<String> tokens, ArrayList<Integer> tokenTypes) {
         boolean isQuery = false;
         String firstToken = tokens.get(0);
         if ("(".equals(firstToken) || "SELECT".equalsIgnoreCase(firstToken)
                 || "VALUES".equalsIgnoreCase(firstToken) || "TABLE".equalsIgnoreCase(firstToken)
-                || "WITH".equalsIgnoreCase(firstToken)) {
+                || "WITH".equalsIgnoreCase(firstToken) || "INSERT".equalsIgnoreCase(firstToken)
+                || "UPDATE".equalsIgnoreCase(firstToken) || "DELETE".equalsIgnoreCase(firstToken)
+                || "MERGE".equalsIgnoreCase(firstToken)) {
             isQuery = true;
         }
         if (!isQuery) {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                    "function body must be a SELECT, VALUES or TABLE query: " + firstToken);
+                    "function body must be a query or a DML statement with RETURNING: " + firstToken);
         }
         for (int i = 0, size = tokens.size(); i < size; i++) {
             if (tokenTypes.get(i) == KEYWORD && ";".equals(tokens.get(i))) {
