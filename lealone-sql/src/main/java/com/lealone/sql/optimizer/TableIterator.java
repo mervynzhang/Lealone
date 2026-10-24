@@ -67,6 +67,15 @@ public class TableIterator {
         }
     }
 
+    // 不额外读行，返回当前行的主键；取不到时返回 -1
+    public long getCurrentKey() {
+        SearchRow found = cursor != null ? cursor.getSearchRow() : null;
+        if (found != null)
+            return found.getKey();
+        Row r = tableFilter.get();
+        return r != null ? r.getKey() : -1;
+    }
+
     public int tryLockRow() {
         Row oldRow = getRow();
         if (oldRow == null) { // 已经删除了
