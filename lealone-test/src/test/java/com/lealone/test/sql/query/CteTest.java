@@ -7,6 +7,7 @@ package com.lealone.test.sql.query;
 
 import org.junit.Test;
 
+import com.lealone.db.api.ErrorCode;
 import com.lealone.test.sql.SqlTestBase;
 
 public class CteTest extends SqlTestBase {
@@ -17,6 +18,7 @@ public class CteTest extends SqlTestBase {
 
     // CTE里引用的表
     private void createCteTable() {
+        executeUpdate("DROP VIEW IF EXISTS CteView");
         executeUpdate("DROP TABLE IF EXISTS CteTest");
         executeUpdate("CREATE TABLE CteTest(pk int NOT NULL PRIMARY KEY, name varchar(10), v int)");
         executeUpdate("INSERT INTO CteTest(pk, name, v) VALUES(1, 'a', 10)");
@@ -31,6 +33,9 @@ public class CteTest extends SqlTestBase {
         testMultipleCte();
         testCteWithColumnNames();
         testCteOnTable();
+        testCteWithValuesBody();
+        testCteOuterQuery();
+        testTableCommand();
     }
 
     @Test
@@ -116,6 +121,51 @@ public class CteTest extends SqlTestBase {
         sql = "WITH x AS (SELECT name, sum(v) s FROM CteTest GROUP BY name)"
                 + " SELECT count(*) FROM x JOIN CteTest c ON x.name = c.name";
         assertEquals(3, getIntValue(1, true));
+    }
+
+    // CTE体也可以是VALUES，跟H2保持一致
+    private void testCteWithValuesBody() throws Exception {
+        sql = "WITH x AS (VALUES(1), (2)) SELECT * FROM x";
+        executeQuery();
+        assertEquals(1, getIntValue(1, false));
+        assertTrue(next());
+        assertEquals(2, getIntValue(1, true));
+
+        sql = "WITH x(a) AS (VALUES(1), (2)) SELECT a FROM x WHERE a > 1";
+        assertEquals(2, getIntValue(1, true));
+    }
+
+    // WITH后面的主查询也可以是VALUES或TABLE
+    private void testCteOuterQuery() throws Exception {
+        sql = "WITH x AS (SELECT 1) VALUES(2)";
+        assertEquals(2, getIntValue(1, true));
+
+        sql = "WITH x AS (SELECT 1) TABLE CteTest";
+        executeQuery();
+        assertEquals(1, getIntValue(1, false));
+        assertTrue(next());
+        assertEquals(2, getIntValue(1, true));
+    }
+
+    // TABLE t等价于SELECT * FROM t
+    private void testTableCommand() throws Exception {
+        sql = "TABLE CteTest";
+        executeQuery();
+        assertEquals(3, rs.getMetaData().getColumnCount());
+        assertEquals(1, getIntValue(1, false));
+        int count = 1;
+        while (next())
+            count++;
+        closeResultSet();
+        assertEquals(3, count);
+
+        // TABLE也能查视图
+        executeUpdate("DROP VIEW IF EXISTS CteView");
+        executeUpdate("CREATE VIEW CteView AS SELECT pk FROM CteTest WHERE pk = 2");
+        sql = "TABLE CteView";
+        assertEquals(2, getIntValue(1, true));
+
+        executeQueryThanAssertErrorCode("TABLE NoSuchTable", ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1);
     }
 
     // 递归CTE的行为保持不变

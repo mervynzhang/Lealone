@@ -487,6 +487,8 @@ public class SQLParserBase implements SQLParser {
             case 'T':
                 if (readIf("TRUNCATE")) {
                     s = parseTruncate();
+                } else if (readIf("TABLE")) {
+                    s = parseExplicitTable();
                 }
                 break;
             case 'u':
@@ -4498,6 +4500,28 @@ public class SQLParserBase implements SQLParser {
         return command;
     }
 
+    // TABLE x 等价于 SELECT * FROM x
+    protected Select parseExplicitTable() {
+        Table table = readTableOrView();
+        Select command = new Select(session);
+        currentSelect = command;
+        ArrayList<Expression> list = Utils.newSmallArrayList();
+        list.add(new Wildcard(null, null));
+        command.setExpressions(list);
+        command.addTableFilter(new TableFilter(session, table, null, rightsChecked, command), true);
+        command.init();
+        return command;
+    }
+
+    // WITH后面的查询体可以是SELECT、VALUES或TABLE
+    protected Query parseWithQuery() {
+        if (readIf("VALUES"))
+            return parseValues();
+        if (readIf("TABLE"))
+            return parseExplicitTable();
+        return parseSelect();
+    }
+
     protected TableFilter parseValuesTable() {
         Schema mainSchema = database.getSchema(session, Constants.SCHEMA_MAIN);
         TableFunction tf = (TableFunction) Function.getFunction(database, "TABLE");
@@ -5085,7 +5109,7 @@ public class SQLParserBase implements SQLParser {
                 }
                 read("AS");
                 read("(");
-                Query withQuery = parseSelect();
+                Query withQuery = parseWithQuery();
                 read(")");
                 withQuery.prepare();
                 querySQL = StringUtils.cache(withQuery.getPlanSQL());
@@ -5102,7 +5126,7 @@ public class SQLParserBase implements SQLParser {
             session.addLocalTempTable(view);
             view.setOnCommitDrop(true);
         } while (readIf(","));
-        Query q = parseSelect();
+        Query q = parseWithQuery();
         q.setPrepareAlways(true);
         return q;
     }
