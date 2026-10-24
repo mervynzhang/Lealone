@@ -14,6 +14,8 @@ import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SqlFunction;
 import com.lealone.db.session.ServerSession;
 import com.lealone.sql.SQLStatement;
+import com.lealone.sql.plpgsql.PlpgSqlFunction;
+import com.lealone.sql.plpgsql.PlpgSqlParser;
 
 /**
  * This class represents the statement
@@ -26,6 +28,7 @@ public class CreateSqlFunction extends SchemaStatement {
     private String[] parameterTypes;
     private String returnTypeSql;
     private int returnType;
+    private String language = "SQL";
     private String body;
     private String bodySql;
     private int[] bodyParameterIndexes;
@@ -56,6 +59,10 @@ public class CreateSqlFunction extends SchemaStatement {
         this.returnType = returnType;
     }
 
+    public void setLanguage(String language) {
+        this.language = language;
+    }
+
     /**
      * 设置函数体。
      *
@@ -84,6 +91,13 @@ public class CreateSqlFunction extends SchemaStatement {
     @Override
     public int update() {
         session.getUser().checkAdmin();
+        boolean plpgsql = PlpgSqlFunction.LANGUAGE.equalsIgnoreCase(language);
+        // 先校验语言和函数体，非法时不改动已有的函数
+        if (plpgsql) {
+            PlpgSqlParser.parse(body);
+        } else if (!"SQL".equalsIgnoreCase(language)) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "LANGUAGE " + language);
+        }
         DbObjectLock lock = schema.tryExclusiveLock(DbObjectType.FUNCTION_ALIAS, session);
         if (lock == null)
             return -1;
@@ -100,7 +114,13 @@ public class CreateSqlFunction extends SchemaStatement {
             schema.remove(session, old, lock);
         }
         int id = getObjectId();
-        SqlFunction function = new SqlFunction(schema, id, functionName);
+        SqlFunction function;
+        if (plpgsql) {
+            function = new PlpgSqlFunction(schema, id, functionName);
+        } else {
+            function = new SqlFunction(schema, id, functionName);
+        }
+        function.setLanguage(language);
         function.setParameters(parameterNames, parameterTypes);
         function.setReturnType(returnTypeSql, returnType);
         function.setBody(body, bodySql, bodyParameterIndexes);

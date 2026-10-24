@@ -5156,10 +5156,12 @@ public class SQLParserBase implements SQLParser {
 
         // LANGUAGE子句和易变性关键字都是可选的，且顺序任意
         boolean deterministic = false;
+        String language = "SQL";
         while (true) {
             if (readIf("LANGUAGE")) {
-                String language = readStringOrIdentifier();
-                if (!"SQL".equalsIgnoreCase(language)) {
+                language = readStringOrIdentifier();
+                if (!"SQL".equalsIgnoreCase(language)
+                        && !"PLPGSQL".equalsIgnoreCase(language)) {
                     throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                             "LANGUAGE " + language);
                 }
@@ -5174,14 +5176,20 @@ public class SQLParserBase implements SQLParser {
         read("AS");
         String body = readString();
         command.setDeterministic(deterministic);
-        ArrayList<Integer> bodyParameterIndexes = Utils.newSmallArrayList();
-        String bodySql = SqlFunctionBodyParser.parseBody(session, body, parameterNames,
-                bodyParameterIndexes);
-        int[] indexes = new int[bodyParameterIndexes.size()];
-        for (int i = 0; i < indexes.length; i++) {
-            indexes[i] = bodyParameterIndexes.get(i);
+        command.setLanguage(language);
+        if ("PLPGSQL".equalsIgnoreCase(language)) {
+            // PL/pgSQL的函数体交给自己的解释器执行，不需要把参数名改写成?
+            command.setBody(body, null, new int[0]);
+        } else {
+            ArrayList<Integer> bodyParameterIndexes = Utils.newSmallArrayList();
+            String bodySql = SqlFunctionBodyParser.parseBody(session, body, parameterNames,
+                    bodyParameterIndexes);
+            int[] indexes = new int[bodyParameterIndexes.size()];
+            for (int i = 0; i < indexes.length; i++) {
+                indexes[i] = bodyParameterIndexes.get(i);
+            }
+            command.setBody(body, bodySql, indexes);
         }
-        command.setBody(body, bodySql, indexes);
         return command;
     }
 

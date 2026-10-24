@@ -38,6 +38,7 @@ public class SqlFunction extends FunctionAlias {
     private String[] parameterTypes;
     private String returnTypeSql;
     private int returnType;
+    private String language = "SQL";
     private String body;
     private String bodySql;
     private int[] bodyParameterIndexes;
@@ -67,6 +68,30 @@ public class SqlFunction extends FunctionAlias {
     public void setReturnType(String returnTypeSql, int returnType) {
         this.returnTypeSql = returnTypeSql;
         this.returnType = returnType;
+    }
+
+    public String getLanguage() {
+        return language;
+    }
+
+    public void setLanguage(String language) {
+        this.language = language == null ? "SQL" : language;
+    }
+
+    protected String getBody() {
+        return body;
+    }
+
+    protected String[] getParameterNames() {
+        return parameterNames;
+    }
+
+    protected String[] getParameterTypes() {
+        return parameterTypes;
+    }
+
+    protected int getReturnType() {
+        return returnType;
     }
 
     /**
@@ -113,6 +138,9 @@ public class SqlFunction extends FunctionAlias {
             buff.append(parameterTypes[i]);
         }
         buff.append(") RETURNS ").append(returnTypeSql);
+        // SQL语言的函数保持原来的DDL格式，过程式语言要显式写出LANGUAGE
+        if (!"SQL".equalsIgnoreCase(language))
+            buff.append(" LANGUAGE ").append(language);
         buff.append(isDeterministic() ? " IMMUTABLE" : " VOLATILE");
         buff.append(" AS ").append(StringUtils.quoteStringSQL(body));
         return buff.toString();
@@ -135,6 +163,14 @@ public class SqlFunction extends FunctionAlias {
         for (int i = 0; i < len; i++) {
             values[i] = args[i].getValue(session);
         }
+        return executeFunction(session, values);
+    }
+
+    /**
+     * 执行函数体，SQL语言的函数体由子类之外的默认实现执行，
+     * PL/pgSQL等过程式语言由子类覆盖这个方法。
+     */
+    protected Value executeFunction(ServerSession session, Value[] values) {
         Connection conn = session.createNestedConnection(false);
         try {
             // 函数体里的表名按调用方当前的schema解析
