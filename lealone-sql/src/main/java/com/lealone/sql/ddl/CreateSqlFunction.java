@@ -300,7 +300,35 @@ public class CreateSqlFunction extends SchemaStatement {
         }
         ServerSession nestedSession = session.createNestedSession();
         nestedSession.setCurrentSchemaName(session.getCurrentSchemaName());
-        PreparedSQLStatement stmt = nestedSession.prepareStatement(bodySql);
+        boolean ddlInBody = hasDdlStatement();
+        PreparedSQLStatement stmt = null;
+        if (atomicBodySqls != null) {
+            // 块体里的每条语句都校验一遍，不能留到调用时才报语法错
+            int last = atomicBodySqls.length - 1;
+            for (int i = 0; i <= last; i++) {
+                try {
+                    PreparedSQLStatement s = nestedSession.prepareStatement(atomicBodySqls[i]);
+                    if (i == last)
+                        stmt = s;
+                } catch (DbException e) {
+                    // 函数体里有DDL时，表可能是函数体自己刚刚建出来的，
+                    // 这种引用只能推迟到调用时校验(等价于PostgreSQL的check_function_bodies=off)
+                    if (ddlInBody && isTableNotFound(e))
+                        continue;
+                    throw e;
+                }
+            }
+            if (stmt == null)
+                return;
+        } else {
+            try {
+                stmt = nestedSession.prepareStatement(bodySql);
+            } catch (DbException e) {
+                if (ddlInBody && isTableNotFound(e))
+                    return;
+                throw e;
+            }
+        }
         // DML函数体必须带RETURNING才能当查询用;
         // RETURNS VOID是例外: 普通DML和BEGIN ATOMIC体都可以, 执行完返回NULL
         if (!stmt.isQuery()) {
@@ -322,6 +350,28 @@ public class CreateSqlFunction extends SchemaStatement {
                     "function body must return one column, but returns " + columnCount);
         }
         checkConstantReturnValue(stmt, declaredType);
+    }
+
+    // 函数体里是否有DDL语句(建表/改表/删表这类)，有DDL时函数体可以引用自己刚建出来的表
+    private boolean hasDdlStatement() {
+        if (atomicBodySqls != null) {
+            for (String sql : atomicBodySqls) {
+                if (isDdlStatement(sql))
+                    return true;
+            }
+            return false;
+        }
+        return isDdlStatement(bodySql);
+    }
+
+    private static boolean isDdlStatement(String sql) {
+        String s = sql.trim().toUpperCase();
+        return s.startsWith("CREATE ") || s.startsWith("ALTER ") || s.startsWith("DROP ")
+                || s.startsWith("TRUNCATE ");
+    }
+
+    private static boolean isTableNotFound(DbException e) {
+        return e.getErrorCode() == ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1;
     }
 
     // 函数体返回常量时，提前检查能否转换成声明的返回类型(比如 'not an integer' 不能作为INT返回)

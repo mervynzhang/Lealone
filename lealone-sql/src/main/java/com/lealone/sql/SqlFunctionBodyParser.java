@@ -111,20 +111,13 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
         return bodySql.toString();
     }
 
-    // 函数体只能是单个查询语句，或者带RETURNING的DML语句
+    // 单语句函数体: 只能是查询、DML或者DDL/utility语句，并且不允许出现分号和'?';
+    // 是不是查询语句、返回类型对不对，由CreateSqlFunction.validateSqlBody在建函数时校验
     private static void checkBody(ArrayList<String> tokens, ArrayList<Integer> tokenTypes) {
-        boolean isQuery = false;
         String firstToken = tokens.get(0);
-        if ("(".equals(firstToken) || "SELECT".equalsIgnoreCase(firstToken)
-                || "VALUES".equalsIgnoreCase(firstToken) || "TABLE".equalsIgnoreCase(firstToken)
-                || "WITH".equalsIgnoreCase(firstToken) || "INSERT".equalsIgnoreCase(firstToken)
-                || "UPDATE".equalsIgnoreCase(firstToken) || "DELETE".equalsIgnoreCase(firstToken)
-                || "MERGE".equalsIgnoreCase(firstToken)) {
-            isQuery = true;
-        }
-        if (!isQuery) {
+        if (!isSupportedBodyStart(firstToken)) {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                    "function body must be a query or a DML statement with RETURNING: " + firstToken);
+                    "function body must be a query, a DML or a DDL statement: " + firstToken);
         }
         for (int i = 0, size = tokens.size(); i < size; i++) {
             if (tokenTypes.get(i) == KEYWORD && ";".equals(tokens.get(i))) {
@@ -137,6 +130,17 @@ class SqlFunctionBodyParser extends LealoneSQLParser {
                         "? is not allowed in function body");
             }
         }
+    }
+
+    private static boolean isSupportedBodyStart(String token) {
+        return "(".equals(token) || "SELECT".equalsIgnoreCase(token)
+                || "VALUES".equalsIgnoreCase(token) || "TABLE".equalsIgnoreCase(token)
+                || "WITH".equalsIgnoreCase(token) || "INSERT".equalsIgnoreCase(token)
+                || "UPDATE".equalsIgnoreCase(token) || "DELETE".equalsIgnoreCase(token)
+                || "MERGE".equalsIgnoreCase(token) || "CREATE".equalsIgnoreCase(token)
+                || "ALTER".equalsIgnoreCase(token) || "DROP".equalsIgnoreCase(token)
+                || "TRUNCATE".equalsIgnoreCase(token) || "SET".equalsIgnoreCase(token)
+                || "CALL".equalsIgnoreCase(token);
     }
 
     private static void checkNoParameterToken(ArrayList<String> tokens,

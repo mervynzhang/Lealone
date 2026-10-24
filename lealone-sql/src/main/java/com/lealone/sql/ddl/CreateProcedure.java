@@ -80,6 +80,25 @@ public class CreateProcedure extends SchemaStatement {
         return array;
     }
 
+    // 过程体在建过程时就校验语法，不能留到CALL时才报错;
+    // 过程体里可以执行DDL，引用的表可能是过程体自己刚建出来的，这种推迟到CALL时校验
+    private void validateBody() {
+        if (isPlpgSql() || session.getDatabase().isStarting())
+            return;
+        ServerSession nestedSession = session.createNestedSession();
+        nestedSession.setCurrentSchemaName(session.getCurrentSchemaName());
+        String[] statements = LealoneSQLParser.splitStatementsRaw(session, body);
+        for (String sql : statements) {
+            try {
+                nestedSession.prepareStatement(sql);
+            } catch (DbException e) {
+                if (e.getErrorCode() == ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1)
+                    continue;
+                throw e;
+            }
+        }
+    }
+
     // 有OUT/INOUT参数的过程，OUT/INOUT的值来自过程体最后一条查询，所以过程体必须以查询语句结尾;
     // plpgsql过程体例外, OUT/INOUT参数就是plpgsql里的变量, 由过程体自己赋值
     private void checkOutputParameters() {
@@ -151,6 +170,7 @@ public class CreateProcedure extends SchemaStatement {
                     "BEGIN ATOMIC procedure body with LANGUAGE " + language);
         }
         checkOutputParameters();
+        validateBody();
         SqlProcedure procedure = new SqlProcedure(schema, getObjectId(), procedureName, body,
                 language, atomicBody, parameters.toArray(new Column[0]), toIntArray(parameterModes));
         schema.add(session, procedure, lock);

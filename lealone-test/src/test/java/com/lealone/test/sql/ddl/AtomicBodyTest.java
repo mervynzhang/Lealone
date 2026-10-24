@@ -37,6 +37,10 @@ public class AtomicBodyTest extends SqlTestBase {
         executeUpdate("DROP FUNCTION IF EXISTS fre3");
         executeUpdate("DROP FUNCTION IF EXISTS fre4");
         executeUpdate("DROP FUNCTION IF EXISTS fre5");
+        executeUpdate("DROP FUNCTION IF EXISTS fddl1");
+        executeUpdate("DROP FUNCTION IF EXISTS fddl2");
+        executeUpdate("DROP TABLE IF EXISTS fab_ddl");
+        executeUpdate("DROP TABLE IF EXISTS fab_ddl2");
         executeUpdate("DROP TABLE IF EXISTS pab_t");
         executeUpdate("CREATE TABLE pab_t(id int primary key, v int)");
     }
@@ -49,6 +53,7 @@ public class AtomicBodyTest extends SqlTestBase {
         testFunctionAtomicBody();
         testFunctionAtomicBodyRows();
         testReturnBody();
+        testDdlInFunctionBody();
         testUnsupported();
         testScriptRoundTrip();
         init();
@@ -179,6 +184,34 @@ public class AtomicBodyTest extends SqlTestBase {
         String ddl5 = getCreateFunctionSql("FRE5");
         assertNotNull(ddl5);
         assertTrue(ddl5, ddl5.contains("BEGIN ATOMIC SELECT -a; END"));
+    }
+
+    // 函数体里做DDL: AS '$$ ... $$' 多条语句, BEGIN ATOMIC块体, 建函数时校验语法
+    private void testDdlInFunctionBody() throws Exception {
+        executeUpdate("CREATE FUNCTION fddl1() RETURNS VOID LANGUAGE SQL AS $$ "
+                + "CREATE TABLE fab_ddl(f1 INT); INSERT INTO fab_ddl VALUES(1.2); $$");
+        executeQuery("SELECT fddl1()");
+        assertNull(getStringValue(1, true));
+        executeQuery("SELECT f1 FROM fab_ddl");
+        assertEquals(1, getIntValue(1, true));
+        // 函数体里先建表再用表，非VOID函数的最后一条查询就是返回值
+        executeUpdate("CREATE FUNCTION fddl2(a INT) RETURNS INT BEGIN ATOMIC "
+                + "CREATE TABLE fab_ddl2(f1 INT); INSERT INTO fab_ddl2 VALUES(a * 2); "
+                + "SELECT f1 FROM fab_ddl2; END");
+        executeQuery("SELECT fddl2(4)");
+        assertEquals(8, getIntValue(1, true));
+        // 函数体里有DDL时只校验语法，引用不到的表推迟到调用时校验
+        executeUpdateThanAssertErrorCode("CREATE FUNCTION fddl3() RETURNS VOID AS $$ "
+                + "CREATE TABLE fab_ddl3(f1 INT); SELEC 1; $$", ErrorCode.SYNTAX_ERROR_2);
+        // 同一张表重复建会在调用时报错
+        executeUpdate("CREATE FUNCTION fddl4() RETURNS VOID AS $$ "
+                + "CREATE TABLE fab_ddl(f1 INT); $$");
+        try {
+            executeQuery("SELECT fddl4()");
+            fail();
+        } catch (Exception e) {
+            assertErrorCode(e, ErrorCode.TABLE_OR_VIEW_ALREADY_EXISTS_1);
+        }
     }
 
     private void testUnsupported() throws Exception {

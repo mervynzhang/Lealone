@@ -705,16 +705,44 @@ select * from voidtest5(3);
 
 -- @case function_sql.ddl_in_body
 -- @pg create_function_sql.sql:409-431
--- 缺失: Lealone 函数体只允许一条查询, 不允许在函数体里执行 DDL/DML
-set check_function_bodies to off;
+-- 适配: Lealone 没有 check_function_bodies 开关, 函数体里有DDL时建函数只校验语法,
+--       引用不到的表(比如函数体自己刚建出来的)推迟到调用时校验; 补上结果断言
 create function create_and_insert() returns void language sql as $$
   create table ddl_test (f1 int);
   insert into ddl_test values (1.2);
 $$;
-select create_and_insert();
+> update count: 0
+
+select create_and_insert() r;
+> R
+> ----
+> null
+> rows: 1
+
 table ddl_test;
-reset check_function_bodies;
--- PG 期望: 函数体里的 DDL 生效, ddl_test 有 1 行 1.2
+> F1
+> --
+> 1
+> rows: 1
+
+create function alter_and_insert() returns void language sql as $$
+  alter table ddl_test alter column f1 type numeric;
+  insert into ddl_test values (1.2);
+$$;
+> update count: 0
+
+select alter_and_insert() r;
+> R
+> ----
+> null
+> rows: 1
+
+table ddl_test;
+> F1
+> ---
+> 1
+> 1.2
+> rows: 2
 
 -- @case function_sql.anyarray_setof
 -- @pg create_function_sql.sql:434-447

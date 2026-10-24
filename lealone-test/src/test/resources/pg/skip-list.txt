@@ -20,6 +20,7 @@
 #
 # 重新统计 PG 语句数: mvn -o -pl lealone-test test -Dtest=PgRegressTest \
 #   -Dpg.srcdir=/path/to/postgres/src/test/regress/sql
+
 function_sql.setup	create_function_sql.sql:9-14	4	Lealone 无 SET search_path, CREATE USER 必须带 PASSWORD
 function_sql.a2_array_arg	create_function_sql.sql:25-26	1	缺少 $1 位置参数与 ARRAY[...] 字面量(数组参数本身已支持)
 function_sql.pg_proc	create_function_sql.sql:29-36	4	Lealone 没有 pg_proc/regproc 系统目录
@@ -31,7 +32,6 @@ function_sql.pg_get_functiondef	create_function_sql.sql:150-153	4	Lealone 没有
 function_sql.sql_body_polymorphic	create_function_sql.sql:197-205	2	Lealone 无 anyarray/anyelement 多态类型
 function_sql.pg_get_functiondef_sqlbody	create_function_sql.sql:214-228	13	Lealone 没有 pg_get_functiondef()
 function_sql.sql_body_tempseq	create_function_sql.sql:244-253	3	Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD
-function_sql.ddl_in_body	create_function_sql.sql:409-431	8	Lealone 函数体只允许单条查询(不支持 DDL)
 function_sql.information_schema	create_function_sql.sql:256-323	19	Lealone 没有 information_schema.routines 等视图
 function_sql.or_replace_window	create_function_sql.sql:337-339	3	Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转
 function_sql.setof_inline	create_function_sql.sql:353-376	10	Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN
@@ -54,4 +54,3 @@ plpgsql.cursor	plpgsql.sql:1859-1900	6	PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refc
 rangefuncs.with_ordinality_unnest	rangefuncs.sql:13-17	5	没有 unnest()/generate_series()(WITH ORDINALITY 本身已支持)
 plpgsql.setof_composite_record	plpgsql.sql:1487-1512	4	这段用 plpgsql 的 FOR ... IN 查询(50100 PL/pgSQL: FOR ... IN query)遍历表, 该语法还不支持; RETURNS SETOF <表行类型> 本身已可用
 procedure.out_params_named	create_procedure.sql:199-212	8	不支持命名实参(a => null)与过程的 VARIADIC 参数, 也不支持同名过程按 OUT/IN 区分重载(90150)
-procedure.utility_body	create_procedure.sql:46-50	2	Lealone 过程体不能执行 DDL

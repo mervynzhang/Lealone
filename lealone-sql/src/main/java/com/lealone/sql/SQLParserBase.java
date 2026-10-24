@@ -5298,45 +5298,70 @@ public class SQLParserBase implements SQLParser {
         return language;
     }
 
-    // 读取BEGIN ATOMIC和END之间的多条SQL语句，用分号拼成一个过程体/函数体
+    // 读取BEGIN [ATOMIC]和END之间的多条SQL语句，用分号拼成一个过程体/函数体。
+    // 这里只按原文切分，不做语义解析: 函数体/过程体里的表可能是函数体自己刚建出来的
+    // (比如 BEGIN ATOMIC CREATE TABLE t(...); INSERT INTO t ...; END)，
+    // 建函数/建过程时会统一校验语法，引用不到的表推迟到调用时校验
     protected String parseAtomicBody() {
         StatementBuilder buff = new StatementBuilder();
-        ArrayList<Parameter> outerParameters = parameters;
-        // 函数体/过程体里的'?'是给函数体用的，不能留到CREATE语句自己的参数列表里
-        parameters = Utils.newSmallArrayList();
-        try {
-            while (true) {
-                if (isToken("END")) {
-                    read();
-                    break;
+        int depth = 0; // 嵌套的BEGIN ... END / CASE ... END
+        int start = -1;
+        while (currentTokenType != END) {
+            boolean endToken = isToken("END");
+            if (depth == 0 && endToken) {
+                if (start >= 0) {
+                    appendBodyStatement(buff, originalSQL.substring(start, lastParseIndex));
+                    start = -1;
                 }
-                if (currentTokenType == END)
-                    throw getSyntaxError();
-                // 标准块体里允许空语句(PostgreSQL的;;)
-                if (readIf(";"))
-                    continue;
-                if (readIf("RETURN")) {
-                    // 块体里的RETURN: RETURN <表达式>等价于SELECT <表达式>, RETURN QUERY <查询>直接返回查询
-                    if (readIf("QUERY")) {
-                        StatementBase query = parseStatement();
-                        buff.appendExceptFirst("; ").append(query.getSQL());
-                    } else {
-                        buff.appendExceptFirst("; ").append("SELECT ")
-                                .append(readReturnExpressionText());
-                    }
-                } else {
-                    StatementBase statement = parseStatement();
-                    buff.appendExceptFirst("; ").append(statement.getSQL());
-                }
-                if (readIf(";"))
-                    continue;
-                if (!isToken("END"))
-                    throw getSyntaxError();
+                read();
+                return buff.toString();
             }
-        } finally {
-            parameters = outerParameters;
+            if (depth == 0 && isSemicolon()) {
+                if (start >= 0) {
+                    appendBodyStatement(buff, originalSQL.substring(start, lastParseIndex));
+                    start = -1;
+                }
+                read();
+                continue;
+            }
+            if (start < 0)
+                start = lastParseIndex;
+            if (isToken("BEGIN") || isToken("CASE"))
+                depth++;
+            else if (endToken && depth > 0)
+                depth--;
+            read();
         }
-        return buff.toString();
+        throw getSyntaxError();
+    }
+
+    private boolean isSemicolon() {
+        return currentTokenType == KEYWORD && ";".equals(currentToken);
+    }
+
+    // 函数体/过程体里的一条语句: RETURN <表达式>等价于SELECT <表达式>, RETURN QUERY <查询>直接返回查询
+    private void appendBodyStatement(StatementBuilder buff, String text) {
+        String sql = text.trim();
+        if (sql.isEmpty())
+            return;
+        if (startsWithWord(sql, "RETURN")) {
+            String rest = sql.substring("RETURN".length()).trim();
+            if (startsWithWord(rest, "QUERY"))
+                buff.appendExceptFirst("; ").append(rest.substring("QUERY".length()).trim());
+            else
+                buff.appendExceptFirst("; ").append("SELECT ").append(rest);
+        } else {
+            buff.appendExceptFirst("; ").append(sql);
+        }
+    }
+
+    private static boolean startsWithWord(String sql, String word) {
+        if (!sql.regionMatches(true, 0, word, 0, word.length()))
+            return false;
+        if (sql.length() == word.length())
+            return true;
+        char c = sql.charAt(word.length());
+        return !Character.isLetterOrDigit(c) && c != '_';
     }
 
     // SQL标准函数体: RETURN <表达式> 等价于 SELECT <表达式>
@@ -5666,7 +5691,7 @@ public class SQLParserBase implements SQLParser {
             // PL/pgSQL的函数体交给自己的解释器执行，不需要把参数名改写成?
             command.setBody(body, null, new int[0]);
         } else if (atomicBody) {
-            String[] statements = LealoneSQLParser.splitStatements(session, body);
+            String[] statements = LealoneSQLParser.splitStatementsRaw(session, body);
             if (statements.length == 0) {
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                         "empty BEGIN ATOMIC function body");
@@ -5684,14 +5709,33 @@ public class SQLParserBase implements SQLParser {
             command.setBody(body, bodySqls[last], statementParameterIndexes[last]);
             command.setAtomicBody(bodySqls, statementParameterIndexes);
         } else {
-            ArrayList<Integer> bodyParameterIndexes = Utils.newSmallArrayList();
-            String bodySql = SqlFunctionBodyParser.parseBody(session, body, parameterNames,
-                    bodyParameterIndexes, parameterTypeArray);
-            int[] indexes = new int[bodyParameterIndexes.size()];
-            for (int i = 0; i < indexes.length; i++) {
-                indexes[i] = bodyParameterIndexes.get(i);
+            // PostgreSQL的AS '$$ ... $$'写法里可以有多条语句(比如函数体里做DDL)，
+            // 这时按语句列表顺序执行，最后一条查询的结果就是返回值
+            String[] statements = LealoneSQLParser.splitStatementsRaw(session, body);
+            if (statements.length > 1) {
+                String[] bodySqls = new String[statements.length];
+                int[][] statementParameterIndexes = new int[statements.length][];
+                for (int i = 0; i < statements.length; i++) {
+                    ArrayList<Integer> indexes = Utils.newSmallArrayList();
+                    bodySqls[i] = SqlFunctionBodyParser.parseAtomicBody(session, statements[i],
+                            parameterNames, indexes, parameterTypeArray);
+                    statementParameterIndexes[i] = toIntArray(indexes);
+                }
+                int last = statements.length - 1;
+                command.setBody(body, bodySqls[last], statementParameterIndexes[last]);
+                command.setAtomicBody(bodySqls, statementParameterIndexes);
+            } else {
+                ArrayList<Integer> bodyParameterIndexes = Utils.newSmallArrayList();
+                // 单语句函数体: 去掉结尾的分号后再解析
+                String single = statements.length == 1 ? statements[0] : body;
+                String bodySql = SqlFunctionBodyParser.parseBody(session, single, parameterNames,
+                        bodyParameterIndexes, parameterTypeArray);
+                int[] indexes = new int[bodyParameterIndexes.size()];
+                for (int i = 0; i < indexes.length; i++) {
+                    indexes[i] = bodyParameterIndexes.get(i);
+                }
+                command.setBody(body, bodySql, indexes);
             }
-            command.setBody(body, bodySql, indexes);
         }
         return command;
     }
