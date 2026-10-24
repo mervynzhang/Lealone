@@ -82,7 +82,8 @@ public abstract class ColumnStorageLeafPage extends LeafPage {
                 readAllColumnPages();
             }
             for (PageReference ref : columnPages) {
-                if (ref.getPos() > 0) {
+                // 新增加的列还没有自己的column page
+                if (ref != null && ref.getPos() > 0) {
                     ref.markDirtyPage();
                 }
             }
