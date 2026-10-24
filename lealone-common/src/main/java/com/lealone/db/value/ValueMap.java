@@ -97,6 +97,61 @@ public class ValueMap extends Value {
         return p;
     }
 
+    // 服务调用的结果列是STRING类型，Map结果要按JSON返回，客户端(比如ORM模型)才能直接解码
+    public String getJson() {
+        StatementBuilder buff = new StatementBuilder("{");
+        for (Entry<Value, Value> e : map.entrySet()) {
+            buff.appendExceptFirst(",");
+            buff.append(quote(e.getKey().getString())).append(':').append(jsonValue(e.getValue()));
+        }
+        return buff.append('}').toString();
+    }
+
+    private static String jsonValue(Value v) {
+        switch (v.getType()) {
+        case Value.NULL:
+            return "null";
+        case Value.BOOLEAN:
+        case Value.BYTE:
+        case Value.SHORT:
+        case Value.INT:
+        case Value.LONG:
+        case Value.FLOAT:
+        case Value.DOUBLE:
+        case Value.DECIMAL:
+            return v.getString();
+        default:
+            return quote(v.getString());
+        }
+    }
+
+    private static String quote(String s) {
+        StringBuilder b = new StringBuilder(s.length() + 2).append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+            case '"':
+                b.append("\\\"");
+                break;
+            case '\\':
+                b.append("\\\\");
+                break;
+            case '\n':
+                b.append("\\n");
+                break;
+            case '\r':
+                b.append("\\r");
+                break;
+            case '\t':
+                b.append("\\t");
+                break;
+            default:
+                b.append(c);
+            }
+        }
+        return b.append('"').toString();
+    }
+
     @Override
     public String getString() {
         StatementBuilder buff = new StatementBuilder("(");
