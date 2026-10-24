@@ -53,8 +53,7 @@
 
 | # | 问题 | 复现 | 状态 |
 |---|---|---|---|
-| 52 | **一次失败的 `CREATE TRIGGER` 之后，同一连接上的事务回滚静默失效（P0 丢数据）**：`BEGIN; DELETE ...; ROLLBACK;` 之后数据不恢复（另一连接验证过：删除未提交，说明事务在起作用，只是 undo 记录丢了）。同样流程换成"失败的 `CREATE TABLE`"或普通 DML 都正常，所以问题在 `CreateTrigger.update()` 的失败路径（`TriggerObject.setTriggerClassName` 抛异常，位于 `lock.addHandler(...)`/`schema.add(...)` 之前，留下了半初始化的状态） | `FailedDdlBreaksRollbackTest`（`@Ignore` 标注，去掉即可看到失败） | **待修复**（重要线索：只在**语句缓存开启**时出现，`SET QUERY_CACHE_SIZE 0` 可规避 —— 见 #51 行末说明） |
-| 51 | **级联删除在事务里回滚后子行永久丢失（P0 丢数据）**：`ON DELETE CASCADE` 级联删掉的子行没有 undo 记录，事务回滚时父行恢复、子行不恢复。对照实验：不带外键的普通删除在同一事务里回滚正常，所以问题在级联路径（`ConstraintReferential.updateWithSkipCheck` → `PreparedSQLStatement.update()` 同步执行，与普通 DML 的 undo 记录方式不同） | `CascadeDeleteRollbackTest`（`@Ignore` 标注，去掉即可看到失败）：建父子表+级联外键 → `BEGIN; DELETE FROM p WHERE id=1; ROLLBACK;` → 期望子行恢复，实际丢失（另一连接验证过：事务未提交时外部看不到删除，说明删除确实在事务内，只是 undo 记录缺失）。**根因线索（本轮新发现）**：把同一脚本里的 `SET QUERY_CACHE_SIZE 0` 加上，缺陷就不再出现 —— 说明与**语句缓存里被复用/半失败状态的 PreparedSQLStatement** 有关；默认 JDBC 同步客户端(直接用 `DriverManager` 连 embed)不复现，只有测试用的异步网络工厂配置下复现 | **待修复** |
+| 51/52 | **事务里执行一次查询之后，`ROLLBACK` 不再撤销之前的 DML（P0 静默丢数据）** —— 这是原来 #51(级联删除回滚丢子行)、#52(失败的 CREATE TRIGGER 后回滚失效) 的**共同根因**，已收敛成最小复现：<br>`autocommit=false` → `DELETE FROM t WHERE id=1` → **事务内 `SELECT COUNT(*)`** → `conn.rollback()` → 删除没有被撤销。<br>不查询直接 rollback 正常；中间查一次就丢。<br>**插桩证据**：整个过程 `UndoLog.rollbackTo/commit` **一次都没被调用**（不是 undo 记录被提前清掉），`ServerSession.rollback()` 也**没有被调用** —— ROLLBACK 根本没走到引擎的事务回滚逻辑。<br>**环境依赖**：只在测试用连接参数（`NET_FACTORY_NAME=bio` + `NETWORK_TIMEOUT`）下复现，默认参数直连 embed 不复现；`SET QUERY_CACHE_SIZE 0` 能让它消失（说明与语句/查询缓存路径相关）。<br>**下一步**：查客户端 ROLLBACK 的发送/处理链路（`JdbcConnection.rollback()` 的 packet 路径与 `isClientProtocolVersionGte8()` 判断），而不是 MVCC/undo | `RollbackAfterQueryTest`（`@Ignore`，去掉即失败） | **待修复** |
 
 ## 二、待修复（按优先级）
 

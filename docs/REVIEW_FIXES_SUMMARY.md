@@ -119,18 +119,24 @@
 
 台账里 12 条已登记的失败全部属于上表；门禁按**失败签名**比较，所以「修好一条、又坏掉一条」也能被发现。
 
-## 七点五、**本轮新发现、尚未修复的两个 P0（都有确定性复现）**
+## 七点五、**尚未修复的一个 P0（根因已收敛，有最小复现）**
 
-这两项是最近一轮用"事务/约束语义探针"新挖出来的，**代码还没改**，但复现步骤已经固化成用例
-（`@Ignore` 标注，去掉注解即可看到失败），列在这里是为了不让它们被埋掉：
+用"事务语义探针"复审时发现，原先以为的级联删除、失败 DDL 两个问题其实是**同一个根因**，已收敛成最小复现：
 
-| 编号 | 问题 | 复现用例 |
-|---|---|---|
-| #51 | **级联删除在事务里回滚后子行永久丢失**：`ON DELETE CASCADE` 删掉的子行没有 undo 记录，回滚时父行恢复、子行不恢复。对照：不带外键的普通删除回滚正常 | `CascadeDeleteRollbackTest` |
-| #52 | **一次失败的 `CREATE TRIGGER` 之后，同一连接上的事务回滚静默失效**：`BEGIN; DELETE; ROLLBACK;` 数据不恢复（另一连接确认删除未提交，说明事务在起作用、只是 undo 记录丢了）。同样流程换成失败的 `CREATE TABLE` 或普通 DML 都正常，问题在 `CreateTrigger.update()` 的失败路径 | `FailedDdlBreaksRollbackTest` |
+```java
+conn.setAutoCommit(false);
+DELETE FROM t WHERE id = 1;
+SELECT COUNT(*) FROM t;   // 事务内查询一次
+conn.rollback();          // 删除没有被撤销
+```
 
-两项都属于"静默丢数据"，建议优先于其它遗留项处理；修它们需要动级联路径的 undo 记录方式和
-`CreateTrigger` 的失败清理，影响面比前面 45 个修复都大，所以没有贸然改。
+不查询直接 rollback 是正常的，中间查一次就丢 —— **静默丢数据**。插桩证据：整个过程中
+`UndoLog.rollbackTo/commit` 与 `ServerSession.rollback()` **都没有被调用**，所以问题不在 MVCC/undo，
+而在 ROLLBACK 的客户端发送/处理链路（只在 `NET_FACTORY_NAME=bio` + `NETWORK_TIMEOUT` 这组测试参数下复现，
+`SET QUERY_CACHE_SIZE 0` 能让它消失）。
+
+复现用例 `RollbackAfterQueryTest`（`@Ignore`，去掉即失败：`ROLLBACK 后必须恢复成 2 行, 实际 1`）。
+这一项建议优先于其它遗留项处理。
 
 ## 八、还没做的（有意留着的）
 
