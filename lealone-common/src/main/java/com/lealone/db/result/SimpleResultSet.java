@@ -34,6 +34,7 @@ import com.lealone.common.util.MathUtils;
 import com.lealone.common.util.Utils;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.value.DataType;
+import com.lealone.db.value.Value;
 
 /**
  * This class is a simple result set and meta data implementation.
@@ -723,7 +724,10 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
      */
     @Override
     public Date getDate(int columnIndex) throws SQLException {
-        return (Date) get(columnIndex);
+        Object o = get(columnIndex);
+        if (o instanceof Value)
+            return ((Value) o).convertTo(Value.DATE).getDate();
+        return (Date) o;
     }
 
     /**
@@ -1090,7 +1094,10 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
      */
     @Override
     public Time getTime(int columnIndex) throws SQLException {
-        return (Time) get(columnIndex);
+        Object o = get(columnIndex);
+        if (o instanceof Value)
+            return ((Value) o).convertTo(Value.TIME).getTime();
+        return (Time) o;
     }
 
     /**
@@ -1128,7 +1135,10 @@ public class SimpleResultSet implements ResultSet, ResultSetMetaData {
      */
     @Override
     public Timestamp getTimestamp(int columnIndex) throws SQLException {
-        return (Timestamp) get(columnIndex);
+        Object o = get(columnIndex);
+        if (o instanceof Value)
+            return ((Value) o).convertTo(Value.TIMESTAMP).getTimestamp();
+        return (Timestamp) o;
     }
 
     /**
