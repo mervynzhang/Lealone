@@ -1363,6 +1363,8 @@ public class SQLParserBase implements SQLParser {
             ifExists = readIfExists(ifExists);
             command.setIfExists(ifExists);
             return command;
+        } else if (readIf("FUNCTION")) {
+            return parseDropSqlFunction();
         } else if (readIf("SCHEMA")) {
             return parseDropSchema();
         } else if (readIf("DOMAIN")) {
@@ -5155,6 +5157,26 @@ public class SQLParserBase implements SQLParser {
             }
         }
         return false;
+    }
+
+    protected StatementBase parseDropSqlFunction() {
+        boolean ifExists = readIfExists(false);
+        String functionName = readIdentifierWithSchema();
+        DropFunctionAlias command = new DropFunctionAlias(session, getSchema());
+        command.setAliasName(functionName);
+        ifExists = readIfExists(ifExists);
+        command.setIfExists(ifExists);
+        // 不支持按参数类型重载，参数类型列表读出来直接忽略
+        if (readIf("(")) {
+            while (currentTokenType != CLOSE) {
+                if (currentTokenType == END) {
+                    throw getSyntaxError();
+                }
+                read();
+            }
+            read();
+        }
+        return command;
     }
 
     protected Query parseWith() {
