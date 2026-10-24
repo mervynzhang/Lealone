@@ -328,6 +328,7 @@ public class JdbcStatement extends JdbcWrapper implements Statement {
         }
     }
 
+    // Future.get()不声明检查异常，底层SQLException通过DbException的cause暴露
     public Future<Boolean> executeAsync(String sql) {
         debugCodeCall("executeAsync", sql);
         return executeInternal(sql, true);
