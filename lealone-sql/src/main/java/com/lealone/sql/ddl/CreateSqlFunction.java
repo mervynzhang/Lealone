@@ -137,17 +137,6 @@ public class CreateSqlFunction extends SchemaStatement {
         this.orReplace = orReplace;
     }
 
-    // OUT/INOUT参数组成返回行，只支持标量返回的语言不能有多个
-    private int getOutputParameterCount() {
-        int count = 0;
-        for (int mode : parameterModes) {
-            if (mode != SqlFunction.PARAM_IN) {
-                count++;
-            }
-        }
-        return count;
-    }
-
     // PL/pgSQL解释器用CAST解析参数类型，数组类型(含VARIADIC)的写法还解析不了
     private boolean hasArrayParameter() {
         for (int typeId : parameterTypeIds) {
@@ -165,10 +154,10 @@ public class CreateSqlFunction extends SchemaStatement {
         // 先校验语言和函数体，非法时不改动已有的函数
         if (plpgsql) {
             PlpgSqlParser.parse(body);
-            // PL/pgSQL只支持标量值，结果集返回值和数组参数都没有实现
-            if (returnColumns || getOutputParameterCount() > 1 || hasArrayParameter()) {
+            // PL/pgSQL的数组参数还没有实现
+            if (hasArrayParameter()) {
                 throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                        "SETOF/TABLE, multiple OUT or array parameters in PL/pgSQL function");
+                        "array parameters in PL/pgSQL function");
             }
         } else if (!"SQL".equalsIgnoreCase(language)) {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "LANGUAGE " + language);

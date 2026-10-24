@@ -8,6 +8,7 @@ package com.lealone.test.sql.function;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
 
 import org.junit.Test;
 
@@ -608,6 +609,83 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals(86, getIntValue(1));
     }
 
+    // RETURNS TABLE：RETURN QUERY和RETURN NEXT都往结果集追加行
+    @Test
+    public void testReturnsTable() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_setof_t");
+        executeUpdate("CREATE TABLE plp_setof_t(id INT PRIMARY KEY, name VARCHAR(20))");
+        executeUpdate("INSERT INTO plp_setof_t VALUES(1, 'a'), (2, 'b'), (3, 'c')");
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_query(p INT) RETURNS TABLE(id INT, name VARCHAR) LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   RETURN QUERY SELECT t.id, t.name FROM plp_setof_t t WHERE t.id >= p ORDER BY t.id;" //
+                + " END; $$");
+        assertEquals("[2:b, 3:c]", queryRowList(
+                "SELECT id, name FROM plp_table_query(2) ORDER BY id").toString());
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_next() RETURNS TABLE(id INT, name VARCHAR) LANGUAGE plpgsql AS $$"
+                + " BEGIN" //
+                + "   id := 1; name := 'x'; RETURN NEXT;" //
+                + "   id := 2; name := 'y'; RETURN NEXT;" //
+                + " END; $$");
+        assertEquals("[1:x, 2:y]",
+                queryRowList("SELECT id, name FROM plp_table_next() ORDER BY id").toString());
+
+        // 声明了TABLE列但一行也没返回时是空结果集
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_empty() RETURNS TABLE(id INT) LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN; END; $$");
+        assertEquals("[]", queryIntList("SELECT * FROM plp_table_empty()").toString());
+    }
+
+    // RETURNS SETOF标量：RETURN NEXT逐行累积
+    @Test
+    public void testReturnsSetofScalar() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_setof_scalar(a INT, b INT) RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " DECLARE i INT;" //
+                + " BEGIN" //
+                + "   FOR i IN a..b LOOP" //
+                + "     RETURN NEXT i + 1;" //
+                + "   END LOOP;" //
+                + "   RETURN;" //
+                + " END; $$");
+        assertEquals("[2, 3, 4]",
+                queryIntList("SELECT * FROM plp_setof_scalar(1, 3) ORDER BY 1").toString());
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_setof_query() RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN QUERY SELECT id FROM plp_setof_t ORDER BY id; END; $$");
+        assertEquals("[1, 2, 3]",
+                queryIntList("SELECT * FROM plp_setof_query() ORDER BY 1").toString());
+
+        // 没有RETURN;时执行到函数结尾也返回已累积的行
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_setof_natural() RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN NEXT 1; RETURN NEXT 2; END; $$");
+        assertEquals("[1, 2]",
+                queryIntList("SELECT * FROM plp_setof_natural() ORDER BY 1").toString());
+    }
+
+    // 多个OUT参数组成一行结果集
+    @Test
+    public void testMultipleOutParameters() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_multi_out(i INT, OUT j INT, OUT k VARCHAR) AS $$"
+                + " BEGIN" //
+                + "   j := i + 1;" //
+                + "   k := 'foo';" //
+                + " END $$ LANGUAGE plpgsql");
+        try (java.sql.ResultSet result = stmt.executeQuery("SELECT * FROM plp_multi_out(42)")) {
+            assertTrue(result.next());
+            assertEquals(43, result.getInt(1));
+            assertEquals("foo", result.getString(2));
+            assertEquals("J", result.getMetaData().getColumnName(1));
+            assertEquals("K", result.getMetaData().getColumnName(2));
+            assertFalse(result.next());
+        }
+
+        // 显式RETURN;和自然结束等价
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_multi_out2(i INT, OUT j INT, OUT k INT) AS $$"
+                + " BEGIN j := i * 2; k := i * 3; RETURN; END $$ LANGUAGE plpgsql");
+        assertEquals("[4:6]", queryRowList("SELECT j, k FROM plp_multi_out2(2)").toString());
+    }
+
     // GET DIAGNOSTICS ... = ROW_COUNT
     @Test
     public void testGetDiagnosticsRowCount() throws Exception {
@@ -622,6 +700,28 @@ public class PlpgsqlTest extends SqlTestBase {
                 + " END; $$");
         executeQuery("SELECT plp_row_count()");
         assertEquals(3, getLongValue(1));
+    }
+
+    private ArrayList<Integer> queryIntList(String sql) {
+        try (Statement s = conn.createStatement(); ResultSet result = s.executeQuery(sql)) {
+            ArrayList<Integer> list = new ArrayList<>();
+            while (result.next())
+                list.add(result.getInt(1));
+            return list;
+        } catch (SQLException e) {
+            throw DbException.convert(e);
+        }
+    }
+
+    private ArrayList<String> queryRowList(String sql) {
+        try (Statement s = conn.createStatement(); ResultSet result = s.executeQuery(sql)) {
+            ArrayList<String> list = new ArrayList<>();
+            while (result.next())
+                list.add(result.getInt(1) + ":" + result.getString(2));
+            return list;
+        } catch (SQLException e) {
+            throw DbException.convert(e);
+        }
     }
 
     private String getSqlState(String sql) throws Exception {
