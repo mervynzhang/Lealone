@@ -117,10 +117,9 @@ public class ExplainPlanTest extends SqlAssertTestBase {
     // 以下为已确认缺陷（期望值按 H2 实测：ORDER BY ... DESC 走反向索引扫描）
     // ------------------------------------------------------------------
 
-    // BUG: ORDER BY ... DESC 没有走索引，退化成全表扫描 + 排序。
-    // 期望: 计划里出现 EP_T_NAME_IDX 和 index sorted（H2 会用索引的反向扫描满足 DESC）；
-    // 实际: PUBLIC.EP_T.tableScan。
-    @Ignore("BUG: ORDER BY name DESC uses tableScan instead of reverse index scan")
+    // ORDER BY ... DESC 走不了索引，退化成全表扫描+排序，结果正确只是慢。
+    // 根因: getSortIndex要求索引列的sortType与ORDER BY方向完全一致，而游标没有反向扫描能力。
+    @Ignore("PERF: ORDER BY name DESC needs a reverse cursor; sort order result is still correct")
     @Test
     public void orderByDescUsesIndex() {
         init();
