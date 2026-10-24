@@ -17,7 +17,7 @@ import java.util.Map;
 
 import org.junit.Test;
 
-import com.lealone.db.SysProperties;
+import com.lealone.db.Constants;
 import com.lealone.storage.fs.FileUtils;
 
 /**
@@ -61,12 +61,15 @@ public class PgRegressTest {
         File scriptDir = dir("pg.dir", RESOURCE_DIR, SOURCE_DIR);
         File skipFile = System.getProperty("pg.skip") != null ? new File(System.getProperty("pg.skip"))
                 : new File(scriptDir, "skip-list.txt");
-        String oldBaseDir = SysProperties.getBaseDir();
+        // SysProperties.setBaseDir 在属性已存在时不会覆盖旧值，所以这里直接改属性并在结束时还原，
+        // 避免把同一个 JVM 里后面跑的测试也带到我这个会被删掉的目录里
+        String baseDirKey = Constants.PROJECT_NAME_PREFIX + "base.dir";
+        String oldBaseDir = System.getProperty(baseDirKey);
         File baseDir = new File(BASE_DIR).getAbsoluteFile();
         if (baseDir.isDirectory())
             FileUtils.deleteRecursive(baseDir.getAbsolutePath(), false);
         // 每个脚本文件一个持久化库，放在本套件专用的目录里
-        SysProperties.setBaseDir(baseDir.getPath());
+        System.setProperty(baseDirKey, baseDir.getPath());
         long start = System.currentTimeMillis();
         PgRegressRunner runner;
         PgSkipList skipList;
@@ -78,7 +81,10 @@ public class PgRegressTest {
             runner = new PgRegressRunner(skipList);
             runner.runDirectory(scriptDir);
         } finally {
-            SysProperties.setBaseDir(oldBaseDir);
+            if (oldBaseDir == null)
+                System.clearProperty(baseDirKey);
+            else
+                System.setProperty(baseDirKey, oldBaseDir);
             FileUtils.deleteRecursive(baseDir.getAbsolutePath(), false);
         }
         long cost = System.currentTimeMillis() - start;
