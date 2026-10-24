@@ -204,6 +204,13 @@ public class SqlFunction extends FunctionAlias {
     }
 
     /**
+     * 参数DEFAULT表达式的SQL文本，没有DEFAULT的位置是null。
+     */
+    public String[] getParameterDefaultsSQL() {
+        return parameterDefaults;
+    }
+
+    /**
      * 第inputIndex个入参的参数名(按入参顺序，不是完整参数列表顺序)。
      */
     public String getInputParameterName(int inputIndex) {

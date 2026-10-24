@@ -13,6 +13,7 @@ import java.sql.Statement;
 
 import org.junit.Test;
 
+import com.lealone.db.api.ErrorCode;
 import com.lealone.storage.fs.FileUtils;
 import com.lealone.test.TestBase;
 import com.lealone.test.sql.SqlTestBase;
@@ -56,6 +57,12 @@ public class InformationSchemaRoutineTest extends SqlTestBase {
                 + "JOIN INFORMATION_SCHEMA.ROUTINES r ON p.specific_name = r.specific_name "
                 + "AND p.specific_schema = r.specific_schema WHERE r.routine_name = 'ISR_F'");
         assertEquals(2, getIntValue(1));
+
+        executeUpdate("CREATE FUNCTION isr_d(a INT DEFAULT 7) RETURNS INT AS $$ SELECT a $$");
+        executeQuery("SELECT p.parameter_default FROM INFORMATION_SCHEMA.PARAMETERS p "
+                + "JOIN INFORMATION_SCHEMA.ROUTINES r ON p.specific_name = r.specific_name "
+                + "AND p.specific_schema = r.specific_schema WHERE r.routine_name = 'ISR_D'");
+        assertEquals("7", getStringValue(1));
     }
 
     @Test
@@ -86,18 +93,21 @@ public class InformationSchemaRoutineTest extends SqlTestBase {
     }
 
     @Test
-    public void testRoutineRoutineUsageIsEmpty() throws Exception {
+    public void testRoutineRoutineUsage() throws Exception {
         executeUpdate("CREATE FUNCTION isr_u1() RETURNS INT AS $$ SELECT 1 $$");
         executeUpdate("CREATE FUNCTION isr_u2() RETURNS INT AS $$ SELECT isr_u1() $$");
-        // 依赖关系还没有填充，但查询必须能执行并返回0行
-        executeQuery("SELECT count(*) FROM INFORMATION_SCHEMA.ROUTINE_ROUTINE_USAGE");
-        assertEquals(0, getIntValue(1));
-        try (Statement s = conn.createStatement();
-                ResultSet rs = s.executeQuery("SELECT rru.specific_name "
-                        + "FROM INFORMATION_SCHEMA.ROUTINE_ROUTINE_USAGE rru "
-                        + "JOIN INFORMATION_SCHEMA.ROUTINES r ON r.specific_name = rru.specific_name")) {
-            assertFalse(rs.next());
-        }
+        executeQuery("SELECT r0.routine_name, r1.routine_name "
+                + "FROM INFORMATION_SCHEMA.ROUTINE_ROUTINE_USAGE rru "
+                + "JOIN INFORMATION_SCHEMA.ROUTINES r0 ON r0.specific_name = rru.specific_name "
+                + "JOIN INFORMATION_SCHEMA.ROUTINES r1 ON r1.specific_name = rru.routine_name "
+                + "WHERE r0.routine_name = 'ISR_U2'");
+        assertEquals("ISR_U2", getStringValue(1));
+        assertEquals("ISR_U1", getStringValue(2));
+
+        // 有其它函数依赖时DROP按RESTRICT语义报错
+        executeUpdateThanAssertErrorCode("DROP FUNCTION isr_u1()", ErrorCode.CANNOT_DROP_2);
+        executeUpdate("DROP FUNCTION isr_u2()");
+        executeUpdate("DROP FUNCTION isr_u1()");
     }
 
     @Test
