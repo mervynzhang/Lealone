@@ -91,6 +91,9 @@ public class SqlFunction extends FunctionAlias {
     private String body;
     private String bodySql;
     private int[] bodyParameterIndexes;
+    // BEGIN ATOMIC ... END函数体，每条语句一个bodySql
+    private String[] atomicBodySqls;
+    private int[][] atomicBodyParameterIndexes;
 
     // ---- PostgreSQL的函数属性，都可以通过ALTER FUNCTION修改 ----
     private String volatility = VOLATILE;
@@ -591,6 +594,21 @@ public class SqlFunction extends FunctionAlias {
         this.bodyParameterIndexes = bodyParameterIndexes;
     }
 
+    /**
+     * BEGIN ATOMIC ... END函数体：多条语句顺序执行，最后一条查询的结果就是返回值。
+     *
+     * @param bodySqls 每条语句的SQL，参数名已经替换成'?'
+     * @param bodyParameterIndexes 每条语句里每个'?'对应的参数下标
+     */
+    public void setAtomicBody(String[] bodySqls, int[][] bodyParameterIndexes) {
+        this.atomicBodySqls = bodySqls;
+        this.atomicBodyParameterIndexes = bodyParameterIndexes;
+    }
+
+    public boolean isAtomicBody() {
+        return atomicBodySqls != null;
+    }
+
     @Override
     public boolean isSetReturning() {
         return columnTypes != null;
@@ -704,7 +722,17 @@ public class SqlFunction extends FunctionAlias {
                 buff.append("DEFAULT");
             }
         }
-        buff.append(" AS ").append(StringUtils.quoteStringSQL(body));
+        if (atomicBodySqls == null) {
+            buff.append(" AS ").append(StringUtils.quoteStringSQL(body));
+        } else {
+            // SQL标准的函数体原样写回去，SCRIPT回放时还能解析成多条语句;
+            // 每条语句都要有分号(和PostgreSQL一样)，否则END会被当成上一个语句的别名
+            buff.append(" BEGIN ATOMIC ");
+            if (!body.isEmpty()) {
+                buff.append(body).append("; ");
+            }
+            buff.append("END");
+        }
         // 属主不是CREATE FUNCTION的标准子句，放在AS之后，只记录不生效
         if (ownerName != null) {
             buff.append(" OWNER TO ").append(database.quoteIdentifier(ownerName));
@@ -794,6 +822,9 @@ public class SqlFunction extends FunctionAlias {
             if (!Constants.SCHEMA_MAIN.equals(schemaName)) {
                 conn.setSchema(schemaName);
             }
+            if (atomicBodySqls != null) {
+                return executeAtomicBody(session, conn, values);
+            }
             PreparedStatement prep = conn.prepareStatement(bodySql);
             try {
                 for (int i = 0; i < bodyParameterIndexes.length; i++) {
@@ -801,27 +832,7 @@ public class SqlFunction extends FunctionAlias {
                 }
                 ResultSet rs = prep.executeQuery();
                 try {
-                    if (isSetReturning()) {
-                        return readSetResult(session, rs);
-                    }
-                    if (isRecordReturning()) {
-                        return createRecord(session, rs);
-                    }
-                    // VOID不关心函数体返回什么
-                    if (returnType != Value.NULL) {
-                        int columnCount = rs.getMetaData().getColumnCount();
-                        if (columnCount != 1) {
-                            // 不能静默地只取第一列，PostgreSQL在建函数时就会报类型不匹配
-                            throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1,
-                                    "function " + getName() + " must return one column, but returns "
-                                            + columnCount);
-                        }
-                    }
-                    if (!rs.next()) {
-                        return ValueNull.INSTANCE;
-                    }
-                    Value v = DataType.convertToValue(session, rs.getObject(1), returnType);
-                    return v.convertTo(returnType);
+                    return valueFromResultSet(session, rs);
                 } finally {
                     rs.close();
                 }
@@ -831,6 +842,64 @@ public class SqlFunction extends FunctionAlias {
         } catch (SQLException e) {
             throw DbException.convert(e);
         }
+    }
+
+    // BEGIN ATOMIC ... END函数体：多条语句顺序执行，最后一条查询的结果就是返回值
+    private Value executeAtomicBody(ServerSession session, Connection conn, Value[] values)
+            throws SQLException {
+        int last = atomicBodySqls.length - 1;
+        // 标量/SETOF/多个OUT参数都要求最后一条语句是查询
+        boolean lastIsQuery = isSetReturning() || returnType == Value.RESULT_SET
+                || (returnType != Value.NULL && returnType != Value.UNKNOWN);
+        Value result = ValueNull.INSTANCE;
+        for (int i = 0; i <= last; i++) {
+            PreparedStatement prep = conn.prepareStatement(atomicBodySqls[i]);
+            try {
+                int[] indexes = atomicBodyParameterIndexes[i];
+                for (int j = 0; j < indexes.length; j++) {
+                    prep.setObject(j + 1, values[indexes[j]]);
+                }
+                if (i == last && lastIsQuery) {
+                    ResultSet rs = prep.executeQuery();
+                    try {
+                        result = valueFromResultSet(session, rs);
+                    } finally {
+                        rs.close();
+                    }
+                } else {
+                    // 前面的语句是查询还是更新都执行掉，结果丢弃
+                    prep.execute();
+                }
+            } finally {
+                prep.close();
+            }
+        }
+        return result;
+    }
+
+    // 把函数体查询的结果转换成返回值
+    private Value valueFromResultSet(ServerSession session, ResultSet rs) throws SQLException {
+        if (isSetReturning()) {
+            return readSetResult(session, rs);
+        }
+        if (isRecordReturning()) {
+            return createRecord(session, rs);
+        }
+        // VOID不关心函数体返回什么
+        if (returnType != Value.NULL) {
+            int columnCount = rs.getMetaData().getColumnCount();
+            if (columnCount != 1) {
+                // 不能静默地只取第一列，PostgreSQL在建函数时就会报类型不匹配
+                throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1,
+                        "function " + getName() + " must return one column, but returns "
+                                + columnCount);
+            }
+        }
+        if (!rs.next()) {
+            return ValueNull.INSTANCE;
+        }
+        Value v = DataType.convertToValue(session, rs.getObject(1), returnType);
+        return v.convertTo(returnType);
     }
 
     /**

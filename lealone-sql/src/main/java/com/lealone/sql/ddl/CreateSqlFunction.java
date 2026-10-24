@@ -58,6 +58,9 @@ public class CreateSqlFunction extends SchemaStatement {
     private String body;
     private String bodySql;
     private int[] bodyParameterIndexes;
+    // BEGIN ATOMIC ... END函数体，每条语句一个bodySql
+    private String[] atomicBodySqls;
+    private int[][] atomicBodyParameterIndexes;
     private boolean deterministic;
     private boolean strict;
     private String volatility;
@@ -170,6 +173,12 @@ public class CreateSqlFunction extends SchemaStatement {
      * @param bodySql 参数名已替换成'?'的函数体
      * @param bodyParameterIndexes bodySql中每个'?'对应的参数下标
      */
+    // BEGIN ATOMIC函数体: 每条语句一个bodySql，以及这条语句里每个'?'对应的参数下标
+    public void setAtomicBody(String[] bodySqls, int[][] bodyParameterIndexes) {
+        this.atomicBodySqls = bodySqls;
+        this.atomicBodyParameterIndexes = bodyParameterIndexes;
+    }
+
     public void setBody(String body, String bodySql, int[] bodyParameterIndexes) {
         this.body = body;
         this.bodySql = bodySql;
@@ -421,6 +430,9 @@ public class CreateSqlFunction extends SchemaStatement {
             function.setReturnsRecord(true);
         function.setReturnType(returnTypeSql, returnType);
         function.setBody(body, bodySql, bodyParameterIndexes);
+        if (atomicBodySqls != null) {
+            function.setAtomicBody(atomicBodySqls, atomicBodyParameterIndexes);
+        }
         function.setDeterministic(deterministic);
         // 易变性要原样保留IMMUTABLE/STABLE/VOLATILE，保证SCRIPT回放不丢属性
         if (volatility != null) {

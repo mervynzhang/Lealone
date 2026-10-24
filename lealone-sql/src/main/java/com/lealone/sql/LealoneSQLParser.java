@@ -53,16 +53,30 @@ public class LealoneSQLParser extends SQLParserBase {
      * CALL语句按查询执行时Statement.execute()才能拿到过程体最后一条查询的结果集。
      */
     public static boolean hasQueryStatement(ServerSession session, String body) {
+        return checkQueryStatement(session, body, false);
+    }
+
+    /**
+     * 判断过程体里最后一条语句是不是查询语句。有OUT/INOUT参数的过程靠最后一条查询返回OUT值。
+     */
+    public static boolean hasTrailingQueryStatement(ServerSession session, String body) {
+        return checkQueryStatement(session, body, true);
+    }
+
+    private static boolean checkQueryStatement(ServerSession session, String body,
+            boolean onlyLast) {
         LealoneSQLParser parser = new LealoneSQLParser(session);
         parser.initialize(body);
         parser.read();
         boolean statementStart = true;
+        boolean query = false;
         while (parser.currentTokenType != END) {
             if (statementStart) {
                 String token = parser.currentToken;
-                if ("SELECT".equalsIgnoreCase(token) || "VALUES".equalsIgnoreCase(token)
+                query = "SELECT".equalsIgnoreCase(token) || "VALUES".equalsIgnoreCase(token)
                         || "TABLE".equalsIgnoreCase(token) || "WITH".equalsIgnoreCase(token)
-                        || "(".equals(token)) {
+                        || "(".equals(token);
+                if (query && !onlyLast) {
                     return true;
                 }
                 statementStart = false;
@@ -72,6 +86,43 @@ public class LealoneSQLParser extends SQLParserBase {
             }
             parser.read();
         }
-        return false;
+        return query;
+    }
+
+    /**
+     * 把用分号分隔的多条SQL语句拆开。用解析器判断一条语句到哪结束，
+     * 这样字符串常量里出现分号也不会切错。空的过程体返回空数组。
+     */
+    public static String[] splitStatements(ServerSession session, String body) {
+        ArrayList<String> statements = new ArrayList<>();
+        if (body != null && !body.trim().isEmpty()) {
+            String sql = body;
+            while (true) {
+                StatementBase statement = (StatementBase) session.createParser().parse(sql);
+                if (statement instanceof StatementList) {
+                    StatementList list = (StatementList) statement;
+                    statements.add(list.getFirstStatement().getSQL());
+                    sql = skipStatementSeparator(list.getRemaining());
+                    if (sql.isEmpty()) {
+                        break;
+                    }
+                } else {
+                    statements.add(statement.getSQL());
+                    break;
+                }
+            }
+        }
+        return statements.toArray(new String[0]);
+    }
+
+    private static String skipStatementSeparator(String sql) {
+        int i = 0;
+        for (int len = sql.length(); i < len; i++) {
+            char c = sql.charAt(i);
+            if (c != ';' && !Character.isWhitespace(c)) {
+                break;
+            }
+        }
+        return sql.substring(i);
     }
 }
