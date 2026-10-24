@@ -322,7 +322,7 @@ SELECT var_count(1, 2, 3);  -- 3
 - PG 的 preferred-type 平局再选；`CREATE FUNCTION f(int)`（参数只写类型不写名）
 - `pg_catalog` 兼容 schema / 与 PG 同名的 `pg_proc` 对象（只提供 `INFORMATION_SCHEMA.PG_PROC`）
 - `ALTER FUNCTION ... SET SCHEMA`（换 schema）、`SET configuration_parameter FROM CURRENT`
-- `DROP FUNCTION ... CASCADE/RESTRICT`
+- `DROP FUNCTION ... CASCADE`（RESTRICT 的依赖检查已实现，CASCADE 未实现）
 - `SET`/`RESET` 只落 DDL，不真正影响函数体执行时的会话参数（见2.8节）
 - 其它块语言；函数体里**不带 `RETURNING` 的 DML**（带 `RETURNING` 的 DML 已支持，见 `RETURNING.md`）
 - `LATERAL`：函数表实参不能引用同一 FROM 里其它表的列
@@ -448,16 +448,17 @@ Lealone 提供只读的内置元数据表 `INFORMATION_SCHEMA.PG_PROC`（不是 
 | --- | --- |
 | `INFORMATION_SCHEMA.PARAMETERS` | 每个函数/过程的每个参数一行，包含 `SPECIFIC_NAME`、`ORDINAL_POSITION`（1开始，含OUT）、`PARAMETER_MODE`(IN/OUT/INOUT)、`PARAMETER_NAME`、`DATA_TYPE`、`PARAMETER_DEFAULT` 等列 |
 | `INFORMATION_SCHEMA.ROUTINES` | 每个函数/过程一行，包含 `ROUTINE_NAME`、`ROUTINE_TYPE`(FUNCTION/PROCEDURE)、`SPECIFIC_NAME`(名字_id，用来区分重载)、`DATA_TYPE`、`IS_DETERMINISTIC`(YES/NO)、`SECURITY_TYPE`(DEFINER/INVOKER)、`EXTERNAL_LANGUAGE` 等列 |
-| `INFORMATION_SCHEMA.ROUTINE_ROUTINE_USAGE` | 列齐全（`SPECIFIC_NAME`/`ROUTINE_NAME` 等），但**依赖关系还没有填充，查询返回空表** |
+| `INFORMATION_SCHEMA.ROUTINE_ROUTINE_USAGE` | 每个函数体/DEFAULT表达式里对其它例程的调用一行，`SPECIFIC_NAME` 是引用方、`ROUTINE_NAME` 是被引用方的 `SPECIFIC_NAME`（和 PG 的 JOIN 口径一致） |
 
 这三张视图只列 `SqlFunction`/`SqlProcedure`（`CREATE ALIAS`/`CREATE AGGREGATE` 不在里面）；
 `SPECIFIC_NAME` 的格式是 `名字_id`，同名重载靠它区分，PARAMETERS 和 ROUTINES 可以按
 `SPECIFIC_SCHEMA + SPECIFIC_NAME` 关联。
 
-已知缺口：DEFAULT 参数由另一条线实现，现在 `PARAMETER_DEFAULT` 一律是 NULL；
-`ROUTINE_ROUTINE_USAGE` 需要分析方法体/默认值里的引用，暂时没有填充；
-`ROUTINE_SEQUENCE_USAGE`/`ROUTINE_COLUMN_USAGE`/`ROUTINE_TABLE_USAGE` 没有做。
-`information_schema` 的 PG 用例已经用这些视图部分适配执行，见 `docs/PG_REGRESS.md` 第六节。
+已知缺口：`ROUTINE_ROUTINE_USAGE` 是**文本级**分析（识别后面跟 `(` 的标识符，不解析参数类型，
+同名重载取第一个匹配），函数体里用字符串拼接出来的动态SQL看不到；`ROUTINE_SEQUENCE_USAGE`/
+`ROUTINE_COLUMN_USAGE`/`ROUTINE_TABLE_USAGE` 没有做。DEFAULT 参数已经能填 `PARAMETER_DEFAULT`，
+但非常量 DEFAULT（例如函数调用）会被 CREATE 拒绝。`information_schema` 的 PG 用例已经用这些视图执行，
+见 `docs/PG_REGRESS.md` 第六节。
 
 内置函数 `pg_get_functiondef(函数名)` 返回该函数的 `getCreateSQL()` 文本（`CREATE FUNCTION ...`，
 不是 PG 的 `CREATE OR REPLACE FUNCTION`，也没有 schema 前缀）。它只接受函数名，没有 regproc/oid
@@ -469,9 +470,11 @@ PG 回归里原来查 `pg_proc`/`pg_get_functiondef` 的 5 个用例已经改成
 
 ## 七、已知限制 / 额外发现但没修的问题
 
-- **`CREATE TEMP SEQUENCE` + `DISCARD TEMP` 不支持**：PG 回归用例 `function_sql.sql_body_tempseq`
-  依赖这两个语句（以及"DISCARD TEMP 连带删除依赖临时对象建立起来的函数"），本轮只支持
-  `RETURN nextval('...')` 这种函数体写法本身，临时序列/临时对象依赖还是缺口，用例继续 skip。
+- **`CREATE TEMP SEQUENCE` + `DISCARD TEMP` 已支持**：临时序列只存在当前会话的本地map里，
+  别的会话看不到；会话关闭时由 `ServerSession.cleanTempTables(true)` 自动清理，不写元数据、不进SCRIPT/备份。
+  `DISCARD TEMP` 会先按文本级依赖分析删除引用临时表/序列的函数，再删临时对象。
+  注意：会话关闭只保证临时对象本身被清理；如果函数引用了临时对象又没有显式 `DISCARD TEMP`，
+  这个持久函数会留在schema里（下次调用报序列不存在），这一点和PG的"临时schema里的函数自动删除"不同。
 - **函数体里执行多条语句必须是 DDL/DML 混合或最后一条是查询**：`RETURNS INT` 的函数体以 DDL 结尾
   （没有查询、也没有 `RETURN`）仍然报 `FEATURE_NOT_SUPPORTED`。
 
@@ -519,3 +522,6 @@ PG 回归里原来查 `pg_proc`/`pg_get_functiondef` 的 5 个用例已经改成
     不支持重载所以没有歧义；但函数被 `OR REPLACE` 重建后注释会保留（PostgreSQL 也是保留）。
 20. `ALTER FUNCTION` 只支持 `SqlFunction`/`PlpgSqlFunction`；`CREATE ALIAS` 建的 Java 函数、
     `CREATE AGGREGATE` 建的对象都报 `FEATURE_NOT_SUPPORTED`。
+21. `DROP FUNCTION/PROCEDURE` 现在按 RESTRICT 语义检查依赖：有其它例程的函数体/DEFAULT引用它时
+    报 90107（不是 PG 的 2BP01），**没有实现 CASCADE**；依赖分析是文本级的，同名重载只按名字匹配，
+    可能比 PG 更保守。

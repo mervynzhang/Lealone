@@ -19,13 +19,19 @@
 
 -- @case function_sql.setup
 -- @pg create_function_sql.sql:9-14
--- 缺失: Lealone 没有 SET search_path(只支持 SET SCHEMA_SEARCH_PATH), CREATE USER 也必须带 PASSWORD;
---       PG 这份文件的用例都放在 temp_func_test schema 里, 转换版不用 schema 前缀
+-- 适配: Lealone现在支持 SET search_path(SCHEMA_SEARCH_PATH的别名)和不带PASSWORD的CREATE USER;
+--       但Lealone的CREATE语句按当前schema建对象, search_path只影响查找, 所以额外加一条
+--       SET SCHEMA temp_func_test, 保证后面的函数确实建在temp_func_test里(和PG一致)。
 create user regress_unpriv_user;
+> update count: 0
 create schema temp_func_test;
+> update count: 0
 grant all on schema temp_func_test to public;
+> update count: 0
 set search_path to temp_func_test, public;
--- PG 期望: 4 条都成功, 后面建的函数都在 temp_func_test schema 里
+> update count: 0
+set schema temp_func_test;
+> update count: 0
 
 -- ---------------------------------------------------------------------------
 -- ARGUMENT and RETURN TYPES
@@ -352,13 +358,13 @@ select proname, proisstrict from information_schema.pg_proc
 -- 适配: Lealone 新增了同名内置函数 pg_get_functiondef(函数名), 返回
 --       getCreateSQL() 的文本; 没有 regproc 类型, 所以传字符串而不是 ::regproc。
 select pg_get_functiondef('functest_A_1');
->> CREATE FUNCTION FUNCTEST_A_1(A TEXT, B DATE) RETURNS BOOLEAN VOLATILE CALLED ON NULL INPUT AS 'select a = ''abcd'' and b > ''2001-01-01'''
+>> CREATE FUNCTION TEMP_FUNC_TEST.FUNCTEST_A_1(A TEXT, B DATE) RETURNS BOOLEAN VOLATILE CALLED ON NULL INPUT AS 'select a = ''abcd'' and b > ''2001-01-01'''
 select pg_get_functiondef('functest_B_3');
->> CREATE FUNCTION FUNCTEST_B_3(A INT) RETURNS BOOLEAN STABLE CALLED ON NULL INPUT COST 100 AS 'select a = 0'
+>> CREATE FUNCTION TEMP_FUNC_TEST.FUNCTEST_B_3(A INT) RETURNS BOOLEAN STABLE CALLED ON NULL INPUT COST 100 AS 'select a = 0'
 select pg_get_functiondef('functest_C_3');
->> CREATE FUNCTION FUNCTEST_C_3(A INT) RETURNS BOOLEAN VOLATILE CALLED ON NULL INPUT SECURITY DEFINER AS 'select a < 0' OWNER TO ROOT
+>> CREATE FUNCTION TEMP_FUNC_TEST.FUNCTEST_C_3(A INT) RETURNS BOOLEAN VOLATILE CALLED ON NULL INPUT SECURITY DEFINER AS 'select a < 0' OWNER TO ROOT
 select pg_get_functiondef('functest_F_2');
->> CREATE FUNCTION FUNCTEST_F_2(A INT) RETURNS BOOLEAN VOLATILE STRICT AS 'select a = 50'
+>> CREATE FUNCTION TEMP_FUNC_TEST.FUNCTEST_F_2(A INT) RETURNS BOOLEAN VOLATILE STRICT AS 'select a = 50'
 
 -- ---------------------------------------------------------------------------
 -- SQL-standard body
@@ -543,11 +549,15 @@ drop table functest3 cascade;
 
 -- @case function_sql.sql_body_tempseq
 -- @pg create_function_sql.sql:244-253
--- 缺失: Lealone 无 SQL 标准函数体, 也无 TEMP SEQUENCE/DISCARD TEMP
+-- 适配: SQL标准的RETURN函数体已经支持; Lealone现在也支持CREATE TEMP SEQUENCE和
+--       DISCARD TEMP(会连带删除依赖临时对象的函数), 这里按PG原样执行。
 create temp sequence mytempseq;
+> update count: 0
 create function functest_tempseq() returns int
     return nextval('mytempseq');
+> update count: 0
 discard temp;
+> update count: 0
 -- PG 期望: 建函数成功, DISCARD TEMP 后函数被连带删除
 
 -- ---------------------------------------------------------------------------
@@ -557,20 +567,19 @@ discard temp;
 -- @case function_sql.information_schema
 -- @pg create_function_sql.sql:256-323
 -- 适配:
---   1) DEFAULT参数由另一条线(w-params)实现, 本轮不依赖它: 这里先不写DEFAULT,
---      parameter_default列断言NULL, 等w-params合入后再恢复PG原样;
---   2) PG原文件把函数建在temp_func_test schema里, 转换版没有SET search_path, 函数在默认schema,
---      所以去掉schema过滤(用routine_name区分);
---   3) routine_routine_usage的依赖关系还没有填充(见docs/PG_REGRESS.md), 查询能执行但返回0行,
---      这里如实断言0行, 等依赖分析实现后再补PG原样的JOIN结果;
+--   1) DEFAULT参数已经支持, 恢复PG原样的DEFAULT子句; parameter_default列显示DEFAULT表达式的SQL文本;
+--   2) setup用例已经执行SET SCHEMA temp_func_test, 函数就在temp_func_test里, 所以routine_schema过滤
+--      用TEMP_FUNC_TEST;
+--   3) routine_routine_usage现在会分析函数体里的调用; 这两个函数的体里没有互相调用, 如实断言0行,
+--      PG原文件后面依赖函数/序列/表的JOIN用例还没有转换;
 --   4) PG原句用information_schema.parameters JOIN routines, 这里保留JOIN, 同时验证
 --      specific_name/specific_schema能对上。
-create function functest_IS_1(a int, b int, c text)
+create function functest_IS_1(a int, b int default 1, c text default 'foo')
     returns int
     language sql
     as 'select a + b';
 > update count: 0
-create function functest_IS_2(out a int, b int)
+create function functest_IS_2(out a int, b int default 1)
     returns int
     language sql
     as 'select a';
@@ -584,17 +593,17 @@ select r.routine_name, p.ordinal_position, p.parameter_name, p.parameter_default
 > ROUTINE_NAME  ORDINAL_POSITION PARAMETER_NAME PARAMETER_DEFAULT
 > ------------- ---------------- -------------- -----------------
 > FUNCTEST_IS_1 1                A              null
-> FUNCTEST_IS_1 2                B              null
-> FUNCTEST_IS_1 3                C              null
+> FUNCTEST_IS_1 2                B              1
+> FUNCTEST_IS_1 3                C              'foo'
 > FUNCTEST_IS_2 1                A              null
-> FUNCTEST_IS_2 2                B              null
+> FUNCTEST_IS_2 2                B              1
 > rows: 5
 
 select r0.routine_name, r1.routine_name
   from information_schema.routine_routine_usage rru
        join information_schema.routines r0 on r0.specific_name = rru.specific_name
        join information_schema.routines r1 on r1.specific_name = rru.routine_name
-  where r0.routine_schema = 'PUBLIC' and r1.routine_schema = 'PUBLIC'
+  where r0.routine_schema = 'TEMP_FUNC_TEST' and r1.routine_schema = 'TEMP_FUNC_TEST'
   order by 1, 2;
 > ROUTINE_NAME ROUTINE_NAME
 > ------------ ------------
