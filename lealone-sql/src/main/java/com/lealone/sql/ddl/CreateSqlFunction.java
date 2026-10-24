@@ -47,6 +47,8 @@ public class CreateSqlFunction extends SchemaStatement {
     private int[] bodyParameterIndexes;
     private boolean deterministic;
     private boolean strict;
+    private String volatility;
+    private FunctionAttributes attributes;
     private boolean ifNotExists;
     private boolean orReplace;
 
@@ -129,6 +131,14 @@ public class CreateSqlFunction extends SchemaStatement {
         this.strict = strict;
     }
 
+    public void setVolatility(String volatility) {
+        this.volatility = volatility;
+    }
+
+    public void setAttributes(FunctionAttributes attributes) {
+        this.attributes = attributes;
+    }
+
     public void setIfNotExists(boolean ifNotExists) {
         this.ifNotExists = ifNotExists;
     }
@@ -156,6 +166,27 @@ public class CreateSqlFunction extends SchemaStatement {
             }
         }
         return false;
+    }
+
+    private void applyAttributes(SqlFunction function) {
+        if (attributes == null) {
+            return;
+        }
+        if (attributes.getSecurityDefiner() != null) {
+            function.setSecurityDefiner(attributes.getSecurityDefiner().booleanValue());
+        }
+        if (attributes.getLeakproof() != null) {
+            function.setLeakproof(attributes.getLeakproof().booleanValue());
+        }
+        if (attributes.getWindow() != null) {
+            function.setWindow(attributes.getWindow().booleanValue());
+        }
+        function.setCost(attributes.getCost());
+        function.setRows(attributes.getRows());
+        function.setOwnerName(attributes.getOwner());
+        for (String[] item : attributes.getConfigItems()) {
+            function.addConfigItem(item[0], item[1]);
+        }
     }
 
     @Override
@@ -206,7 +237,14 @@ public class CreateSqlFunction extends SchemaStatement {
         function.setReturnType(returnTypeSql, returnType);
         function.setBody(body, bodySql, bodyParameterIndexes);
         function.setDeterministic(deterministic);
+        // 易变性要原样保留IMMUTABLE/STABLE/VOLATILE，保证SCRIPT回放不丢属性
+        if (volatility != null) {
+            function.setVolatility(volatility);
+        } else {
+            function.setVolatility(deterministic ? SqlFunction.IMMUTABLE : SqlFunction.VOLATILE);
+        }
         function.setStrict(strict);
+        applyAttributes(function);
         schema.add(session, function, lock);
         return 0;
     }

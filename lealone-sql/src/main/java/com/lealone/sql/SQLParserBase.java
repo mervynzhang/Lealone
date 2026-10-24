@@ -102,6 +102,7 @@ import com.lealone.sql.ddl.CreateSchema;
 import com.lealone.sql.ddl.CreateSequence;
 import com.lealone.sql.ddl.CreateService;
 import com.lealone.sql.ddl.CreateSqlFunction;
+import com.lealone.sql.ddl.FunctionAttributes;
 import com.lealone.sql.ddl.CreateTable;
 import com.lealone.sql.ddl.CreateTrigger;
 import com.lealone.sql.ddl.CreateUser;
@@ -5268,7 +5269,8 @@ public class SQLParserBase implements SQLParser {
             command.setReturnType(null, Value.UNKNOWN);
         }
 
-        // LANGUAGE子句、易变性关键字和STRICT都是可选的，且顺序任意
+        // LANGUAGE子句和各种函数属性都是可选的，且顺序任意
+        FunctionAttributes attributes = new FunctionAttributes();
         boolean deterministic = false;
         boolean strict = false;
         String language = "SQL";
@@ -5276,20 +5278,7 @@ public class SQLParserBase implements SQLParser {
             if (readIf("LANGUAGE")) {
                 language = readStringOrIdentifier();
                 checkFunctionLanguage(language);
-            } else if (readIf("IMMUTABLE") || readIf("STABLE")) {
-                deterministic = true;
-            } else if (readIf("VOLATILE")) {
-                deterministic = false;
-            } else if (readIf("STRICT")) {
-                strict = true;
-            } else if (readIf("RETURNS")) {
-                // RETURNS NULL ON NULL INPUT是STRICT的标准SQL写法
-                read("NULL");
-                read("ON");
-                read("NULL");
-                read("INPUT");
-                strict = true;
-            } else {
+            } else if (!readFunctionAttribute(attributes)) {
                 break;
             }
         }
@@ -5300,14 +5289,18 @@ public class SQLParserBase implements SQLParser {
             if (readIf("LANGUAGE")) {
                 language = readStringOrIdentifier();
                 checkFunctionLanguage(language);
-            } else if (readIf("IMMUTABLE") || readIf("STABLE")) {
-                deterministic = true;
-            } else if (readIf("VOLATILE")) {
-                deterministic = false;
-            } else {
+            } else if (!readFunctionAttribute(attributes)) {
                 break;
             }
         }
+        if (attributes.getVolatility() != null) {
+            deterministic = !SqlFunction.VOLATILE.equals(attributes.getVolatility());
+        }
+        if (attributes.getStrict() != null) {
+            strict = attributes.getStrict().booleanValue();
+        }
+        command.setAttributes(attributes);
+        command.setVolatility(attributes.getVolatility());
         command.setDeterministic(deterministic);
         command.setStrict(strict);
         command.setLanguage(language);
@@ -5325,6 +5318,113 @@ public class SQLParserBase implements SQLParser {
             command.setBody(body, bodySql, indexes);
         }
         return command;
+    }
+
+    /**
+     * 读取一个可选的函数属性(CREATE FUNCTION和ALTER FUNCTION共用)，
+     * 读到了返回true，没读到返回false。
+     */
+    private boolean readFunctionAttribute(FunctionAttributes attributes) {
+        if (readIf("IMMUTABLE")) {
+            attributes.setVolatility(SqlFunction.IMMUTABLE);
+        } else if (readIf("STABLE")) {
+            attributes.setVolatility(SqlFunction.STABLE);
+        } else if (readIf("VOLATILE")) {
+            attributes.setVolatility(SqlFunction.VOLATILE);
+        } else if (readIf("STRICT")) {
+            attributes.setStrict(Boolean.TRUE);
+        } else if (readIf("CALLED")) {
+            // CALLED ON NULL INPUT是STRICT的反面，也是默认行为
+            read("ON");
+            read("NULL");
+            read("INPUT");
+            attributes.setStrict(Boolean.FALSE);
+        } else if (readIf("RETURNS")) {
+            // RETURNS NULL ON NULL INPUT是STRICT的标准SQL写法
+            read("NULL");
+            read("ON");
+            read("NULL");
+            read("INPUT");
+            attributes.setStrict(Boolean.TRUE);
+        } else if (readIf("SECURITY")) {
+            if (readIf("DEFINER")) {
+                attributes.setSecurityDefiner(Boolean.TRUE);
+            } else {
+                read("INVOKER");
+                attributes.setSecurityDefiner(Boolean.FALSE);
+            }
+        } else if (readIf("LEAKPROOF")) {
+            attributes.setLeakproof(Boolean.TRUE);
+        } else if (readIf("NOT")) {
+            read("LEAKPROOF");
+            attributes.setLeakproof(Boolean.FALSE);
+        } else if (readIf("WINDOW")) {
+            attributes.setWindow(Boolean.TRUE);
+        } else if (readIf("COST")) {
+            attributes.setCost(readDoubleValue());
+        } else if (readIf("ROWS")) {
+            attributes.setRows(readDoubleValue());
+        } else if (readIf("SET")) {
+            // SET configuration_parameter { TO | = } value
+            String name = readColumnIdentifier();
+            if (!readIf("=")) {
+                readIf("TO");
+            }
+            attributes.addConfigItem(name, readFunctionConfigValue());
+        } else if (readIf("OWNER")) {
+            read("TO");
+            attributes.setOwner(readUniqueIdentifier());
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    // SET子句的值: DEFAULT、字符串、数字、标识符，还可能是逗号分隔的列表(如search_path)
+    private String readFunctionConfigValue() {
+        StringBuilder buff = new StringBuilder();
+        while (true) {
+            if (buff.length() > 0) {
+                buff.append(", ");
+            }
+            if (readIf("DEFAULT")) {
+                return null;
+            }
+            if (currentTokenType == VALUE) {
+                buff.append(currentValue.getSQL());
+                read();
+            } else if (currentTokenType == IDENTIFIER || currentTokenType == KEYWORD) {
+                buff.append(currentToken);
+                read();
+            } else if (currentTokenType == MINUS) {
+                buff.append('-');
+                read();
+                buff.append(currentValue.getSQL());
+                read();
+            } else {
+                throw getSyntaxError();
+            }
+            if (!readIf(",")) {
+                break;
+            }
+        }
+        return buff.toString();
+    }
+
+    private double readDoubleValue() {
+        boolean minus = false;
+        if (currentTokenType == MINUS) {
+            minus = true;
+            read();
+        } else if (currentTokenType == PLUS) {
+            read();
+        }
+        if (currentTokenType != VALUE) {
+            throw DbException.getSyntaxError(sqlCommand, parseIndex, "number");
+        }
+        double value = currentValue.getDouble();
+        read();
+        return minus ? -value : value;
     }
 
     private static void checkFunctionLanguage(String language) {

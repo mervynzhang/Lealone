@@ -10,6 +10,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.Arrays;
 
 import com.lealone.common.exceptions.DbException;
@@ -49,6 +50,11 @@ public class SqlFunction extends FunctionAlias {
     /** 既是入参也是返回列 */
     public static final int PARAM_INOUT = 2;
 
+    /** 易变性关键字，PostgreSQL的默认值是VOLATILE */
+    public static final String VOLATILE = "VOLATILE";
+    public static final String STABLE = "STABLE";
+    public static final String IMMUTABLE = "IMMUTABLE";
+
     // JavaMethod的构造器要求一个Method对象，
     // 这里只是借用它计算默认字段，getValue等方法都已被覆盖
     private static final Method DUMMY_METHOD = getDummyMethod();
@@ -80,6 +86,17 @@ public class SqlFunction extends FunctionAlias {
     private String body;
     private String bodySql;
     private int[] bodyParameterIndexes;
+
+    // ---- PostgreSQL的函数属性，都可以通过ALTER FUNCTION修改 ----
+    private String volatility = VOLATILE;
+    private boolean securityDefiner;
+    private boolean leakproof;
+    private boolean window;
+    private Double cost;
+    private Double rows;
+    private String ownerName;
+    // 每个元素是{参数名, 值}，值可能为null(表示DEFAULT)
+    private final ArrayList<String[]> configItems = new ArrayList<>();
 
     private JavaMethod sqlJavaMethod;
 
@@ -173,6 +190,133 @@ public class SqlFunction extends FunctionAlias {
 
     public void setStrict(boolean strict) {
         this.strict = strict;
+    }
+
+    public boolean isStrict() {
+        return strict;
+    }
+
+    public String getVolatility() {
+        return volatility;
+    }
+
+    /**
+     * 设置易变性。IMMUTABLE/STABLE都等价于deterministic=true，
+     * 但持久化时保留用户写的那个关键字，这样SCRIPT回放不丢属性。
+     */
+    public void setVolatility(String volatility) {
+        if (volatility == null) {
+            volatility = VOLATILE;
+        }
+        this.volatility = volatility;
+        setDeterministic(!VOLATILE.equalsIgnoreCase(volatility));
+    }
+
+    public boolean isSecurityDefiner() {
+        return securityDefiner;
+    }
+
+    public void setSecurityDefiner(boolean securityDefiner) {
+        this.securityDefiner = securityDefiner;
+    }
+
+    public boolean isLeakproof() {
+        return leakproof;
+    }
+
+    public void setLeakproof(boolean leakproof) {
+        this.leakproof = leakproof;
+    }
+
+    public boolean isWindow() {
+        return window;
+    }
+
+    public void setWindow(boolean window) {
+        this.window = window;
+    }
+
+    public Double getCost() {
+        return cost;
+    }
+
+    public void setCost(Double cost) {
+        this.cost = cost;
+    }
+
+    public Double getRows() {
+        return rows;
+    }
+
+    public void setRows(Double rows) {
+        this.rows = rows;
+    }
+
+    public String getOwnerName() {
+        return ownerName;
+    }
+
+    public void setOwnerName(String ownerName) {
+        this.ownerName = ownerName;
+    }
+
+    public ArrayList<String[]> getConfigItems() {
+        return configItems;
+    }
+
+    public void addConfigItem(String name, String value) {
+        configItems.add(new String[] { name, value });
+    }
+
+    public void removeConfigItem(String name) {
+        for (int i = configItems.size() - 1; i >= 0; i--) {
+            if (configItems.get(i)[0].equalsIgnoreCase(name)) {
+                configItems.remove(i);
+            }
+        }
+    }
+
+    public void clearConfigItems() {
+        configItems.clear();
+    }
+
+    /**
+     * 判断函数是否匹配DROP FUNCTION/ALTER FUNCTION里写的参数类型列表。
+     * 不支持重载，所以只比较入参的类型；没写参数类型列表时总是匹配。
+     */
+    public boolean matchesSignature(int[] argumentTypeIds) {
+        if (argumentTypeIds == null) {
+            return true;
+        }
+        if (argumentTypeIds.length != inputParameterCount) {
+            return false;
+        }
+        for (int i = 0; i < argumentTypeIds.length; i++) {
+            if (argumentTypeIds[i] != parameterTypeIds[inputIndexes[i]]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // 用于报错信息的签名，例如 F(INT, VARCHAR)
+    public String getSignature() {
+        StatementBuilder buff = new StatementBuilder(getName()).append('(');
+        for (int i = 0; i < inputParameterCount; i++) {
+            int index = inputIndexes[i];
+            buff.appendExceptFirst(", ");
+            if (parameterTypes != null && index < parameterTypes.length) {
+                buff.append(parameterTypes[index]);
+            } else {
+                buff.append(DataType.getDataType(parameterTypeIds[index]).name);
+            }
+        }
+        return buff.append(')').toString();
+    }
+
+    @Override
+    public void checkRename() {
+        // 支持ALTER FUNCTION ... RENAME TO
     }
 
     /**
@@ -298,16 +442,50 @@ public class SqlFunction extends FunctionAlias {
                 buff.append(returnTypeSql);
             }
         }
-        if (strict) {
-            buff.append(" STRICT");
-        }
         // SQL语言的函数保持原来的DDL格式，过程式语言要显式写出LANGUAGE
         if (!"SQL".equalsIgnoreCase(language)) {
             buff.append(" LANGUAGE ").append(language);
         }
-        buff.append(isDeterministic() ? " IMMUTABLE" : " VOLATILE");
+        buff.append(' ').append(volatility);
+        // 显式写出STRICT的反面，保证CALLED ON NULL INPUT也能持久化
+        buff.append(strict ? " STRICT" : " CALLED ON NULL INPUT");
+        if (securityDefiner) {
+            buff.append(" SECURITY DEFINER");
+        }
+        if (leakproof) {
+            buff.append(" LEAKPROOF");
+        }
+        if (window) {
+            buff.append(" WINDOW");
+        }
+        if (cost != null) {
+            buff.append(" COST ").append(formatNumber(cost));
+        }
+        if (rows != null) {
+            buff.append(" ROWS ").append(formatNumber(rows));
+        }
+        for (String[] item : configItems) {
+            buff.append(" SET ").append(database.quoteIdentifier(item[0])).append(" = ");
+            if (item[1] != null) {
+                buff.append(item[1]);
+            } else {
+                buff.append("DEFAULT");
+            }
+        }
         buff.append(" AS ").append(StringUtils.quoteStringSQL(body));
+        // 属主不是CREATE FUNCTION的标准子句，放在AS之后，只记录不生效
+        if (ownerName != null) {
+            buff.append(" OWNER TO ").append(database.quoteIdentifier(ownerName));
+        }
         return buff.toString();
+    }
+
+    // COST/ROWS是浮点数，整数时不带小数点，读起来和PostgreSQL的DDL一致
+    private static String formatNumber(double value) {
+        if (value == Math.floor(value) && !Double.isInfinite(value)) {
+            return Long.toString((long) value);
+        }
+        return Double.toString(value);
     }
 
     @Override

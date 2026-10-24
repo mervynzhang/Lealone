@@ -66,14 +66,15 @@ public class PgFunctionTest extends SqlTestBase {
         executeQuery("SELECT tab()");
         assertEquals(1, getIntValue(1));
 
-        // IMMUTABLE/STABLE等价于deterministic, 默认是VOLATILE
+        // IMMUTABLE/STABLE等价于deterministic, 默认是VOLATILE;
+        // 持久化时保留用户写的那个关键字, STABLE不再归一化成IMMUTABLE
         String immutableSql = getCreateSql("ADD_ONE");
         assertTrue(immutableSql, immutableSql.contains(" IMMUTABLE "));
         String volatileSql = getCreateSql("TWICE");
         assertTrue(volatileSql, volatileSql.contains(" VOLATILE "));
         executeUpdate(
                 "CREATE OR REPLACE FUNCTION stable_f(a INT) RETURNS INT STABLE AS $$ SELECT a $$");
-        assertTrue(getCreateSql("STABLE_F").contains(" IMMUTABLE "));
+        assertTrue(getCreateSql("STABLE_F").contains(" STABLE "));
 
         // 参数个数不匹配时报函数找不到
         executeQueryThanAssertErrorCode("SELECT add_one(1, 2)", ErrorCode.FUNCTION_NOT_FOUND_1);
