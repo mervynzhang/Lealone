@@ -126,7 +126,8 @@ public abstract class Function extends Expression {
             return BuiltInFunctionFactory.INSTANCE.createFunction(database, info);
     }
 
-    protected Expression[] args;
+    // 有些函数没有实参, 初始成空数组避免下游到处判null
+    protected Expression[] args = new Expression[0];
 
     /**
      * Get the function arguments.
@@ -139,6 +140,9 @@ public abstract class Function extends Expression {
 
     protected boolean optimizeArgs(ServerSession session) {
         boolean allConst = isDeterministic();
+        // 有些函数(比如新增的内置函数)创建时没有设置实参, args可能是null
+        if (args == null)
+            return allConst;
         for (int i = 0; i < args.length; i++) {
             Expression e = args[i];
             if (e == null) {

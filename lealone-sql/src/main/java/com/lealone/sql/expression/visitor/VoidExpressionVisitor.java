@@ -202,7 +202,11 @@ public class VoidExpressionVisitor extends ExpressionVisitorBase<Void> {
 
     @Override
     public Void visitFunction(Function e) {
-        for (Expression e2 : e.getArgs()) {
+        // 有些内置函数(比如新增的集合返回函数)没有实参, getArgs()可能是null
+        Expression[] args = e.getArgs();
+        if (args == null)
+            return null;
+        for (Expression e2 : args) {
             if (e2 != null)
                 e2.accept(this);
         }

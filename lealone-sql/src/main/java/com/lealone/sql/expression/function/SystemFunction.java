@@ -752,7 +752,8 @@ public class SystemFunction extends BuiltInFunction {
         boolean allConst = optimizeArgs(session);
         int t, s, d;
         long p;
-        Expression p0 = args.length < 1 ? null : args[0];
+        // args可能是null(有些内置函数没有实参)
+        Expression p0 = args == null || args.length < 1 ? null : args[0];
         switch (info.type) {
         case IFNULL:
         case NULLIF:
