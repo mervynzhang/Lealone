@@ -131,7 +131,8 @@ public abstract class YieldableBase<T> implements Yieldable<T> {
         session.getDatabase().setProgress(state, statement.getSQL(), 0, 0);
     }
 
-    private void handleException(Throwable t) {
+    @Override
+    public void handleException(Throwable t) {
         // 如果不设置状态会导致不能执行下一条语句
         session.setStatus(SessionStatus.STATEMENT_COMPLETED);
         DbException e = DbException.convert(t).addSQL(statement.getSQL());

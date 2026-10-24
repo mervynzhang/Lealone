@@ -549,6 +549,38 @@ public class IsolationMatrixTest extends TestBase {
         }
     }
 
+    // ------------------------------------------------------------------
+    // lock timeout: a waiter must fail after LOCK_TIMEOUT instead of waiting forever
+    // ------------------------------------------------------------------
+
+    @Test(timeout = TIMEOUT_SECONDS * 1000L)
+    public void lockTimeout_blocksAtMostLockTimeout() throws Exception {
+        String db = "isolock";
+        String table = "t_lock";
+        try (Connection admin = openAdmin(db)) {
+            initTable(admin, table, "(1, 0)");
+            try (Connection holder = openAdmin(db)) {
+                holder.setAutoCommit(false);
+                update(holder, "UPDATE " + table + " SET v = v + 1 WHERE id = 1");
+                long start = System.currentTimeMillis();
+                try (Connection waiter = openAdmin(db)) {
+                    update(waiter, "UPDATE " + table + " SET v = v + 1 WHERE id = 1");
+                    fail("the second writer must not succeed while the row lock is held");
+                } catch (SQLException e) {
+                    long waited = System.currentTimeMillis() - start;
+                    assertTrue("expected LOCK_TIMEOUT but was: " + e,
+                            e.getMessage() != null && e.getMessage().contains("Timeout trying to lock"));
+                    assertTrue("must give up after about LOCK_TIMEOUT, waited " + waited + " ms",
+                            waited >= 1000 && waited < 15000);
+                    System.out.println("lock timeout after " + waited + " ms: " + e.getMessage());
+                } finally {
+                    holder.rollback();
+                }
+            }
+            dropTable(admin, table);
+        }
+    }
+
     private static void update(Connection c, String sql) throws SQLException {
         try (Statement s = c.createStatement()) {
             s.executeUpdate(sql);
