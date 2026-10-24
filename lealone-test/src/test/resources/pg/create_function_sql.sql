@@ -403,13 +403,44 @@ drop function functest_IS_1(int, int, text), functest_IS_2(int);
 
 -- @case function_sql.overload
 -- @pg create_function_sql.sql:326-331
--- 缺失: Lealone 不支持按参数类型重载(函数按名字唯一), 因此也不存在"DROP 时重载歧义"
-create function functest_B_2(bigint) returns boolean language 'sql'
-       immutable as 'select $1 > 0';
-drop function functest_b_1;              -- PG 期望: 成功
-drop function functest_b_1;              -- PG 期望: 报 42883 (不存在)
-drop function functest_b_2;              -- PG 期望: 报 42725 (重载歧义)
--- PG 期望: 建 bigint 版本成功(重载), 最后一条 DROP 因两个同名函数而歧义报错
+-- 适配: functest_B_1(INT)/functest_B_2(INT) 已由前面的 volatility 用例建好;
+--       参数要写名字(Lealone 还不支持只写类型)，函数体不能用 $1 位置参数;
+--       函数不存在报 90077、重载歧义报 90152(对应 PG 的 42883/42725)
+create function functest_B_2(a bigint) returns boolean language 'sql'
+       immutable as 'select a > 0';
+> update count: 0
+
+-- 两个重载都能调用
+select functest_B_2(1) r;
+> R
+> ----
+> TRUE
+> rows: 1
+
+select functest_B_2(cast(1 as bigint)) r;
+> R
+> ----
+> TRUE
+> rows: 1
+
+-- 只有一个重载时DROP可以不写参数类型
+drop function functest_b_1;
+> update count: 0
+
+-- 已经删掉了, 再删报函数不存在
+drop function functest_b_1;
+> exception 90077
+
+-- 同名函数有两个重载, DROP不写参数类型是歧义的
+drop function functest_b_2;
+> exception 90152
+
+-- 写完参数类型就能删掉指定的重载
+drop function functest_b_2(bigint);
+> update count: 0
+
+drop function functest_b_2(int);
+> update count: 0
 
 -- @case function_sql.drop_not_found
 -- @pg create_function_sql.sql:329-330
