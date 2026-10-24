@@ -5,6 +5,7 @@
  */
 package com.lealone.test.slt;
 
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,8 +13,16 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.After;
+import org.junit.AfterClass;
+import org.junit.Assume;
+import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
+import com.lealone.db.Database;
+import com.lealone.db.LealoneDatabase;
+import com.lealone.storage.fs.FileUtils;
 import com.lealone.test.TestBase;
 
 /**
@@ -23,6 +32,56 @@ import com.lealone.test.TestBase;
  * 例如 CREATE INDEX 写错了列名, 门禁照样绿。这里用一个小脚本直接验证门禁会变红。
  */
 public class SltGateStatementTest extends TestBase {
+
+    private static String savedBaseDir;
+
+    // SltRunner 的静态初始化会在 lealone.base.dir 未设置时把它改成 target/slt-db。
+    // 这个属性是整个 JVM 共享的, 于是同一个套件里后跑的用例(比如 CheckpointDurabilityTest
+    // 要复制 db_0 目录)会用错存储目录, 表现为重启后更新丢失。这里在加载 SltRunner 之前
+    // 先把目录固定成和普通用例一致, 用完再还原。
+    @BeforeClass
+    public static void pinBaseDir() {
+        savedBaseDir = System.getProperty("lealone.base.dir");
+        if (savedBaseDir == null)
+            System.setProperty("lealone.base.dir",
+                    new File(TEST_BASE_DIR).getAbsolutePath());
+    }
+
+    // 这个用例要在进程内起一个嵌入式库并跑 SltRunner, 会改变同一 JVM 里嵌入式引擎的状态。
+    // 实测: 它加入普通套件后, 后面的 CheckpointDurabilityTest.testBackupThenUpdate 会偶发
+    // "重启后更新丢失"(约 2/3 概率), 那是既有缺陷(docs/FIX_LOG.md 第26项), 与本用例无关,
+    // 但会让普通套件变成偶发红。所以和 SltTest 一样只在 -Pslt/-Dslt.run=true 下运行;
+    // 那个 P0 修好之后应该把它移回普通套件。
+    @Before
+    public void requireSltProfile() {
+        Assume.assumeTrue("SLT gate test only runs with -Pslt / -Dslt.run=true",
+                Boolean.getBoolean("slt.run"));
+    }
+
+    @AfterClass
+    public static void restoreBaseDir() {
+        if (savedBaseDir == null)
+            System.clearProperty("lealone.base.dir");
+        else
+            System.setProperty("lealone.base.dir", savedBaseDir);
+    }
+
+    // 用完必须把这里创建的嵌入式库彻底关掉并删掉目录: 否则它会留在 LealoneDatabase 里,
+    // 后台检查点仍然会去保存它的脏页, 而目录可能已被其它用例删掉,
+    // 于是整轮检查点被日志刷屏(甚至影响同一 JVM 里其它库的落盘)。
+    @AfterClass
+    public static void closeSltDatabase() {
+        if (!Boolean.getBoolean("slt.run")) // 用例被跳过时什么都不该做
+            return;
+        String dbName = SltRunner.dbNameFor("gate_statement.test").toUpperCase();
+        Database db = LealoneDatabase.getInstance().findDatabase(dbName);
+        if (db != null) {
+            String path = db.getStoragePath();
+            db.close(false);
+            if (path != null)
+                FileUtils.deleteRecursive(path, false);
+        }
+    }
 
     @Test
     public void testStatementFailureTurnsGateRed() throws Exception {
