@@ -65,7 +65,7 @@ select functest_A_1(null, '2020-01-01') r;
 
 -- @case function_sql.a2_array_arg
 -- @pg create_function_sql.sql:25-26
--- 缺失: Lealone 无 text[] 数组参数和下标表达式
+-- 缺失: 数组参数本身已经支持, 但这条还依赖 $1 位置参数和 ARRAY[...] 字面量
 create function functest_A_2(a text[]) returns int language sql
     as 'select a[1]::int';
 -- @pg 调用在 :35: select functest_A_2(ARRAY['1','2','3']);
@@ -195,16 +195,65 @@ reset session authorization;
 -- ---------------------------------------------------------------------------
 
 -- @case function_sql.strict
--- @pg create_function_sql.sql:124-145
--- 缺失: Lealone 不支持 CALLED ON NULL INPUT / RETURNS NULL ON NULL INPUT / STRICT 语法, 也没有 proisstrict
+-- @pg create_function_sql.sql:124-131
+-- 适配: PG 的 F_2 显式写了 CALLED ON NULL INPUT, Lealone 不认识这个关键字(默认行为就是它), 这里不抄 F_2;
+--       F_3/F_4 的 RETURNS NULL ON NULL INPUT / STRICT 现在都支持, 用调用验证"入参为 NULL 时不执行函数体"
 create function functest_F_1(a int) returns boolean language 'sql'
     as 'select a > 50';
-create function functest_F_2(a int) returns boolean language 'sql'
-    called on null input as 'select a = 50';
+> update count: 0
+
 create function functest_F_3(a int) returns boolean language 'sql'
     returns null on null input as 'select a < 50';
+> update count: 0
+
 create function functest_F_4(a int) returns boolean language 'sql'
     strict as 'select a = 50';
+> update count: 0
+
+-- 普通函数: 入参 NULL 时函数体照常执行, 结果是 NULL
+select functest_F_1(null) r;
+> R
+> ----
+> null
+> rows: 1
+
+-- STRICT / RETURNS NULL ON NULL INPUT: 入参 NULL 时函数体不执行, 直接返回 NULL
+select functest_F_3(null) r;
+> R
+> ----
+> null
+> rows: 1
+
+select functest_F_4(null) r;
+> R
+> ----
+> null
+> rows: 1
+
+select functest_F_1(51) r;
+> R
+> ----
+> TRUE
+> rows: 1
+
+select functest_F_3(49) r;
+> R
+> ----
+> TRUE
+> rows: 1
+
+select functest_F_4(50) r;
+> R
+> ----
+> TRUE
+> rows: 1
+
+-- @case function_sql.strict_catalog
+-- @pg create_function_sql.sql:132-145
+-- 缺失: Lealone 没有 pg_proc.proisstrict, 也不支持 ALTER FUNCTION;
+--       CALLED ON NULL INPUT 关键字本身也不认识(默认语义等价, 只是不能显式写)
+create function functest_F_2(a int) returns boolean language 'sql'
+    called on null input as 'select a = 50';
 select proname, proisstrict from pg_proc
        where oid in ('functest_F_1'::regproc,
                      'functest_F_2'::regproc,
@@ -404,7 +453,8 @@ drop function functest1(a int);
 
 -- @case function_sql.setof
 -- @pg create_function_sql.sql:344-348
--- 缺失: Lealone 无 RETURNS SETOF 和 generate_series()
+-- 缺失: Lealone 无 generate_series(); 而且 select 列表里不展开 setof 函数
+--       (SELECT functest_srf0() 会报 FEATURE_NOT_SUPPORTED, 必须写成 FROM functest_srf0())
 create function functest_srf0() returns setof int
 language sql
 as $$ select i from generate_series(1, 100) i $$;
@@ -430,15 +480,26 @@ explain (verbose, costs off) select * from functest_sri1();
 
 -- @case function_sql.void_return
 -- @pg create_function_sql.sql:381-390
--- 缺陷: Lealone 的 RETURNS VOID 函数把函数体的值原样(Java 序列化字节)返回给客户端,
---       SELECT voidtest1(42) 得到的是 aced...2b 这样的十六进制串, PG 返回空串/一行空值
+-- 适配: PG 的一行空值在 Lealone 里显示成 null; 顺便验证 VOID 函数里再调另一个 VOID 函数
 create function voidtest1(a int) returns void language sql as
 $$ select a + 1 $$;
-select voidtest1(42);
+> update count: 0
+
+select voidtest1(42) r;
+> R
+> ----
+> null
+> rows: 1
+
 create function voidtest2(a int, b int) returns void language sql as
 $$ select voidtest1(a + b) $$;
-select voidtest2(11,22);
--- PG 期望: 两条 SELECT 都返回一行空值
+> update count: 0
+
+select voidtest2(11,22) r;
+> R
+> ----
+> null
+> rows: 1
 
 -- @case function_sql.void_insert
 -- @pg create_function_sql.sql:392-402
@@ -455,7 +516,8 @@ table sometable;
 
 -- @case function_sql.setof_void
 -- @pg create_function_sql.sql:404-406
--- 缺失: Lealone 无 RETURNS SETOF VOID 和 generate_series()
+-- 缺陷: RETURNS SETOF VOID 能建, 但每行返回 Java 序列化字节(和修好之前的 RETURNS VOID 一样);
+--       这条还依赖 generate_series()
 create function voidtest5(a int) returns setof void language sql as
 $$ select generate_series(1, a) $$ stable;
 select * from voidtest5(3);

@@ -105,9 +105,9 @@ public class PgRegressTest {
         buff.append(String.format("[pgregress] skip 清单: %d 条用例, 点名跳过的 PG 语句 %d 条%n",
                 skipList.getEntries().size(), skipList.getPgStatements()));
         for (PgSkipList.FileTotal total : skipList.getFileTotals()) {
-            if (total.skipAll)
+            if (total.sampled)
                 buff.append(String.format(
-                        "[pgregress]   %-24s PG 共 %4d 条语句, 整文件不适用(清单里点名 %d 条代表性语句)%n",
+                        "[pgregress]   %-24s PG 共 %4d 条语句, 抽样转换(清单里点名跳过的代表性语句 %d 条)%n",
                         total.file, total.statements, skipList.getPgStatements(total.file)));
             else
                 buff.append(String.format("[pgregress]   %-24s PG 共 %4d 条语句, 其中 %3d 条在 skip 清单里%n",

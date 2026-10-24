@@ -42,20 +42,20 @@ public class PgSkipList {
 
     private final Map<String, Entry> entries = new LinkedHashMap<>();
     private final List<String> errors = new ArrayList<>();
-    /** 头部声明的 PG 原文件总量: 文件名、语句数、是否整文件都不适用。 */
+    /** 头部声明的 PG 原文件总量: 文件名、语句数、转换方式(converted/sampled)。 */
     public static final class FileTotal {
         public final String file;
         public final int statements;
-        public final boolean skipAll;
+        public final boolean sampled;
 
-        FileTotal(String file, int statements, boolean skipAll) {
+        FileTotal(String file, int statements, boolean sampled) {
             this.file = file;
             this.statements = statements;
-            this.skipAll = skipAll;
+            this.sampled = sampled;
         }
     }
 
-    // 头部声明的 PG 原文件总语句数(每个 PG 文件一行 # @pg-total 文件名 语句数 converted|skip-all)
+    // 头部声明的 PG 原文件总语句数(每个 PG 文件一行 # @pg-total 文件名 语句数 converted|sampled)
     private final Map<String, FileTotal> fileTotals = new LinkedHashMap<>();
 
     public Map<String, Entry> getEntries() {
@@ -101,8 +101,8 @@ public class PgSkipList {
                     list.errors.add(file.getName() + ':' + lineNumber + " @pg-total 格式不对: " + line);
                     continue;
                 }
-                boolean skipAll = parts.length > 2 && "skip-all".equals(parts[2]);
-                list.fileTotals.put(parts[0], new FileTotal(parts[0], count, skipAll));
+                boolean sampled = parts.length > 2 && "sampled".equals(parts[2]);
+                list.fileTotals.put(parts[0], new FileTotal(parts[0], count, sampled));
                 continue;
             }
             if (line.isEmpty() || line.startsWith("#"))
