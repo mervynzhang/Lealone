@@ -177,7 +177,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
 
     // BUG: ROUND 的平局舍入方向不是"远离 0"，而是朝 +∞ 取整。
     // 期望: ROUND(-2.5) = -3（H2 为 -3，即 HALF_UP）；实际: -2。
-    @Ignore("BUG: ROUND(-2.5) returns -2 instead of -3 (ties round toward +infinity, H2 rounds away from zero)")
     @Test
     public void roundTieRoundsAwayFromZero() {
         assertQueryEquals(-3.0, "SELECT ROUND(-2.5)");
