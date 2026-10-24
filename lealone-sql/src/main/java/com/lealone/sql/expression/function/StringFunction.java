@@ -142,7 +142,7 @@ public class StringFunction extends BuiltInFunction {
             break;
         }
         case BIT_LENGTH:
-            result = ValueLong.get(8 * getUtf8Length(v.getString()));
+            result = ValueLong.get(8 * octetLength(v));
             break;
         case CHAR:
             result = ValueString.get(String.valueOf((char) v.getInt()));
@@ -152,7 +152,7 @@ public class StringFunction extends BuiltInFunction {
             result = ValueLong.get(length(v));
             break;
         case OCTET_LENGTH:
-            result = ValueLong.get(getUtf8Length(v.getString()));
+            result = ValueLong.get(octetLength(v));
             break;
         case QUOTE_IDENT:
             result = ValueString.get(StringUtils.quoteIdentifier(v.getString()));
@@ -252,6 +252,20 @@ public class StringFunction extends BuiltInFunction {
     }
 
     // 按UTF-8编码计算字节数，不产生临时byte数组
+    // OCTET_LENGTH/BIT_LENGTH 的字节数: 二进制类型就是字节数本身, 文本类型按 UTF-8 编码算。
+    // 二进制类型不能转成字符串再数——ValueBytes/ValueBlob 的 getString() 返回十六进制字符,
+    // 数出来是字节数的两倍(还会把整个 LOB 物化一次)。
+    private static long octetLength(Value v) {
+        switch (v.getType()) {
+        case Value.BYTES:
+        case Value.BLOB:
+        case Value.JAVA_OBJECT:
+            return v.getPrecision();
+        default:
+            return getUtf8Length(v.getString());
+        }
+    }
+
     private static long getUtf8Length(String s) {
         long len = 0;
         for (int i = 0, size = s.length(); i < size; i++) {
