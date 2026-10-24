@@ -98,11 +98,25 @@ public class Sequence extends SchemaObjectBase {
         return DbObjectType.SEQUENCE;
     }
 
+    /**
+     * value在到达边界值之后、回绕之前会越界一个increment，所以复制内部状态时不能再校验属性是否合法。
+     */
+    private Sequence(Sequence source) {
+        super(source.schema, source.id, source.name);
+        this.value = new AtomicLong(source.value.get());
+        this.valueWithMargin = source.valueWithMargin;
+        this.increment = source.increment;
+        this.cacheSize = source.cacheSize;
+        this.minValue = source.minValue;
+        this.maxValue = source.maxValue;
+        this.cycle = source.cycle;
+        this.belongsToTable = source.belongsToTable;
+        this.transactional = source.transactional;
+        this.lastFlushValueWithMargin = source.lastFlushValueWithMargin;
+    }
+
     public Sequence copy() {
-        Sequence sequence = new Sequence(schema, id, name, value.get(), increment, cacheSize, minValue,
-                maxValue, cycle, belongsToTable);
-        sequence.setTransactional(transactional);
-        return sequence;
+        return new Sequence(this);
     }
 
     public long getCurrentValue(ServerSession session) {
@@ -214,11 +228,11 @@ public class Sequence extends SchemaObjectBase {
      */
     private static boolean isValid(long value, long minValue, long maxValue, long increment) {
         return minValue <= value && maxValue >= value && maxValue > minValue && increment != 0 &&
-        // Math.abs(increment) < maxValue - minValue
+        // Math.abs(increment) <= maxValue - minValue
         // use BigInteger to avoid overflows when maxValue and minValue
         // are really big
                 BigInteger.valueOf(increment).abs().compareTo(
-                        BigInteger.valueOf(maxValue).subtract(BigInteger.valueOf(minValue))) < 0;
+                        BigInteger.valueOf(maxValue).subtract(BigInteger.valueOf(minValue))) <= 0;
     }
 
     private static long getDefaultMinValue(Long startValue, long increment) {
@@ -349,10 +363,13 @@ public class Sequence extends SchemaObjectBase {
     private void flushInternal(ServerSession session, long flushValueWithMargin) {
         if (flushValueWithMargin == lastFlushValueWithMargin)
             return;
+        // 预留给缓存的valueWithMargin可能超出边界值，不能直接写进元数据，
+        // 否则重新打开数据库时会因为序列属性非法而失败
+        long scriptValue = Math.min(maxValue, Math.max(minValue, flushValueWithMargin));
         // just for this case, use the value with the margin for the script
         long realValue = value.get();
         try {
-            value.set(valueWithMargin);
+            value.set(scriptValue);
             if (!isTemporary()) {
                 schema.update(session, this, oldRow, lock);
             }
