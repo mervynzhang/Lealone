@@ -1546,7 +1546,7 @@ public class ServerSession extends SessionBase implements InternalSession {
     private DbException buildLockTimeoutError() {
         if (lockedByTransaction != null
                 && System.currentTimeMillis() - lockStartTime > getLockTimeout()) {
-            String lockedObjectStr = lockedObject.toString();
+            String lockedObjectStr = lockedObject == null ? "null" : lockedObject.toString();
             // 发生死锁了
             if (lockedBy.lockedByTransaction == transaction) {
                 String msg = getMsg(transaction.getTransactionId(), this, lockedByTransaction);
