@@ -112,23 +112,24 @@ public class UnnamedParameterTest extends SqlTestBase {
     // 无名参数和$n的DDL要能原样回放(SCRIPT导出后RUNSCRIPT到另一个库)
     @Test
     public void testScriptReplay() throws Exception {
-        executeUpdate("CREATE OR REPLACE FUNCTION replay_fn(INT, TEXT) RETURNS TEXT "
-                + "AS 'SELECT $2 || $1'");
-        executeUpdate("DROP PROCEDURE IF EXISTS replay_proc");
-        executeUpdate("CREATE PROCEDURE replay_proc(OUT r INT, INT) AS 'SELECT ? + 100'");
-
+        // 用独立的库，避免把别的测试类建的对象一起导出
         String dir = new File(TEST_DIR, "unnamed_param_replay_" + System.nanoTime()).getAbsolutePath();
         FileUtils.deleteRecursive(dir, false);
         new File(dir).mkdirs();
         File dump = new File(dir, "dump.sql");
-        try (Statement s = conn.createStatement()) {
-            s.execute("SCRIPT TO '" + dump.getAbsolutePath().replace('\\', '/') + "'");
+        String dumpPath = dump.getAbsolutePath().replace('\\', '/');
+        try (Connection c1 = DriverManager.getConnection(
+                "jdbc:lealone:embed:" + dir + "/unnamed_param_replay_db1;user=root;password=");
+                Statement s1 = c1.createStatement()) {
+            s1.executeUpdate("CREATE FUNCTION replay_fn(INT, TEXT) RETURNS TEXT "
+                    + "AS 'SELECT $2 || $1'");
+            s1.executeUpdate("CREATE PROCEDURE replay_proc(OUT r INT, INT) AS 'SELECT ? + 100'");
+            s1.execute("SCRIPT TO '" + dumpPath + "'");
         }
-
-        String url = "jdbc:lealone:embed:" + dir + "/db2;user=root;password=";
+        String url = "jdbc:lealone:embed:" + dir + "/unnamed_param_replay_db2;user=root;password=";
         try (Connection c2 = DriverManager.getConnection(url);
                 Statement s2 = c2.createStatement()) {
-            s2.executeUpdate("RUNSCRIPT FROM '" + dump.getAbsolutePath().replace('\\', '/') + "'");
+            s2.executeUpdate("RUNSCRIPT FROM '" + dumpPath + "'");
             try (ResultSet r = s2.executeQuery("SELECT replay_fn(7, 'x')")) {
                 assertTrue(r.next());
                 assertEquals("x7", r.getString(1));

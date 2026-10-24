@@ -38,24 +38,73 @@ public class JavaFunction extends Function {
     private final ArrayList<FunctionAlias> candidates;
     private FunctionAlias.JavaMethod javaMethod;
     private final boolean[] untypedArguments;
+    // 每个实参的参数名，位置实参对应null
+    private final String[] argNames;
+    // 命名实参按参数名重排、并用默认值补齐后的实参，没有命名实参时是null
+    private Expression[] orderedArgs;
 
-    public JavaFunction(FunctionAlias functionAlias, Expression[] args) {
+    public JavaFunction(FunctionAlias functionAlias, Expression[] args, String[] argNames) {
         this.functionAlias = functionAlias;
         this.candidates = null;
-        this.javaMethod = functionAlias.findJavaMethod(args);
         this.args = args;
+        this.argNames = argNames;
         this.untypedArguments = getUntypedArguments(args);
+        if (hasNamedArguments() && !(functionAlias instanceof SqlFunction)) {
+            throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
+        }
+        this.javaMethod = functionAlias.findJavaMethod(args);
         checkArgumentTypes();
+        if (hasNamedArguments()) {
+            orderedArgs = buildOrderedArgs((SqlFunction) functionAlias);
+        }
     }
 
     /**
      * 名字对应多个重载函数时，按实参的静态类型选一个。
      * 实参类型还没确定时(比如实参是NULL)等到optimize阶段再消解。
      */
-    public JavaFunction(ArrayList<FunctionAlias> candidates, Expression[] args) {
+    public JavaFunction(ArrayList<FunctionAlias> candidates, Expression[] args, String[] argNames) {
         this.candidates = candidates;
         this.args = args;
+        this.argNames = argNames;
         this.untypedArguments = getUntypedArguments(args);
+    }
+
+    private boolean hasNamedArguments() {
+        if (argNames == null) {
+            return false;
+        }
+        for (int i = 0; i < argNames.length; i++) {
+            if (argNames[i] != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // 命名实参要按参数名重排, 省略的入参用默认值补齐, 这样执行时还是按位置绑定
+    private Expression[] buildOrderedArgs(SqlFunction function) {
+        int[] positions = function.mapArgumentPositions(argNames);
+        if (positions == null) {
+            throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
+        }
+        int inputCount = function.getInputParameterCount();
+        Expression[] ordered = new Expression[inputCount];
+        for (int i = 0; i < args.length; i++) {
+            ordered[positions[i]] = args[i];
+        }
+        for (int i = 0; i < inputCount; i++) {
+            if (ordered[i] == null) {
+                ordered[i] = ValueExpression.get(function.getDefaultInputValue(i));
+            }
+        }
+        return ordered;
+    }
+
+    // 实际执行时用的实参: 命名实参已经重排并补齐默认值
+    private Expression[] getExecutionArgs() {
+        resolveOverload();
+        return orderedArgs != null ? orderedArgs : args;
     }
 
     // 字符串字面量在PostgreSQL里是没有类型的，可以按参数声明的类型解析，
@@ -91,20 +140,41 @@ public class JavaFunction extends Function {
             return;
         }
         int[] argumentTypeIds = getArgumentTypeIds();
+        boolean named = hasNamedArguments();
         FunctionAlias best = null;
         int bestScore = Integer.MAX_VALUE;
+        int bestDefaultCount = Integer.MAX_VALUE;
         boolean ambiguous = false;
         for (int i = 0; i < candidates.size(); i++) {
             FunctionAlias candidate = candidates.get(i);
-            int score = getMatchScore(candidate, argumentTypeIds);
+            int score;
+            int defaultCount;
+            if (named) {
+                // 命名实参只支持带参数名的SqlFunction
+                if (!(candidate instanceof SqlFunction)) {
+                    continue;
+                }
+                SqlFunction function = (SqlFunction) candidate;
+                int[] positions = function.mapArgumentPositions(argNames);
+                score = function.getMatchScore(argumentTypeIds, positions);
+                defaultCount = function.getInputParameterCount() - argumentTypeIds.length;
+            } else {
+                score = getMatchScore(candidate, argumentTypeIds);
+                defaultCount = getDefaultCount(candidate, argumentTypeIds.length);
+            }
             if (score == SqlFunction.MATCH_NONE) {
                 continue;
             }
-            if (score < bestScore) {
+            // 匹配程度相同时优先选不需要用默认值补齐的那个重载
+            if (defaultCount < 0) {
+                defaultCount = 0;
+            }
+            if (score < bestScore || (score == bestScore && defaultCount < bestDefaultCount)) {
                 bestScore = score;
+                bestDefaultCount = defaultCount;
                 best = candidate;
                 ambiguous = false;
-            } else if (score == bestScore) {
+            } else if (score == bestScore && defaultCount == bestDefaultCount) {
                 ambiguous = true;
             }
         }
@@ -117,6 +187,9 @@ public class JavaFunction extends Function {
         }
         functionAlias = best;
         javaMethod = best.findJavaMethod(args);
+        if (named) {
+            orderedArgs = buildOrderedArgs((SqlFunction) best);
+        }
     }
 
     // 只有一个候选函数时也要检查实参类型能不能转，类型不兼容就当函数不存在(和PostgreSQL一致)；
@@ -125,9 +198,26 @@ public class JavaFunction extends Function {
         if (!(functionAlias instanceof SqlFunction)) {
             return;
         }
-        if (((SqlFunction) functionAlias).getMatchScore(getArgumentTypeIds()) == SqlFunction.MATCH_NONE) {
+        SqlFunction function = (SqlFunction) functionAlias;
+        int score;
+        if (hasNamedArguments()) {
+            int[] positions = function.mapArgumentPositions(argNames);
+            score = function.getMatchScore(getArgumentTypeIds(), positions);
+        } else {
+            score = function.getMatchScore(getArgumentTypeIds());
+        }
+        if (score == SqlFunction.MATCH_NONE) {
             throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
         }
+    }
+
+    // 用默认值补齐的入参个数, 越少说明这个重载越贴合实参个数
+    private static int getDefaultCount(FunctionAlias alias, int argumentCount) {
+        if (alias instanceof SqlFunction) {
+            int count = ((SqlFunction) alias).getInputParameterCount() - argumentCount;
+            return count > 0 ? count : 0;
+        }
+        return 0;
     }
 
     private static int getMatchScore(FunctionAlias alias, int[] argumentTypeIds) {
@@ -172,7 +262,7 @@ public class JavaFunction extends Function {
 
     @Override
     public Value getValue(ServerSession session) {
-        return getJavaMethod().getValue(session, args, false);
+        return getJavaMethod().getValue(session, getExecutionArgs(), false);
     }
 
     @Override
@@ -218,7 +308,15 @@ public class JavaFunction extends Function {
                     .append('.');
         }
         sql.append(LealoneSQLParser.quoteIdentifier(functionAlias.getName())).append('(');
-        appendArgs(sql);
+        // 命名实参要原样写回去, 否则重排之后位置变了
+        sql.resetCount();
+        for (int i = 0; i < args.length; i++) {
+            sql.appendExceptFirst(", ");
+            if (argNames != null && argNames[i] != null) {
+                sql.append(LealoneSQLParser.quoteIdentifier(argNames[i])).append(" => ");
+            }
+            args[i].getSQL(sql);
+        }
         sql.append(')');
     }
 
@@ -232,7 +330,7 @@ public class JavaFunction extends Function {
 
     @Override
     public ValueResultSet getValueForColumnList(ServerSession session, Expression[] args) {
-        Value v = getJavaMethod().getValue(session, args, true);
+        Value v = getJavaMethod().getValue(session, getExecutionArgs(), true);
         return v == ValueNull.INSTANCE ? null : (ValueResultSet) v;
     }
 

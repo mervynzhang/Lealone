@@ -328,15 +328,20 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         Expression[] args = call.getArgs();
         int inputCount = procedure.getInputParameterCount();
         int parameterCount = procedure.getParameterCount();
-        // PostgreSQL允许给OUT参数写上NULL占位，也可以省略，所以两种实参个数都接受
-        if (args.length != inputCount && args.length != parameterCount) {
-            String expected = inputCount == parameterCount ? String.valueOf(inputCount)
-                    : inputCount + " or " + parameterCount;
+        // 实参覆盖所有参数(含OUT占位)时跳过OUT参数，否则只按入参对应
+        boolean overAllParameters = args.length == parameterCount && args.length != inputCount;
+        // 有默认值的入参可以省略，所以实参个数是一个区间
+        if (!overAllParameters && (args.length < procedure.getMinInputParameterCount()
+                || args.length > inputCount)) {
+            String expected;
+            if (procedure.getMinInputParameterCount() == inputCount) {
+                expected = String.valueOf(inputCount);
+            } else {
+                expected = procedure.getMinInputParameterCount() + ".." + inputCount;
+            }
             throw DbException.get(ErrorCode.INVALID_PARAMETER_COUNT_2, procedure.getName() + "()",
                     String.valueOf(args.length), expected);
         }
-        // 实参只给入参时按入参顺序对应，实参覆盖所有参数时跳过OUT参数
-        boolean overAllParameters = args.length != inputCount;
         argValues = new Value[args.length];
         for (int i = 0, len = args.length; i < len; i++) {
             // PostgreSQL的OUT位置的实参只占位、不求值，所以CALL p(1/0)不会报除零错误
@@ -344,6 +349,15 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
                 argValues[i] = ValueNull.INSTANCE;
             else
                 argValues[i] = args[i].getValue(session);
+        }
+        // 省略的入参用默认值补齐，补齐后argValues按入参顺序排列
+        if (!overAllParameters && args.length < inputCount) {
+            Value[] padded = new Value[inputCount];
+            System.arraycopy(argValues, 0, padded, 0, args.length);
+            for (int i = args.length; i < inputCount; i++) {
+                padded[i] = procedure.getDefaultInputValue(i);
+            }
+            argValues = padded;
         }
         inputArgIndexes = new int[inputCount];
         for (int i = 0; i < inputCount; i++) {

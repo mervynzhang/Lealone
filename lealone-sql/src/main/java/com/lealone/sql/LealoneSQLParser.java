@@ -32,17 +32,23 @@ public class LealoneSQLParser extends SQLParserBase {
         if (procedures == null || procedures.isEmpty())
             return super.parseCall();
 
-        CallProcedure command = new CallProcedure(session, procedures, parseProcedureArgs());
+        ArrayList<String> argNames = new ArrayList<>();
+        Expression[] args = parseProcedureArgs(argNames);
+        String[] names = new String[argNames.size()];
+        argNames.toArray(names);
+        CallProcedure command = new CallProcedure(session, procedures, args, names);
         currentStatement = command;
         return command;
     }
 
-    private Expression[] parseProcedureArgs() {
+    private Expression[] parseProcedureArgs(ArrayList<String> argNames) {
         read(); // 跳过过程名
         ArrayList<Expression> argList = new ArrayList<>();
         if (readIf("(")) {
             if (!readIf(")")) {
                 do {
+                    // CALL支持命名实参: p(b => 'x', a => 1)
+                    argNames.add(readArgumentNameIfPresent());
                     argList.add(readExpression());
                 } while (readIf(","));
                 read(")");

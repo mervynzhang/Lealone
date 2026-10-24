@@ -40,6 +40,9 @@ public class CreateSqlFunction extends SchemaStatement {
     private int[] parameterTypeIds;
     private int[] parameterComponentTypes;
     private int[] parameterModes;
+    // DEFAULT表达式的SQL文本和CREATE时算好的值, 没有默认值的位置是null
+    private String[] parameterDefaults;
+    private Value[] parameterDefaultValues;
     private boolean variadic;
     private String returnTypeSql;
     private int returnType;
@@ -93,6 +96,11 @@ public class CreateSqlFunction extends SchemaStatement {
         this.parameterComponentTypes = parameterComponentTypes;
         this.parameterModes = parameterModes;
         this.variadic = variadic;
+    }
+
+    public void setParameterDefaults(String[] parameterDefaults, Value[] parameterDefaultValues) {
+        this.parameterDefaults = parameterDefaults;
+        this.parameterDefaultValues = parameterDefaultValues;
     }
 
     public void setReturnType(String returnTypeSql, int returnType) {
@@ -489,6 +497,7 @@ public class CreateSqlFunction extends SchemaStatement {
         function.setLanguage(language);
         function.setParameters(parameterNames, parameterTypes, parameterTypeIds,
                 parameterComponentTypes, parameterModes, variadic);
+        function.setParameterDefaults(parameterDefaults, parameterDefaultValues);
         // setof/table的结果列要先设置，setReturnType里要检查它和OUT/INOUT参数是否冲突
         if (returnColumns) {
             function.setReturnColumns(returnsTable, columnNames, columnTypeSqls, columnTypes,

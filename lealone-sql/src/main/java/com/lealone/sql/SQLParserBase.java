@@ -2468,6 +2468,30 @@ public class SQLParserBase implements SQLParser {
         return orderList;
     }
 
+    // 命名实参的 name => expr / name := expr: 返回名字(并吃掉=>), 位置实参返回null且不移动token
+    protected String readArgumentNameIfPresent() {
+        if (currentTokenType != IDENTIFIER) {
+            return null;
+        }
+        int backup = parseIndex;
+        String token = currentToken;
+        boolean quoted = currentTokenQuoted;
+        read();
+        boolean named = readIf("=>") || readIf(":=");
+        if (named) {
+            if (quoted || !identifiersToUpper) {
+                return token;
+            }
+            return StringUtils.toUpperEnglish(token);
+        }
+        // 不是命名实参, 恢复token让readExpression继续按普通表达式解析
+        parseIndex = backup;
+        currentToken = token;
+        currentTokenQuoted = quoted;
+        currentTokenType = IDENTIFIER;
+        return null;
+    }
+
     protected JavaFunction readJavaFunction(Schema schema, String functionName) {
         // 函数可以按参数类型重载，所以要先把实参读出来再按类型选函数
         ArrayList<FunctionAlias> candidates;
@@ -2481,19 +2505,23 @@ public class SQLParserBase implements SQLParser {
         }
         Expression[] args;
         ArrayList<Expression> argList = Utils.newSmallArrayList();
+        ArrayList<String> argNameList = Utils.newSmallArrayList();
         int numArgs = 0;
         while (!readIf(")")) {
             if (numArgs++ > 0) {
                 read(",");
             }
+            argNameList.add(readArgumentNameIfPresent());
             argList.add(readExpression());
         }
         args = new Expression[numArgs];
         argList.toArray(args);
+        String[] argNames = new String[numArgs];
+        argNameList.toArray(argNames);
         if (candidates.size() == 1) {
-            return new JavaFunction(candidates.get(0), args);
+            return new JavaFunction(candidates.get(0), args, argNames);
         }
-        return new JavaFunction(candidates, args);
+        return new JavaFunction(candidates, args, argNames);
     }
 
     protected JavaAggregate readJavaAggregate(UserAggregate aggregate) {
@@ -3115,7 +3143,7 @@ public class SQLParserBase implements SQLParser {
                     throw getSyntaxError();
                 }
                 Expression[] args = { r };
-                JavaFunction func = new JavaFunction(f, args);
+                JavaFunction func = new JavaFunction(f, args, null);
                 r = func;
             } else {
                 Column col = parseColumnWithType(null);
@@ -3967,6 +3995,12 @@ public class SQLParserBase implements SQLParser {
             case '>':
                 if (">=".equals(s)) {
                     return BIGGER_EQUAL;
+                }
+                break;
+            case '=':
+                // 命名实参的 name => expr
+                if ("=>".equals(s)) {
+                    return KEYWORD;
                 }
                 break;
             case '<':
@@ -5455,7 +5489,19 @@ public class SQLParserBase implements SQLParser {
                 mode = SqlProcedure.PARAM_INOUT;
             }
         }
-        command.addParameter(column, mode);
+        // DEFAULT <常量表达式>, 省略实参时用它补齐
+        String defaultSql = null;
+        Value defaultValue = null;
+        if (readIf("DEFAULT")) {
+            if (mode == SqlProcedure.PARAM_OUT) {
+                throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                        "OUT parameter cannot have a default value");
+            }
+            Expression defaultExpr = readExpression();
+            defaultSql = defaultExpr.getSQL();
+            defaultValue = parseParameterDefaultValue(defaultExpr, column.getType());
+        }
+        command.addParameter(column, mode, defaultSql, defaultValue);
     }
 
     private String readProcedureLanguage() {
@@ -5649,6 +5695,9 @@ public class SQLParserBase implements SQLParser {
         ArrayList<Integer> parameterTypeIds = Utils.newSmallArrayList();
         ArrayList<Integer> parameterComponentTypes = Utils.newSmallArrayList();
         ArrayList<Integer> parameterModes = Utils.newSmallArrayList();
+        // 每个位置一个元素, 没有DEFAULT时是null
+        ArrayList<String> parameterDefaultSqls = Utils.newSmallArrayList();
+        ArrayList<Value> parameterDefaultValues = Utils.newSmallArrayList();
         boolean variadic = false;
         int variadicParameterIndex = -1;
         if (!readIf(")")) {
@@ -5708,11 +5757,29 @@ public class SQLParserBase implements SQLParser {
                     variadic = true;
                     variadicParameterIndex = parameterIndex;
                 }
+                // DEFAULT <常量表达式>, 省略实参时用它补齐
+                String defaultSql = null;
+                Value defaultValue = null;
+                if (readIf("DEFAULT")) {
+                    if (mode == SqlFunction.PARAM_OUT) {
+                        throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                                "OUT parameter cannot have a default value: " + parameterName);
+                    }
+                    if (isVariadic) {
+                        throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                                "VARIADIC parameter cannot have a default value: " + parameterName);
+                    }
+                    Expression defaultExpr = readExpression();
+                    defaultSql = defaultExpr.getSQL();
+                    defaultValue = parseParameterDefaultValue(defaultExpr, type);
+                }
                 parameterNames.add(parameterName);
                 parameterTypes.add(typeSql);
                 parameterTypeIds.add(type);
                 parameterComponentTypes.add(componentType);
                 parameterModes.add(mode);
+                parameterDefaultSqls.add(defaultSql);
+                parameterDefaultValues.add(defaultValue);
             } while (readIf(","));
             read(")");
         }
@@ -5721,12 +5788,30 @@ public class SQLParserBase implements SQLParser {
             throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
                     "VARIADIC parameter must be the last parameter");
         }
+        // 和PostgreSQL一样: 有默认值的入参之后不能再出现没有默认值的入参
+        boolean seenDefault = false;
+        for (int i = 0; i < count; i++) {
+            if (parameterModes.get(i) == SqlFunction.PARAM_OUT) {
+                continue;
+            }
+            if (parameterDefaultSqls.get(i) != null) {
+                seenDefault = true;
+            } else if (seenDefault) {
+                throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                        "input parameters after one with a default value must also have defaults");
+            }
+        }
         String[] names = new String[count];
         String[] types = new String[count];
         parameterNames.toArray(names);
         parameterTypes.toArray(types);
         command.setParameters(names, types, toIntArray(parameterTypeIds),
                 toIntArray(parameterComponentTypes), toIntArray(parameterModes), variadic);
+        String[] defaultSqls = new String[count];
+        Value[] defaultValues = new Value[count];
+        parameterDefaultSqls.toArray(defaultSqls);
+        parameterDefaultValues.toArray(defaultValues);
+        command.setParameterDefaults(defaultSqls, defaultValues);
 
         if (readIf("RETURNS")) {
             if (readIf("SETOF")) {
@@ -5917,6 +6002,27 @@ public class SQLParserBase implements SQLParser {
             }
         }
         return command;
+    }
+
+    // DEFAULT后面的表达式必须是常量, CREATE时按参数声明的类型转换好存下来
+    private Value parseParameterDefaultValue(Expression expr, int parameterType) {
+        if (parameterType == Value.ARRAY) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "DEFAULT value for array parameter: " + expr.getSQL());
+        }
+        Expression optimized = expr.optimize(session);
+        if (!(optimized instanceof ValueExpression)) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "DEFAULT value must be a constant expression: " + expr.getSQL());
+        }
+        Value v = optimized.getValue(session);
+        try {
+            return v.convertTo(parameterType);
+        } catch (DbException e) {
+            throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1, e,
+                    "default value " + v.getSQL() + " can not convert to "
+                            + DataType.getDataType(parameterType).name);
+        }
     }
 
     /**

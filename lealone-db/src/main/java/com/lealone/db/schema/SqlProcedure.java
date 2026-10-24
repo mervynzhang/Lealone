@@ -15,6 +15,7 @@ import com.lealone.db.lock.DbObjectLock;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
 import com.lealone.db.value.DataType;
+import com.lealone.db.value.Value;
 
 /**
  * 用一组SQL语句实现的存储过程，过程体在第一次执行时才被解析，
@@ -37,6 +38,11 @@ public class SqlProcedure extends SchemaObjectBase {
     private final boolean atomicBody;
     private final Column[] parameters;
     private final int[] parameterModes;
+    // 参数默认值: parameterDefaults是DEFAULT表达式的SQL文本, parameterDefaultValues是CREATE时算好的值
+    private final String[] parameterDefaults;
+    private final Value[] parameterDefaultValues;
+    // 必须提供的最少实参个数(有默认值的入参只能集中在末尾)
+    private final int minInputParameterCount;
     private final int[] inputIndexes; // 入参(IN/INOUT)在参数列表中的下标
     private final int[] outputIndexes; // OUT/INOUT参数在参数列表中的下标
 
@@ -56,13 +62,16 @@ public class SqlProcedure extends SchemaObjectBase {
     private volatile Object compiledBody;
 
     public SqlProcedure(Schema schema, int id, String name, String body, String language,
-            boolean atomicBody, Column[] parameters, int[] parameterModes) {
+            boolean atomicBody, Column[] parameters, int[] parameterModes,
+            String[] parameterDefaults, Value[] parameterDefaultValues) {
         super(schema, id, name);
         this.body = body;
         this.language = language;
         this.atomicBody = atomicBody;
         this.parameters = parameters;
         this.parameterModes = parameterModes;
+        this.parameterDefaults = parameterDefaults;
+        this.parameterDefaultValues = parameterDefaultValues;
         int inputCount = 0;
         int outputCount = 0;
         for (int mode : parameterModes) {
@@ -81,6 +90,108 @@ public class SqlProcedure extends SchemaObjectBase {
             if (parameterModes[p] != PARAM_IN)
                 outputIndexes[o++] = p;
         }
+        int min = 0;
+        if (parameterDefaults != null) {
+            for (int p = 0; p < inputIndexes.length; p++) {
+                if (parameterDefaults[inputIndexes[p]] == null) {
+                    min = p + 1;
+                }
+            }
+        }
+        minInputParameterCount = min;
+    }
+
+    public int getMinInputParameterCount() {
+        return minInputParameterCount;
+    }
+
+    public boolean hasDefaultParameters() {
+        return parameterDefaults != null;
+    }
+
+    // 第inputIndex个入参的参数名(按入参顺序)
+    public String getInputParameterName(int inputIndex) {
+        return parameters[inputIndexes[inputIndex]].getName();
+    }
+
+    /**
+     * 按参数名找入参下标，找不到返回-1。
+     */
+    public int findInputParameterIndex(String name) {
+        for (int i = 0; i < inputIndexes.length; i++) {
+            if (parameters[inputIndexes[i]].getName().equalsIgnoreCase(name)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 把命名实参映射成入参下标。位置实参必须写在命名实参前面，名字必须存在而且不能重复，
+     * 省略的入参必须有默认值。返回null表示这个调用匹配不上。
+     */
+    public int[] mapArgumentPositions(String[] argNames) {
+        int count = argNames.length;
+        if (count > inputIndexes.length) {
+            return null;
+        }
+        int[] positions = new int[count];
+        boolean[] used = new boolean[inputIndexes.length];
+        int positional = 0;
+        boolean named = false;
+        for (int i = 0; i < count; i++) {
+            String name = argNames[i];
+            if (name == null) {
+                // 位置实参必须写在命名实参前面
+                if (named || positional >= inputIndexes.length) {
+                    return null;
+                }
+                positions[i] = positional;
+                used[positional++] = true;
+            } else {
+                named = true;
+                int index = findInputParameterIndex(name);
+                if (index < 0 || used[index]) {
+                    return null;
+                }
+                positions[i] = index;
+                used[index] = true;
+            }
+        }
+        // 省略的入参必须有默认值
+        for (int i = 0; i < inputIndexes.length; i++) {
+            if (!used[i] && getDefaultInputValue(i) == null) {
+                return null;
+            }
+        }
+        return positions;
+    }
+
+    /**
+     * 命名实参的匹配程度: positions[i]是第i个实参对应的入参下标。
+     */
+    public int getMatchScore(int[] argumentTypeIds, int[] positions) {
+        if (positions == null) {
+            return SqlFunction.MATCH_NONE;
+        }
+        int score = 0;
+        for (int i = 0; i < argumentTypeIds.length; i++) {
+            int parameterType = parameters[inputIndexes[positions[i]]].getType();
+            int match = SqlFunction.getTypeMatch(argumentTypeIds[i], parameterType);
+            if (match == SqlFunction.MATCH_NONE) {
+                return SqlFunction.MATCH_NONE;
+            }
+            score += match;
+        }
+        return score;
+    }
+
+    // 第inputIndex个入参的默认值, 没有默认值时返回null
+    public Value getDefaultInputValue(int inputIndex) {
+        if (parameterDefaultValues == null) {
+            return null;
+        }
+        return parameterDefaultValues[inputIndexes[inputIndex]];
     }
 
     @Override
@@ -308,7 +419,8 @@ public class SqlProcedure extends SchemaObjectBase {
         int inputCount = inputIndexes.length;
         // 实参覆盖所有参数(含OUT占位)时按完整参数列表比较，否则只比较入参
         boolean overAllParameters = count == parameters.length && count != inputCount;
-        if (count != inputCount && !overAllParameters) {
+        // 有默认值的入参可以省略, 所以实参个数是一个区间
+        if (!overAllParameters && (count < minInputParameterCount || count > inputCount)) {
             return SqlFunction.MATCH_NONE;
         }
         int score = 0;
@@ -358,6 +470,9 @@ public class SqlProcedure extends SchemaObjectBase {
                 buff.append("INOUT ");
             }
             buff.append(parameters[i].getCreateSQL(false));
+            if (parameterDefaults != null && parameterDefaults[i] != null) {
+                buff.append(" DEFAULT ").append(parameterDefaults[i]);
+            }
         }
         buff.append(')');
         // 只有plpgsql要显式写出LANGUAGE, SQL是默认值

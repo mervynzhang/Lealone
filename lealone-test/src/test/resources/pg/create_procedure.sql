@@ -193,20 +193,44 @@ drop procedure ptest4c;
 
 -- @case procedure.named_default
 -- @pg create_procedure.sql:107-121
--- 缺失: Lealone 不支持 DEFAULT 参数和命名实参(b => 'Hello')
-create or replace procedure ptest5(a int, b text, c int default 100)
-language sql
-as $$
-insert into cp_test values(a, b);
-insert into cp_test values(c, b);
-$$;
-truncate cp_test;
+-- 适配: PG 的 SQL 过程体按参数名引用, Lealone 的 SQL 过程体只能用 ? 按位置引用,
+--       这里改成 plpgsql 过程体(参数名就是变量, 过程体写成一行避免被脚本按分号切断);
+--       PG 的 TRUNCATE 换成独立的表 cp_test_default, 避免影响后面用例依赖的 cp_test 行数;
+--       DEFAULT 和命名实参保持 PG 原样
+create table cp_test_default (a int, b text);
+> update count: 0
+
+create procedure ptest5(a int, b text, c int default 100) language plpgsql
+as $$ begin insert into cp_test_default values(a, b); insert into cp_test_default values(c, b); end $$;
+> update count: 0
+
 call ptest5(10, 'Hello', 20);
+> update count: 0
+
 call ptest5(10, 'Hello');
+> update count: 0
+
 call ptest5(10, b => 'Hello');
+> update count: 0
+
 call ptest5(b => 'Hello', a => 10);
-select * from cp_test;
--- PG 期望: 4 次调用都成功, cp_test 里 4 行
+> update count: 0
+
+select * from cp_test_default;
+> A   B
+> --- -----
+> 10  Hello
+> 10  Hello
+> 10  Hello
+> 10  Hello
+> 100 Hello
+> 100 Hello
+> 100 Hello
+> 20  Hello
+> rows: 8
+
+drop table cp_test_default;
+> update count: 0
 
 -- @case procedure.polymorphic
 -- @pg create_procedure.sql:126-159

@@ -15,6 +15,7 @@ import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Column;
+import com.lealone.db.value.Value;
 import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.SQLStatement;
 import com.lealone.sql.ParsedSQLStatement;
@@ -37,6 +38,9 @@ public class CreateProcedure extends SchemaStatement {
     private boolean ifNotExists;
     private final ArrayList<Column> parameters = new ArrayList<>();
     private final ArrayList<Integer> parameterModes = new ArrayList<>();
+    // 参数默认值: SQL文本和CREATE时算好的值, 没有默认值的位置是null
+    private final ArrayList<String> parameterDefaults = new ArrayList<>();
+    private final ArrayList<Value> parameterDefaultValues = new ArrayList<>();
 
     public CreateProcedure(ServerSession session, Schema schema) {
         super(session, schema);
@@ -76,9 +80,11 @@ public class CreateProcedure extends SchemaStatement {
         this.attributes = attributes;
     }
 
-    public void addParameter(Column parameter, int mode) {
+    public void addParameter(Column parameter, int mode, String defaultSql, Value defaultValue) {
         parameters.add(parameter);
         parameterModes.add(mode);
+        parameterDefaults.add(defaultSql);
+        parameterDefaultValues.add(defaultValue);
     }
 
     private int[] toIntArray(ArrayList<Integer> list) {
@@ -196,8 +202,13 @@ public class CreateProcedure extends SchemaStatement {
         checkCallWithOutputParameters();
         checkOutputParameters();
         validateBody();
+        String[] defaultSqls = new String[parameterDefaults.size()];
+        Value[] defaultValues = new Value[parameterDefaultValues.size()];
+        parameterDefaults.toArray(defaultSqls);
+        parameterDefaultValues.toArray(defaultValues);
         SqlProcedure procedure = new SqlProcedure(schema, getObjectId(), procedureName, body,
-                language, atomicBody, parameters.toArray(new Column[0]), toIntArray(parameterModes));
+                language, atomicBody, parameters.toArray(new Column[0]), toIntArray(parameterModes),
+                defaultSqls, defaultValues);
         if (attributes != null) {
             attributes.applyTo(procedure);
         }

@@ -40,7 +40,9 @@ public class CallProcedure extends Call {
     // 解析时先拿到同名的所有候选过程，prepare阶段再按实参类型消解
     private SqlProcedure procedure;
     private final ArrayList<SqlProcedure> candidates;
-    private final Expression[] args;
+    private Expression[] args;
+    // 每个实参的参数名，位置实参对应null
+    private final String[] argNames;
     // OUT/INOUT参数对应的结果列
     private Expression[] outputExpressions;
     // 过程名+更新数的结果列
@@ -51,11 +53,44 @@ public class CallProcedure extends Call {
     // 过程体里是否有查询语句: -1还没判断, 0没有, 1有
     private int bodyHasQuery = -1;
 
-    public CallProcedure(ServerSession session, ArrayList<SqlProcedure> candidates, Expression[] args) {
+    public CallProcedure(ServerSession session, ArrayList<SqlProcedure> candidates, Expression[] args,
+            String[] argNames) {
         super(session);
         this.candidates = candidates;
         this.args = args;
+        this.argNames = argNames;
         this.untypedArguments = getUntypedArguments(args);
+    }
+
+    private boolean hasNamedArguments() {
+        if (argNames == null) {
+            return false;
+        }
+        for (int i = 0; i < argNames.length; i++) {
+            if (argNames[i] != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // 命名实参按参数名重排、省略的入参用默认值补齐，重排后按入参顺序绑定
+    private void orderNamedArguments(SqlProcedure p) {
+        int[] positions = p.mapArgumentPositions(argNames);
+        if (positions == null) {
+            throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
+        }
+        int inputCount = p.getInputParameterCount();
+        Expression[] ordered = new Expression[inputCount];
+        for (int i = 0; i < args.length; i++) {
+            ordered[positions[i]] = args[i];
+        }
+        for (int i = 0; i < inputCount; i++) {
+            if (ordered[i] == null) {
+                ordered[i] = ValueExpression.get(p.getDefaultInputValue(i));
+            }
+        }
+        args = ordered;
     }
 
     private static boolean[] getUntypedArguments(Expression[] args) {
@@ -81,20 +116,32 @@ public class CallProcedure extends Call {
             return;
         }
         int[] argumentTypeIds = getArgumentTypeIds();
+        boolean named = hasNamedArguments();
         SqlProcedure best = null;
         int bestScore = Integer.MAX_VALUE;
+        int bestDefaultCount = Integer.MAX_VALUE;
         boolean ambiguous = false;
         for (int i = 0; i < candidates.size(); i++) {
             SqlProcedure candidate = candidates.get(i);
-            int score = candidate.getMatchScore(argumentTypeIds);
+            int score;
+            if (named) {
+                score = candidate.getMatchScore(argumentTypeIds,
+                        candidate.mapArgumentPositions(argNames));
+            } else {
+                score = candidate.getMatchScore(argumentTypeIds);
+            }
             if (score == SqlFunction.MATCH_NONE) {
                 continue;
             }
-            if (score < bestScore) {
+            // 匹配程度相同时优先选不需要用默认值补齐的那个重载
+            int count = candidate.getInputParameterCount() - argumentTypeIds.length;
+            int defaultCount = count > 0 ? count : 0;
+            if (score < bestScore || (score == bestScore && defaultCount < bestDefaultCount)) {
                 bestScore = score;
+                bestDefaultCount = defaultCount;
                 best = candidate;
                 ambiguous = false;
-            } else if (score == bestScore) {
+            } else if (score == bestScore && defaultCount == bestDefaultCount) {
                 ambiguous = true;
             }
         }
@@ -106,6 +153,9 @@ public class CallProcedure extends Call {
             throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
         }
         procedure = best;
+        if (named) {
+            orderNamedArguments(best);
+        }
         initResultExpressions();
         resolved = true;
     }

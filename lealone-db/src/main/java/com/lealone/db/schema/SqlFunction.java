@@ -71,6 +71,11 @@ public class SqlFunction extends FunctionAlias {
     private int[] inputIndexes; // 入参在参数列表中的下标
     private int[] outputIndexes; // 返回列对应的参数下标
     private int inputParameterCount;
+    // 参数默认值: parameterDefaults是DEFAULT表达式的SQL文本, parameterDefaultValues是CREATE时算好的值
+    private String[] parameterDefaults;
+    private Value[] parameterDefaultValues;
+    // 必须提供的最少实参个数(有默认值的入参只能集中在末尾)
+    private int minInputParameterCount;
     private boolean variadic;
     private boolean strict;
 
@@ -162,6 +167,132 @@ public class SqlFunction extends FunctionAlias {
             }
         }
         inputParameterCount = inputCount;
+    }
+
+    /**
+     * 设置参数默认值。PostgreSQL要求有默认值的入参集中在末尾，所以前面没有默认值的
+     * 入参个数就是调用时必须提供的实参个数。
+     */
+    public void setParameterDefaults(String[] parameterDefaults, Value[] parameterDefaultValues) {
+        this.parameterDefaults = parameterDefaults;
+        this.parameterDefaultValues = parameterDefaultValues;
+        int min = 0;
+        if (parameterDefaults != null) {
+            for (int i = 0; i < inputParameterCount; i++) {
+                if (parameterDefaults[inputIndexes[i]] == null) {
+                    min = i + 1;
+                }
+            }
+        }
+        minInputParameterCount = min;
+    }
+
+    public int getMinInputParameterCount() {
+        return minInputParameterCount;
+    }
+
+    public boolean hasDefaultParameters() {
+        return parameterDefaults != null;
+    }
+
+    /**
+     * 第inputIndex个入参的参数名(按入参顺序，不是完整参数列表顺序)。
+     */
+    public String getInputParameterName(int inputIndex) {
+        return parameterNames[inputIndexes[inputIndex]];
+    }
+
+    /**
+     * 按参数名找入参下标，找不到返回-1。
+     */
+    public int findInputParameterIndex(String name) {
+        for (int i = 0; i < inputParameterCount; i++) {
+            if (database.equalsIdentifiers(parameterNames[inputIndexes[i]], name)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * 把命名实参映射成入参下标。位置实参必须写在命名实参前面，名字必须存在而且不能重复，
+     * 省略的入参必须有默认值。返回null表示这个调用匹配不上。
+     */
+    public int[] mapArgumentPositions(String[] argNames) {
+        int count = argNames.length;
+        // VARIADIC函数只支持位置实参
+        if (variadic || count > inputParameterCount) {
+            return null;
+        }
+        int[] positions = new int[count];
+        boolean[] used = new boolean[inputParameterCount];
+        int positional = 0;
+        boolean named = false;
+        for (int i = 0; i < count; i++) {
+            String name = argNames[i];
+            if (name == null) {
+                // 位置实参必须写在命名实参前面
+                if (named || positional >= inputParameterCount) {
+                    return null;
+                }
+                positions[i] = positional;
+                used[positional++] = true;
+            } else {
+                named = true;
+                int index = findInputParameterIndex(name);
+                if (index < 0 || used[index]) {
+                    return null;
+                }
+                positions[i] = index;
+                used[index] = true;
+            }
+        }
+        // 省略的入参必须有默认值
+        for (int i = 0; i < inputParameterCount; i++) {
+            if (!used[i] && getDefaultInputValue(i) == null) {
+                return null;
+            }
+        }
+        return positions;
+    }
+
+    /**
+     * 命名实参的匹配程度: positions[i]是第i个实参对应的入参下标。
+     */
+    public int getMatchScore(int[] argumentTypeIds, int[] positions) {
+        if (parameterTypeIds == null || positions == null) {
+            return MATCH_NONE;
+        }
+        int score = 0;
+        for (int i = 0; i < argumentTypeIds.length; i++) {
+            int index = inputIndexes[positions[i]];
+            int match = getTypeMatch(argumentTypeIds[i], parameterTypeIds[index]);
+            if (match == MATCH_NONE) {
+                return MATCH_NONE;
+            }
+            score += match;
+        }
+        return score;
+    }
+
+    /**
+     * 第inputIndex个入参的默认值，没有默认值时返回null。
+     */
+    public Value getDefaultInputValue(int inputIndex) {
+        if (parameterDefaultValues == null) {
+            return null;
+        }
+        return parameterDefaultValues[inputIndexes[inputIndex]];
+    }
+
+    /**
+     * 某个完整参数下标上的默认值，没有默认值时返回null。
+     */
+    public Value getParameterDefaultValue(int parameterIndex) {
+        if (parameterDefaultValues == null) {
+            return null;
+        }
+        return parameterDefaultValues[parameterIndex];
     }
 
     /**
@@ -407,7 +538,11 @@ public class SqlFunction extends FunctionAlias {
             return MATCH_NONE;
         }
         int fixedCount = variadic ? inputParameterCount - 1 : inputParameterCount;
-        if (variadic ? argumentTypeIds.length < fixedCount : argumentTypeIds.length != fixedCount) {
+        // 有默认值的入参可以省略, 所以实参个数是一个区间
+        int minCount = variadic ? Math.min(minInputParameterCount, fixedCount)
+                : minInputParameterCount;
+        if (argumentTypeIds.length < minCount
+                || (variadic ? false : argumentTypeIds.length > fixedCount)) {
             return MATCH_NONE;
         }
         int score = 0;
@@ -737,9 +872,13 @@ public class SqlFunction extends FunctionAlias {
 
     @Override
     public JavaMethod findJavaMethod(IExpression[] args) {
-        // 有VARIADIC参数时最后一个参数可以展开成任意多个实参
-        int minCount = variadic ? inputParameterCount - 1 : inputParameterCount;
-        if (variadic ? args.length < minCount : args.length != minCount) {
+        // 有VARIADIC参数时最后一个参数可以展开成任意多个实参;
+        // 有默认值的入参可以省略, 所以实参个数是一个区间
+        int maxCount = variadic ? Integer.MAX_VALUE : inputParameterCount;
+        int fixedCount = variadic ? inputParameterCount - 1 : inputParameterCount;
+        int minCount = variadic ? Math.min(minInputParameterCount, fixedCount)
+                : minInputParameterCount;
+        if (args.length < minCount || args.length > maxCount) {
             throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1,
                     getName() + " (parameter count: " + args.length + ")");
         }
@@ -769,6 +908,9 @@ public class SqlFunction extends FunctionAlias {
             }
             buff.append(database.quoteIdentifier(parameterNames[i])).append(' ');
             buff.append(parameterTypes[i]);
+            if (parameterDefaults != null && parameterDefaults[i] != null) {
+                buff.append(" DEFAULT ").append(parameterDefaults[i]);
+            }
         }
         buff.append(')');
         // 有OUT/INOUT参数时RETURNS可以省略，返回类型由参数推导；
@@ -899,13 +1041,23 @@ public class SqlFunction extends FunctionAlias {
             int fixedCount = inputParameterCount - 1;
             for (int i = 0; i < fixedCount; i++) {
                 int index = inputIndexes[i];
-                values[index] = convertArgument(index, args[i].getValue(session));
+                if (i < args.length) {
+                    values[index] = convertArgument(index, args[i].getValue(session));
+                } else {
+                    // 省略的入参用默认值补齐
+                    values[index] = getDefaultInputValue(i);
+                }
             }
             values[inputIndexes[fixedCount]] = getVariadicValue(session, args, fixedCount);
         } else {
             for (int i = 0; i < inputParameterCount; i++) {
                 int index = inputIndexes[i];
-                values[index] = convertArgument(index, args[i].getValue(session));
+                if (i < args.length) {
+                    values[index] = convertArgument(index, args[i].getValue(session));
+                } else {
+                    // 省略的入参用默认值补齐
+                    values[index] = getDefaultInputValue(i);
+                }
             }
         }
         if (strict) {
