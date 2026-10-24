@@ -1178,6 +1178,9 @@ public class Database extends DbObjectBase implements DataHandler {
         } else {
             state = State.CLOSING;
         }
+        // 关闭存储引擎前把异步索引操作执行完，否则索引map会丢失还没执行的索引记录。
+        // 此时表还没关闭、调度器还在运行；随后的checkpoint会把完整的索引map保存下来。
+        flushIndexOperations();
         trace.info("closing {0}", name);
         if (eventListener != null) {
             // allow the event listener to connect to the database
@@ -1693,6 +1696,22 @@ public class Database extends DbObjectBase implements DataHandler {
             transactionEngine.checkpoint();
         }
         getTempFileDeleter().deleteUnused();
+    }
+
+    /**
+     * 把表中还没有执行的异步索引操作尽量执行完。
+     * 执行checkpoint或关闭数据库前需要先调用它，否则索引map会保存成不完整的状态。
+     *
+     * @return 还没执行完的索引操作所属事务的最小事务id，没有就返回Long.MAX_VALUE
+     */
+    public long flushIndexOperations() {
+        long minTid = Long.MAX_VALUE;
+        for (Table table : getAllTablesAndViews(false)) {
+            long tid = table.flushIndexOperations();
+            if (tid < minTid)
+                minTid = tid;
+        }
+        return minTid;
     }
 
     /**

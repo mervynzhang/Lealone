@@ -263,18 +263,36 @@ public class CheckpointService implements Runnable {
 
     private void save(boolean force, boolean isClosing) {
         long lastTransactionId = logSyncService.getRedoLog().getLastTransactionId();
+        // 保存StorageMap前先执行完还没执行的异步索引操作(比如非唯一索引的批量写)，
+        // 否则索引map会保存成不完整的状态，而checkpoint之后redo log里的对应记录会被截断。
+        // 如果还有一些索引操作所属的事务没有提交，只能把lastTransactionId限制在它们之前，
+        // 这样重启时redo log会把这些索引操作重做一遍。
+        long pendingTransactionId = aote.runBeforeCheckpointHandler();
+        if (pendingTransactionId > 0 && pendingTransactionId < lastTransactionId)
+            lastTransactionId = pendingTransactionId;
         try {
             for (Entry<StorageMap<?, ?>, AtomicLong> e : maps.entrySet()) {
                 StorageMap<?, ?> map = e.getKey();
-                long size = e.getValue().get();
-                // 准备耍刷页前如果表被删除了那就直接忽略
-                if (size > 0 && !map.isClosed() && (force || size > map.getCacheSize())) {
+                // 准备刷页前如果表被删除了那就直接忽略
+                if (map.isClosed())
+                    continue;
+                // flush之后索引map可能才有脏页，所以这里重新收集一次
+                long size = map.collectDirtyMemory();
+                e.getValue().set(size);
+                boolean needSave;
+                if (isClosing) { // 关闭时不能只看脏页内存，有些脏页可能挂在没有标记为脏的父节点下面
+                    needSave = map.hasUnsavedChanges();
+                } else {
+                    needSave = map.hasUnsavedChanges()
+                            && (force || (size > 0 && size > map.getCacheSize()));
+                }
+                if (needSave) {
                     long t1 = System.currentTimeMillis();
                     if (!isClosing)
                         workingThread.setName("Saving-" + map.getName());
                     map.setLastTransactionId(lastTransactionId);
                     try {
-                        map.save(size);
+                        map.save(Math.max(size, 4096));
                     } finally {
                         map.setLastTransactionId(-1);
                     }

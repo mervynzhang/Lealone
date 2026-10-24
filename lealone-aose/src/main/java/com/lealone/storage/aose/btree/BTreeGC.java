@@ -80,6 +80,31 @@ public class BTreeGC {
         return dirtyMemory.get();
     }
 
+    /**
+     * 是否存在脏页。
+     * 不能只判断root page，因为并发刷脏页时可能出现子页是脏页但root page已经被写成非脏页的情况，
+     * 关闭存储引擎时如果漏掉这些子页，它们上面的修改就会丢失。
+     */
+    public boolean hasDirtyPages() {
+        return hasDirtyPages(map.getRootPageRef());
+    }
+
+    private boolean hasDirtyPages(PageReference ref) {
+        PageInfo pInfo = ref.getPageInfo();
+        if (pInfo.isDirty())
+            return true;
+        Page p = pInfo.page;
+        if (p != null && p.isNode()) {
+            PageReference[] children = p.getChildren();
+            for (int i = 0, len = children.length; i < len; i++) {
+                PageReference childRef = children[i];
+                if (childRef != null && hasDirtyPages(childRef))
+                    return true;
+            }
+        }
+        return false;
+    }
+
     private void collectDirtyMemory(PageReference ref, AtomicLong dirtyMemory) {
         PageInfo pInfo = ref.getPageInfo();
         Page p = pInfo.page;

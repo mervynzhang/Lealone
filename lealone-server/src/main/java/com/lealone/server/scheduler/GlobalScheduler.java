@@ -10,6 +10,7 @@ import java.nio.channels.Selector;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.lealone.common.exceptions.DbException;
 import com.lealone.common.logging.Logger;
@@ -358,6 +359,8 @@ public class GlobalScheduler extends InternalSchedulerBase {
     // --------------------- 实现 PageOperation 相关代码 ---------------------
 
     protected final LinkableList<LinkablePageOperation> lockedPageOperationTasks = new LinkableList<>();
+    // 跨线程安全的page operation计数器，hasPendingPageOperations需要从其他线程读取
+    private final AtomicInteger pageOperationCount = new AtomicInteger();
 
     protected static class LinkablePageOperation extends LinkableBase<LinkablePageOperation> {
         final PageOperation po;
@@ -369,7 +372,13 @@ public class GlobalScheduler extends InternalSchedulerBase {
 
     @Override
     public void handlePageOperation(PageOperation po) {
+        pageOperationCount.incrementAndGet();
         lockedPageOperationTasks.add(new LinkablePageOperation(po));
+    }
+
+    @Override
+    public boolean hasPendingPageOperations() {
+        return pageOperationCount.get() > 0;
     }
 
     @Override
@@ -403,6 +412,7 @@ public class GlobalScheduler extends InternalSchedulerBase {
                     setCurrentSession(old);
                 }
                 lockedPageOperationTasks.decrementSize();
+                pageOperationCount.decrementAndGet();
             }
             if (lockedPageOperationTasks.getHead() == null)
                 lockedPageOperationTasks.setTail(null);

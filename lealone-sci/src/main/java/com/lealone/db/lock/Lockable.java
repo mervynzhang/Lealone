@@ -12,6 +12,18 @@ public interface Lockable {
     public default void setKey(Object key) {
     }
 
+    // 是否是索引项的key，只有索引项的key在删除后还需要保留rowId相关的信息
+    public default boolean isIndexKey() {
+        return false;
+    }
+
+    public default long getKey() {
+        return 0;
+    }
+
+    public default void setKey(long key) {
+    }
+
     // 如果实现类包装了一个被锁的对象，那它就返回这个对象，否则返回自身
     public default Object getValue() {
         return this;

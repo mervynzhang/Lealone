@@ -12,7 +12,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
+import com.lealone.common.logging.Logger;
+import com.lealone.common.logging.LoggerFactory;
 import com.lealone.common.util.ShutdownHookUtils;
 import com.lealone.db.RunMode;
 import com.lealone.db.SysProperties;
@@ -35,6 +38,7 @@ public class AOTransactionEngine extends TransactionEngineBase implements Storag
 
     private static final String NAME = "AOTE";
     private static final AtomicInteger logSyncServiceIndex = new AtomicInteger(0);
+    private static final Logger logger = LoggerFactory.getLogger(AOTransactionEngine.class);
 
     private final AtomicLong lastTransactionId = new AtomicLong();
 
@@ -250,6 +254,28 @@ public class AOTransactionEngine extends TransactionEngineBase implements Storag
         for (int i = 0; i < logSyncServices.length; i++) {
             if (logSyncServices[i].isRunning())
                 logSyncServices[i].getCheckpointService().executeCheckpointAsync(false);
+        }
+    }
+
+    private volatile LongSupplier beforeCheckpointHandler;
+
+    @Override
+    public void setBeforeCheckpointHandler(LongSupplier handler) {
+        beforeCheckpointHandler = handler;
+    }
+
+    // 由CheckpointService在保存StorageMap前调用，用于执行完所有异步索引操作，
+    // 返回还没执行完的索引操作所属事务的最小事务id
+    @Override
+    public long runBeforeCheckpointHandler() {
+        LongSupplier handler = beforeCheckpointHandler;
+        if (handler == null)
+            return Long.MAX_VALUE;
+        try {
+            return handler.getAsLong();
+        } catch (Throwable t) {
+            logger.warn("Failed to run before checkpoint handler", t);
+            return Long.MAX_VALUE;
         }
     }
 
