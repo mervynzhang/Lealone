@@ -9,7 +9,6 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.db.api.ErrorCode;
@@ -18,7 +17,7 @@ import com.lealone.test.sql.SqlAssertTestBase;
 /**
  * DDL 级联与依赖：视图依赖的 ALTER/DROP COLUMN、DROP VIEW CASCADE/RESTRICT、DDL 之后 prepared statement 缓存失效。
  * <p>
- * 期望值以 SQL 标准 / H2 语义为准。已确认不符合期望的断言放在 {@code @Ignore("BUG: ...")} 里。
+ * 期望值以 SQL 标准 / H2 语义为准。曾经不符合期望的断言修复后保留为回归用例。
  */
 public class DdlCascadeTest extends SqlAssertTestBase {
 
@@ -162,7 +161,7 @@ public class DdlCascadeTest extends SqlAssertTestBase {
     }
 
     // ------------------------------------------------------------------
-    // 以下为已确认缺陷（期望值按 SQL 标准与 H2 2.4.240 实测）
+    // 以下用例曾经是缺陷，现已修复（期望值按 SQL 标准与 H2 2.4.240 实测）
     // ------------------------------------------------------------------
 
     // ALTER TABLE ... DROP COLUMN 被视图引用时，报 90083 COLUMN_IS_REFERENCED_1，
@@ -182,10 +181,8 @@ public class DdlCascadeTest extends SqlAssertTestBase {
         cleanup();
     }
 
-    // BUG: 表结构变更后 prepared statement 不失效，仍然按旧计划执行。
-    // 期望: ALTER TABLE ADD COLUMN 之后，同一条 PreparedStatement 重新执行时能看到 2 列（H2 会重新编译）；
-    // 实际: 仍返回 1 列，新列完全不可见。
-    @Ignore("BUG: prepared statement not invalidated by ALTER TABLE ADD COLUMN (still 1 column)")
+    // 表结构变更后 prepared statement 必须重新编译：
+    // ALTER TABLE ADD COLUMN 之后，同一条 PreparedStatement 重新执行时能看到 2 列（与 H2 一致）。
     @Test
     public void preparedStatementSeesAddedColumn() throws Exception {
         cleanup();
@@ -206,12 +203,8 @@ public class DdlCascadeTest extends SqlAssertTestBase {
         cleanup();
     }
 
-    // BUG: 列被删掉后，缓存里的 prepared statement 没有失效，重新执行既不报错也不重新编译，
-    // 而是静默返回"旧结构 + 0 行"（表里其实还有 1 行数据）。在"列是 ALTER ADD 出来且带索引"
-    // 的变体里还观察到过 ArrayIndexOutOfBoundsException 被包装成 50000 General error。
-    // 期望: 42122 COLUMN_NOT_FOUND_1（H2 会重新编译并报 Column "B" not found）；
-    // 实际: 静默返回 0 行 / 50000。
-    @Ignore("BUG: cached prepared statement silently returns 0 rows after DROP COLUMN instead of failing with 42122")
+    // 列被删掉后，缓存里的 prepared statement 重新编译，
+    // 报 42122 COLUMN_NOT_FOUND_1，而不是静默返回"旧结构 + 0 行"（与 H2 一致）。
     @Test
     public void preparedStatementAfterDroppedColumn() throws Exception {
         cleanup();
@@ -237,11 +230,8 @@ public class DdlCascadeTest extends SqlAssertTestBase {
         cleanup();
     }
 
-    // BUG: DROP TABLE 之后重建同名表，缓存里的 prepared statement 既没有失效也没有报错，
-    // 而是继续按旧表结构返回"1 列 0 行"，把新表的数据吞掉了，属于静默错误结果。
-    // 期望: 重新编译，返回新表的 2 列 1 行（H2 行为）；
-    // 实际: 1 列 0 行。
-    @Ignore("BUG: cached prepared statement silently returns stale empty result after DROP/CREATE TABLE")
+    // DROP TABLE 之后重建同名表，缓存里的 prepared statement 要重新编译，
+    // 返回新表的 2 列 1 行，而不是按旧表结构返回"1 列 0 行"（与 H2 一致）。
     @Test
     public void preparedStatementAfterDropAndRecreateTable() throws Exception {
         cleanup();

@@ -34,6 +34,11 @@ public interface PreparedSQLStatement extends SQLStatement, ManualCloseable {
 
     void setObjectId(int objectId);
 
+    /**
+     * 元数据改变之后(比如执行了DDL)重新编译，返回没有改变时就是当前语句
+     */
+    PreparedSQLStatement recompileIfRequired();
+
     boolean canReuse();
 
     void reuse();
