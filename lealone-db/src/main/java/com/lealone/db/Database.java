@@ -1162,7 +1162,10 @@ public class Database extends DbObjectBase implements DataHandler {
     }
 
     public synchronized boolean closeIfNeeded() {
-        if (closeDelay < 0 || !userSessions.isEmpty())
+        // 只看真正的用户连接: 引擎自己的内部session(表分析、异步索引操作)不算,
+        // 否则只要后台干过活, 这个库就再也不会因为"没有用户连接了"而自动关闭,
+        // 存储一直开着、文件一直占着(和 close() 当年被内部session挡住是同一类问题)
+        if (closeDelay < 0 || getUserSessionCount() > 0)
             return false;
         if (closeDelay == 0 || lastSessionRemovedAt > 0
                 && System.currentTimeMillis() - lastSessionRemovedAt > closeDelay) {
