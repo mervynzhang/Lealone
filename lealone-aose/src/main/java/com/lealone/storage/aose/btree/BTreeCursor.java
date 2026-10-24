@@ -54,7 +54,9 @@ public class BTreeCursor<K, V> implements StorageMapCursor<K, V> {
         if (hasNext()) {
             int index = pos.index++;
             key = (K) pos.page.getKey(index);
-            if (parameters.allColumns)
+            // columnIndexes 为 null 表示不裁剪列(游标默认就是取整行)。
+            // 列存页如果按 null 列集去取, 会一列都不加载, 整行读出来全是 null。
+            if (parameters.allColumns || parameters.columnIndexes == null)
                 value = (V) pos.page.getValue(index, true);
             else
                 value = (V) pos.page.getValue(index, parameters.columnIndexes);

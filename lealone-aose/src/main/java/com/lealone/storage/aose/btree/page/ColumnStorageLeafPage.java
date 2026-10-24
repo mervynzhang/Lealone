@@ -32,7 +32,10 @@ public abstract class ColumnStorageLeafPage extends LeafPage {
 
     @Override
     public Object getValue(int index, int[] columnIndexes) {
-        if (columnPages != null && columnIndexes != null && !isAllColumnPagesRead) {
+        // 列集为 null 表示要整行: 不能当成"一列都不读", 否则整行全是 null
+        if (columnPages != null && columnIndexes == null && !isAllColumnPagesRead) {
+            readAllColumnPages();
+        } else if (columnPages != null && columnIndexes != null && !isAllColumnPagesRead) {
             for (int columnIndex : columnIndexes) {
                 readColumnPage(columnIndex);
             }
@@ -124,6 +127,15 @@ public abstract class ColumnStorageLeafPage extends LeafPage {
         formatVersionForRead = chunk.formatVersion;
         // 延迟加载列
         return metaVersion;
+    }
+
+    // 保存前必须把还没加载的列页读出来, 否则写出去的行里有 null 列值,
+    // 在 RowType.writeColumn 里取列类型时会抛 NullPointerException
+    @Override
+    protected void beforeWrite(PageInfo pInfoOld) {
+        if (columnPages != null && !isAllColumnPagesRead)
+            readAllColumnPages();
+        super.beforeWrite(pInfoOld);
     }
 
     @Override

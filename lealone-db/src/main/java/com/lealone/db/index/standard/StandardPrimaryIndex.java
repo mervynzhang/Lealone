@@ -284,7 +284,11 @@ public class StandardPrimaryIndex extends StandardDataIndex<Row, Row> {
     }
 
     public Row getRow(ServerSession session, long key, int[] columnIndexes) {
-        Lockable lockable = getTransactionMap(session).get(new Row(key, null), columnIndexes);
+        TransactionMap<Row, Row> map = getTransactionMap(session);
+        // columnIndexes为null表示要整行，不能直接交给存储层，
+        // 列存储的页在columnIndexes为null时一列都不加载，整行会被读成NULL
+        Lockable lockable = columnIndexes == null ? map.get(new Row(key, null))
+                : map.get(new Row(key, null), columnIndexes);
         if (lockable == null || lockable.getLockedValue() == null) // 已经删除了
             return null;
         Row row = (Row) lockable;
