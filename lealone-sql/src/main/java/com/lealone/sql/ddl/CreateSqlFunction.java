@@ -27,6 +27,7 @@ public class CreateSqlFunction extends SchemaStatement {
     private int[] parameterTypeIds;
     private int[] parameterComponentTypes;
     private int[] parameterModes;
+    private boolean variadic;
     private String returnTypeSql;
     private int returnType;
     private String body;
@@ -51,12 +52,13 @@ public class CreateSqlFunction extends SchemaStatement {
     }
 
     public void setParameters(String[] parameterNames, String[] parameterTypes, int[] parameterTypeIds,
-            int[] parameterComponentTypes, int[] parameterModes) {
+            int[] parameterComponentTypes, int[] parameterModes, boolean variadic) {
         this.parameterNames = parameterNames;
         this.parameterTypes = parameterTypes;
         this.parameterTypeIds = parameterTypeIds;
         this.parameterComponentTypes = parameterComponentTypes;
         this.parameterModes = parameterModes;
+        this.variadic = variadic;
     }
 
     public void setReturnType(String returnTypeSql, int returnType) {
@@ -114,7 +116,7 @@ public class CreateSqlFunction extends SchemaStatement {
         int id = getObjectId();
         SqlFunction function = new SqlFunction(schema, id, functionName);
         function.setParameters(parameterNames, parameterTypes, parameterTypeIds,
-                parameterComponentTypes, parameterModes);
+                parameterComponentTypes, parameterModes, variadic);
         function.setReturnType(returnTypeSql, returnType);
         function.setBody(body, bodySql, bodyParameterIndexes);
         function.setDeterministic(deterministic);

@@ -165,6 +165,51 @@ public class PgFunctionParamTest extends SqlTestBase {
         assertEquals(0, getIntValue(1));
     }
 
+    // VARIADIC: 最后一个参数是数组, 调用时可变个实参展开
+    @Test
+    public void testVariadic() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION p_var_count(VARIADIC nums INT[]) RETURNS INT "
+                + "AS $$ SELECT ARRAY_LENGTH(nums) $$");
+        executeQuery("SELECT p_var_count(1, 2, 3)");
+        assertEquals(3, getIntValue(1));
+        executeQuery("SELECT p_var_count(9)");
+        assertEquals(1, getIntValue(1));
+        // 一个实参都不传时是空数组
+        executeQuery("SELECT p_var_count()");
+        assertEquals(0, getIntValue(1));
+
+        // 和普通参数混用
+        executeUpdate("CREATE OR REPLACE FUNCTION p_var_mix(IN a INT, VARIADIC nums INT[]) "
+                + "RETURNS INT AS $$ SELECT a + ARRAY_LENGTH(nums) $$");
+        executeQuery("SELECT p_var_mix(10, 1, 2)");
+        assertEquals(12, getIntValue(1));
+
+        // 展开后的元素按数组元素类型使用
+        executeUpdate("CREATE OR REPLACE FUNCTION p_var_first(VARIADIC nums INT[]) RETURNS INT "
+                + "AS $$ SELECT ARRAY_GET(nums, 1) $$");
+        executeQuery("SELECT p_var_first(7, 8, 9)");
+        assertEquals(7, getIntValue(1));
+
+        // VARIADIC必须是最后一个参数
+        executeUpdateThanAssertErrorCode(
+                "CREATE FUNCTION p_var_bad(VARIADIC nums INT[], b INT) RETURNS INT AS $$ SELECT 1 $$",
+                ErrorCode.SYNTAX_ERROR_1);
+        // VARIADIC参数必须是数组类型
+        executeUpdateThanAssertErrorCode(
+                "CREATE FUNCTION p_var_bad2(VARIADIC nums INT) RETURNS INT AS $$ SELECT 1 $$",
+                ErrorCode.SYNTAX_ERROR_1);
+        // 固定参数不能少
+        executeQueryThanAssertErrorCode("SELECT p_var_mix()", ErrorCode.FUNCTION_NOT_FOUND_1);
+
+        // VARIADIC要能被持久化和回放
+        String createSql = getCreateSql("P_VAR_COUNT");
+        assertTrue(createSql, createSql.contains("VARIADIC "));
+        executeUpdate("DROP FUNCTION p_var_count");
+        executeUpdate(createSql);
+        executeQuery("SELECT p_var_count(1, 2)");
+        assertEquals(2, getIntValue(1));
+    }
+
     // 从SCRIPT的输出里找出指定函数的CREATE FUNCTION语句
     private String getCreateSql(String functionName) {
         String prefix = "CREATE FUNCTION " + functionName;

@@ -5129,12 +5129,15 @@ public class SQLParserBase implements SQLParser {
         ArrayList<Integer> parameterTypeIds = Utils.newSmallArrayList();
         ArrayList<Integer> parameterComponentTypes = Utils.newSmallArrayList();
         ArrayList<Integer> parameterModes = Utils.newSmallArrayList();
+        boolean variadic = false;
+        int variadicParameterIndex = -1;
         if (!readIf(")")) {
             int parameterIndex = 0;
             do {
                 parameterIndex++;
                 // PostgreSQL风格的参数模式，默认是IN
                 int mode = SqlFunction.PARAM_IN;
+                boolean isVariadic = false;
                 if (readIf("IN")) {
                     if (readIf("OUT")) {
                         mode = SqlFunction.PARAM_INOUT;
@@ -5143,6 +5146,8 @@ public class SQLParserBase implements SQLParser {
                     mode = SqlFunction.PARAM_OUT;
                 } else if (readIf("INOUT")) {
                     mode = SqlFunction.PARAM_INOUT;
+                } else if (readIf("VARIADIC")) {
+                    isVariadic = true;
                 }
                 String parameterName;
                 Column column;
@@ -5158,21 +5163,50 @@ public class SQLParserBase implements SQLParser {
                     }
                     column = parseColumnWithType(null);
                 }
+                // 数组类型: PostgreSQL的 type[] 或 type ARRAY 写法
+                int type = column.getType();
+                int componentType = -1;
+                String typeSql = column.getOriginalSQL();
+                if (readIf("[")) {
+                    read("]");
+                    componentType = type;
+                    type = Value.ARRAY;
+                    typeSql += "[]";
+                } else if (readIf("ARRAY")) {
+                    componentType = type;
+                    type = Value.ARRAY;
+                    typeSql += "[]";
+                } else if (type == Value.ARRAY) {
+                    // 只写ARRAY时不知道元素类型
+                    componentType = Value.UNKNOWN;
+                }
+                if (isVariadic) {
+                    if (type != Value.ARRAY) {
+                        throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                                "VARIADIC parameter must be an array type: " + parameterName);
+                    }
+                    variadic = true;
+                    variadicParameterIndex = parameterIndex;
+                }
                 parameterNames.add(parameterName);
-                parameterTypes.add(column.getOriginalSQL());
-                parameterTypeIds.add(column.getType());
-                parameterComponentTypes.add(-1);
+                parameterTypes.add(typeSql);
+                parameterTypeIds.add(type);
+                parameterComponentTypes.add(componentType);
                 parameterModes.add(mode);
             } while (readIf(","));
             read(")");
         }
         int count = parameterNames.size();
+        if (variadic && variadicParameterIndex != count) {
+            throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                    "VARIADIC parameter must be the last parameter");
+        }
         String[] names = new String[count];
         String[] types = new String[count];
         parameterNames.toArray(names);
         parameterTypes.toArray(types);
         command.setParameters(names, types, toIntArray(parameterTypeIds),
-                toIntArray(parameterComponentTypes), toIntArray(parameterModes));
+                toIntArray(parameterComponentTypes), toIntArray(parameterModes), variadic);
 
         if (readIf("RETURNS")) {
             if (readIf("SETOF")) {

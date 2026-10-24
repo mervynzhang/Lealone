@@ -57,6 +57,7 @@ public class SqlFunction extends FunctionAlias {
     private int[] inputIndexes; // 入参在参数列表中的下标
     private int[] outputIndexes; // 返回列对应的参数下标
     private int inputParameterCount;
+    private boolean variadic;
     private boolean strict;
 
     private String returnTypeSql;
@@ -85,12 +86,13 @@ public class SqlFunction extends FunctionAlias {
     }
 
     public void setParameters(String[] parameterNames, String[] parameterTypes, int[] parameterTypeIds,
-            int[] parameterComponentTypes, int[] parameterModes) {
+            int[] parameterComponentTypes, int[] parameterModes, boolean variadic) {
         this.parameterNames = parameterNames;
         this.parameterTypes = parameterTypes;
         this.parameterTypeIds = parameterTypeIds;
         this.parameterComponentTypes = parameterComponentTypes;
         this.parameterModes = parameterModes;
+        this.variadic = variadic;
 
         int inputCount = 0;
         int outputCount = 0;
@@ -173,7 +175,9 @@ public class SqlFunction extends FunctionAlias {
 
     @Override
     public JavaMethod findJavaMethod(IExpression[] args) {
-        if (args.length != inputParameterCount) {
+        // 有VARIADIC参数时最后一个参数可以展开成任意多个实参
+        int minCount = variadic ? inputParameterCount - 1 : inputParameterCount;
+        if (variadic ? args.length < minCount : args.length != minCount) {
             throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1,
                     getName() + " (parameter count: " + args.length + ")");
         }
@@ -197,6 +201,9 @@ public class SqlFunction extends FunctionAlias {
                 buff.append("OUT ");
             } else if (parameterModes[i] == PARAM_INOUT) {
                 buff.append("INOUT ");
+            }
+            if (variadic && i == parameterNames.length - 1) {
+                buff.append("VARIADIC ");
             }
             buff.append(database.quoteIdentifier(parameterNames[i])).append(' ');
             buff.append(parameterTypes[i]);
@@ -231,8 +238,16 @@ public class SqlFunction extends FunctionAlias {
         }
         Value[] values = new Value[parameterNames.length];
         Arrays.fill(values, ValueNull.INSTANCE);
-        for (int i = 0; i < inputParameterCount; i++) {
-            values[inputIndexes[i]] = args[i].getValue(session);
+        if (variadic) {
+            int fixedCount = inputParameterCount - 1;
+            for (int i = 0; i < fixedCount; i++) {
+                values[inputIndexes[i]] = args[i].getValue(session);
+            }
+            values[inputIndexes[fixedCount]] = getVariadicValue(session, args, fixedCount);
+        } else {
+            for (int i = 0; i < inputParameterCount; i++) {
+                values[inputIndexes[i]] = args[i].getValue(session);
+            }
         }
         if (strict) {
             // 任一入参为NULL时不执行函数体, 直接返回NULL
@@ -273,6 +288,25 @@ public class SqlFunction extends FunctionAlias {
         } catch (SQLException e) {
             throw DbException.convert(e);
         }
+    }
+
+    // 把VARIADIC参数对应的多个实参打包成一个数组值
+    private Value getVariadicValue(ServerSession session, IExpression[] args, int fixedCount) {
+        int extraCount = args.length - fixedCount;
+        if (extraCount > 0) {
+            Value first = args[fixedCount].getValue(session);
+            // 只传一个数组值时直接当成数组用, 不再多包一层
+            if (extraCount == 1 && first.getType() == Value.ARRAY) {
+                return first;
+            }
+            Value[] list = new Value[extraCount];
+            list[0] = first;
+            for (int i = 1; i < extraCount; i++) {
+                list[i] = args[fixedCount + i].getValue(session);
+            }
+            return ValueArray.get(list);
+        }
+        return ValueArray.get(new Value[0]);
     }
 
     // 多个OUT参数时，把函数体返回的第一行包装成一个结果集
