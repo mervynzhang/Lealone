@@ -158,7 +158,7 @@ public class CastMatrixTest extends SqlAssertTestBase {
     // BUG: 非法的 UUID 字符串被当成十六进制数解析，而不是报错。
     // 期望: CAST('abc' AS UUID) 抛 22018（H2 为 Data conversion error converting "abc"）；
     // 实际: 返回 00000000-0000-0000-0000-000000000abc。
-    @Ignore("BUG: CAST('abc' AS UUID) is accepted as hex 0xabc instead of raising 22018")
+    // 非法UUID必须报转换错误
     @Test
     public void invalidUuidStringIsRejected() {
         assertSqlFails("SELECT CAST('abc' AS UUID)", ErrorCode.DATA_CONVERSION_ERROR_1);

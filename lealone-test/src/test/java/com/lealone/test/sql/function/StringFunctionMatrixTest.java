@@ -124,9 +124,7 @@ public class StringFunctionMatrixTest extends SqlAssertTestBase {
 
     // BUG: OCTET_LENGTH / BIT_LENGTH 按 UTF-16 code unit 计数（每个字符 2 字节 16 位），
     // 而不是按实际编码字节数。ASCII 串 'abc' 应该是 3 字节 / 24 位。
-    // 期望: OCTET_LENGTH('abc')=3, BIT_LENGTH('abc')=24（H2 返回值）；
-    // 实际: 6 / 48；'中' 期望 3/24（UTF-8），实际 2/16。
-    @Ignore("BUG: OCTET_LENGTH/BIT_LENGTH count UTF-16 code units (abc -> 6/48) instead of bytes (3/24)")
+    // OCTET_LENGTH/BIT_LENGTH按UTF-8字节计算
     @Test
     public void octetAndBitLength() {
         assertQueryEquals(3L, "SELECT OCTET_LENGTH('abc')");
@@ -135,10 +133,20 @@ public class StringFunctionMatrixTest extends SqlAssertTestBase {
         assertQueryEquals(24L, "SELECT BIT_LENGTH('中')");
     }
 
+    // 二进制类型的字节数就是字节数本身: 不能转成十六进制字符串再数(那样会翻倍)
+    @Test
+    public void octetAndBitLengthOnBinary() {
+        assertQueryEquals(1L, "SELECT OCTET_LENGTH(CAST(X'41' AS BINARY))");
+        assertQueryEquals(8L, "SELECT BIT_LENGTH(CAST(X'41' AS BINARY))");
+        assertQueryEquals(2L, "SELECT OCTET_LENGTH(CAST(X'00FF' AS BLOB))");
+        assertQueryEquals(16L, "SELECT BIT_LENGTH(CAST(X'00FF' AS BLOB))");
+        // 多字节文本仍按 UTF-8 字节算
+        assertQueryEquals(6L, "SELECT OCTET_LENGTH('中文')");
+        assertQueryEquals(48L, "SELECT BIT_LENGTH('中文')");
+    }
+
     // BUG: 没有 QUOTE_IDENT 函数（90022 FUNCTION_NOT_FOUND_1）。
-    // 期望: QUOTE_IDENT('a"b') 返回带双引号且内部引号翻倍的标识符 "a""b"（H2 返回值）；
-    // 实际: 报 90022 FUNCTION_NOT_FOUND_1，Function "QUOTE_IDENT" not found。
-    @Ignore("BUG: QUOTE_IDENT is not implemented (90022); expected \"a\"\"b\"")
+    // QUOTE_IDENT返回带双引号且内部引号翻倍的标识符
     @Test
     public void quoteIdent() {
         assertQueryEquals("\"a\"\"b\"", "SELECT QUOTE_IDENT('a\"b')");
