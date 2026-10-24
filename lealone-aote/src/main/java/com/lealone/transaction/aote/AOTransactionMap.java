@@ -18,6 +18,7 @@ import com.lealone.db.scheduler.SchedulerListener;
 import com.lealone.db.session.InternalSession;
 import com.lealone.storage.CursorParameters;
 import com.lealone.storage.Storage;
+import com.lealone.storage.page.PageListener;
 import com.lealone.storage.StorageMap;
 import com.lealone.storage.StorageMapCursor;
 import com.lealone.storage.page.PageListener;
@@ -656,8 +657,12 @@ public class AOTransactionMap<K, V> implements TransactionMap<K, V> {
         insertRecord.setUndone(true);
         rowLock.setInsertRecord(null);
         markDirtyPage(key, lockable);
-        // 必须在列值还在的时候删，置空之后BTree就无法按比较定位这一项了
-        lockable.getPageListener().getPageReference().remove(key);
+        // 必须在列值还在的时候删，置空之后BTree就无法按比较定位这一项了。
+        // 页操作可能还没执行完，此时lockable还没有关联到页，等于什么都没插进去，不用删
+        // (与UndoLogRecord.removeInsertedKey的判空保持一致)。
+        PageListener pageListener = lockable.getPageListener();
+        if (pageListener != null)
+            pageListener.getPageReference().remove(key);
         lockable.setLockedValue(null);
         return true;
     }
