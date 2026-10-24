@@ -134,7 +134,8 @@ select * from cp_test;
 
 -- @case procedure.inout_params
 -- @pg create_procedure.sql:79-102
--- 缺失: Lealone 无 INOUT/OUT 参数, 过程只能按位置传 IN 参数
+-- 缺失: Lealone 的 CREATE PROCEDURE 只接受 IN 参数(写 INOUT/OUT 会报 42102 Table "X" not found);
+--       同样的能力在 CREATE FUNCTION 里是支持的(见 plpgsql.inout_return / plpgsql.multi_out)
 create procedure ptest4a(inout a int, inout b int)
 language sql
 as $$
@@ -191,14 +192,16 @@ call ptest6a(1, null);
 
 -- @case procedure.collation
 -- @pg create_procedure.sql:164-170
--- 缺陷: 同 procedure.body_select, CALL 的结果集在 execute() 下拿不到; 另外 Lealone 没有 collation 概念
-create procedure ptest7(a text, b text)
-language sql
-as $$
-select a = b;
-$$;
-call ptest7(least('a', 'b'), 'a');
--- PG 期望: 一行 f
+-- 适配: PG 的过程体是 LANGUAGE SQL + 参数名, Lealone 过程体用 ? 按位置引用;
+--       PG 的实参是 least('a','b'), Lealone 没有 least()(42122), 这里直接传它的结果 'a'
+create procedure ptest7(a text, b text) as 'select ? = ?';
+> update count: 0
+
+call ptest7('a', 'a');
+> ?1 = ?2
+> -------
+> TRUE
+> rows: 1
 
 -- @case procedure.empty_body
 -- @pg create_procedure.sql:174-180
@@ -212,7 +215,7 @@ call ptest8('');
 
 -- @case procedure.out_params
 -- @pg create_procedure.sql:185-212
--- 缺失: Lealone 无 OUT/INOUT/VARIADIC 参数和命名实参
+-- 缺失: CREATE PROCEDURE 只接受 IN 参数(42102), 也不支持命名实参/DEFAULT(VARIADIC/OUT 在 CREATE FUNCTION 里已支持)
 create procedure ptest9(out a int)
 language sql
 as $$

@@ -196,14 +196,14 @@ reset session authorization;
 
 -- @case function_sql.strict
 -- @pg create_function_sql.sql:124-131
--- 适配: F_2 的 CALLED ON NULL INPUT 现在能解析并持久化了, 所以补回来;
---       F_3/F_4 的 RETURNS NULL ON NULL INPUT / STRICT 用调用验证"入参为 NULL 时不执行函数体"
+-- 适配: 四个函数的三属性都能写了(CALLED ON NULL INPUT / RETURNS NULL ON NULL INPUT / STRICT),
+--       用调用验证"入参为 NULL 时函数体执不执行"
 create function functest_F_1(a int) returns boolean language 'sql'
     as 'select a > 50';
 > update count: 0
 
 create function functest_F_2(a int) returns boolean language 'sql'
-    called on null input as 'select a is null';
+    called on null input as 'select a = 50';
 > update count: 0
 
 create function functest_F_3(a int) returns boolean language 'sql'
@@ -214,18 +214,17 @@ create function functest_F_4(a int) returns boolean language 'sql'
     strict as 'select a = 50';
 > update count: 0
 
--- 普通函数: 入参 NULL 时函数体照常执行, 结果是 NULL
+-- 普通函数/CALLED ON NULL INPUT: 入参 NULL 时函数体照常执行, 结果是 NULL
 select functest_F_1(null) r;
 > R
 > ----
 > null
 > rows: 1
 
--- 显式写 CALLED ON NULL INPUT 和默认行为一样: 函数体照常执行, 所以能算出 TRUE
 select functest_F_2(null) r;
 > R
 > ----
-> TRUE
+> null
 > rows: 1
 
 -- STRICT / RETURNS NULL ON NULL INPUT: 入参 NULL 时函数体不执行, 直接返回 NULL
@@ -247,6 +246,12 @@ select functest_F_1(51) r;
 > TRUE
 > rows: 1
 
+select functest_F_2(50) r;
+> R
+> ----
+> TRUE
+> rows: 1
+
 select functest_F_3(49) r;
 > R
 > ----
@@ -261,8 +266,8 @@ select functest_F_4(50) r;
 
 -- @case function_sql.strict_catalog
 -- @pg create_function_sql.sql:132-145
--- 缺失: Lealone 没有 pg_proc.proisstrict, 也不支持 ALTER FUNCTION;
---       CALLED ON NULL INPUT 关键字本身也不认识(默认语义等价, 只是不能显式写)
+-- 缺失: Lealone 没有 pg_proc.proisstrict, 也不支持 ALTER FUNCTION
+--       (CALLED ON NULL INPUT 关键字现在可以写了, 见 function_sql.strict)
 create function functest_F_2(a int) returns boolean language 'sql'
     called on null input as 'select a = 50';
 select proname, proisstrict from pg_proc
@@ -463,14 +468,24 @@ drop function functest1(a int);
 -- ---------------------------------------------------------------------------
 
 -- @case function_sql.setof
--- @pg create_function_sql.sql:344-348
--- 缺失: Lealone 无 generate_series(); 而且 select 列表里不展开 setof 函数
---       (SELECT functest_srf0() 会报 FEATURE_NOT_SUPPORTED, 必须写成 FROM functest_srf0())
+-- @pg create_function_sql.sql:342-348
+-- 适配: Lealone 没有 generate_series(), 函数体换成等价的 SYSTEM_RANGE;
+--       PG 的 SELECT functest_srf0() 在 select 列表里展开 setof, Lealone 明确不支持这种展开
+--       (报 FEATURE_NOT_SUPPORTED), 要写成 SELECT * FROM functest_srf0()
 create function functest_srf0() returns setof int
 language sql
-as $$ select i from generate_series(1, 100) i $$;
-select functest_srf0() limit 5;
--- PG 期望: 1/2/3/4/5
+as $$ select x from system_range(1, 100) $$;
+> update count: 0
+
+select * from functest_srf0() limit 5;
+> FUNCTEST_SRF0
+> -------------
+> 1
+> 2
+> 3
+> 4
+> 5
+> rows: 5
 
 -- @case function_sql.setof_inline
 -- @pg create_function_sql.sql:353-376

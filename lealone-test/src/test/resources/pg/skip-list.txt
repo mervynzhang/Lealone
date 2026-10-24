@@ -27,7 +27,7 @@ function_sql.pg_proc	create_function_sql.sql:29-36	4	Lealone 没有 pg_proc/regp
 function_sql.volatility_catalog	create_function_sql.sql:49-61	4	Lealone 没有 pg_proc.provolatile 与 ALTER FUNCTION
 function_sql.security_definer	create_function_sql.sql:66-83	8	Lealone 不支持 SECURITY DEFINER/INVOKER
 function_sql.leakproof	create_function_sql.sql:88-119	16	Lealone 不支持 LEAKPROOF 属性
-function_sql.strict_catalog	create_function_sql.sql:132-145	5	Lealone 没有 pg_proc.proisstrict/ALTER FUNCTION, 也不认识 CALLED ON NULL INPUT 关键字
+function_sql.strict_catalog	create_function_sql.sql:132-145	5	Lealone 没有 pg_proc.proisstrict 与 ALTER FUNCTION(CALLED ON NULL INPUT 已支持)
 function_sql.pg_get_functiondef	create_function_sql.sql:150-153	4	Lealone 没有 pg_get_functiondef()
 function_sql.sql_body_return	create_function_sql.sql:159-170	6	Lealone 无 SQL 标准函数体(RETURN 表达式)
 function_sql.sql_body_atomic	create_function_sql.sql:171-195	9	Lealone 无 BEGIN ATOMIC 多语句函数体
@@ -39,7 +39,6 @@ function_sql.sql_body_tempseq	create_function_sql.sql:244-253	3	Lealone 无 SQL 
 function_sql.information_schema	create_function_sql.sql:256-323	19	Lealone 没有 information_schema.routines 等视图
 function_sql.overload	create_function_sql.sql:326-331	4	Lealone 不支持按参数类型重载
 function_sql.or_replace_window	create_function_sql.sql:337-339	3	Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转
-function_sql.setof	create_function_sql.sql:344-348	2	Lealone 无 generate_series(), 且 select 列表里不展开 setof 函数
 function_sql.setof_inline	create_function_sql.sql:353-376	10	Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN
 function_sql.void_insert	create_function_sql.sql:392-402	6	Lealone 函数体只允许单条查询(不支持 INSERT ... RETURNING)
 function_sql.ddl_in_body	create_function_sql.sql:409-431	8	Lealone 函数体只允许单条查询(不支持 DDL)
@@ -49,14 +48,13 @@ function_sql.bad_body_positional	create_function_sql.sql:474-475	1	Lealone 不�
 function_sql.empty_body_call	create_function_sql.sql:484-488	4	Lealone 无 anyelement/anyarray 多态类型
 procedure.call_random	create_procedure.sql:2-2	1	Lealone 的 CALL 不区分函数与过程
 procedure.psql_meta	create_procedure.sql:14-21	1	Lealone 客户端没有 psql 元命令, 也没有 pg_get_functiondef()
-procedure.atomic_body	create_procedure.sql:32-43	5	Lealone 无 BEGIN ATOMIC 过程体
+procedure.atomic_body	create_procedure.sql:32-43	5	CREATE 能过但 CALL 时报 42000: 过程体不支持 BEGIN ATOMIC 块
 procedure.utility_body	create_procedure.sql:46-50	2	Lealone 过程体不能执行 DDL
-procedure.inout_params	create_procedure.sql:79-102	6	CREATE PROCEDURE 不接受 OUT/INOUT 参数(目前只有 CREATE FUNCTION 支持)
+procedure.inout_params	create_procedure.sql:79-102	6	CREATE PROCEDURE 只接受 IN 参数(42102), OUT/INOUT 在 CREATE FUNCTION 里已支持
 procedure.named_default	create_procedure.sql:107-121	7	Lealone 不支持 DEFAULT 参数与命名实参
 procedure.polymorphic	create_procedure.sql:126-159	11	Lealone 无 anyarray/anyelement 多态类型
-procedure.collation	create_procedure.sql:164-170	2	缺陷: CALL 返回结果集时 execute() 拿不到行
-procedure.empty_body	create_procedure.sql:174-180	3	Lealone 过程体不能为空, 也无 BEGIN ATOMIC
-procedure.out_params	create_procedure.sql:185-212	12	CREATE PROCEDURE 不接受 OUT/INOUT/VARIADIC 参数(目前只有 CREATE FUNCTION 支持)
+procedure.empty_body	create_procedure.sql:174-180	3	CREATE 能过但 CALL 时报 42000: 过程体不支持 BEGIN ATOMIC 空块
+procedure.out_params	create_procedure.sql:185-212	12	CREATE PROCEDURE 只接受 IN 参数(42102); OUT/INOUT/VARIADIC 在 CREATE FUNCTION 里已支持
 procedure.ambiguous_drop	create_procedure.sql:216-232	11	Lealone 不支持按参数类型重载
 procedure.call_function	create_procedure.sql:236-237	2	Lealone 的 CALL 不区分函数与过程
 procedure.alter_and_bad_def	create_procedure.sql:239-249	8	Lealone 不支持 ALTER PROCEDURE/FUNCTION, 过程也不接受 WINDOW/STRICT/VARIADIC/DEFAULT
@@ -69,6 +67,6 @@ plpgsql.cursor	plpgsql.sql:1859-1900	6	PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refc
 plpgsql.record	plpgsql.sql:2313-2321	2	DML 的 INSERT/UPDATE ... RETURNING ... INTO record 不支持(Lealone 引擎没有 DML RETURNING), record 变量本身可用
 plpgsql.out_params_exception	plpgsql.sql:3609-3638	6	RETURNS RECORD 复合返回类型不支持, 且 leaker_1 用 (f(x)).field 取复合返回值的字段
 rangefuncs.setof_composite	rangefuncs.sql:1-8	5	Lealone 无 SETOF <表行类型>, 也不支持 $1 位置参数
-rangefuncs.with_ordinality	rangefuncs.sql:9-17	8	Lealone 不支持 WITH ORDINALITY, 也没有 unnest()/generate_series()
+rangefuncs.with_ordinality	rangefuncs.sql:9-17	8	WITH ORDINALITY 报 42000 语法错, 且没有 unnest()/generate_series()
 rangefuncs.insert_returning	rangefuncs.sql:456-476	8	Lealone 函数体只允许单条查询, 不支持 INSERT ... RETURNING
 plpgsql.setof_composite_record	plpgsql.sql:1487-1512	4	RETURNS SETOF <表行类型> 不支持(只支持标量 setof 与 RETURNS TABLE)

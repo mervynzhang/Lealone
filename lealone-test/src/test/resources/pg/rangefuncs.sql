@@ -25,7 +25,7 @@ select * from rngfunct(1);
 
 -- @case rangefuncs.with_ordinality
 -- @pg rangefuncs.sql:9-17
--- 缺失: Lealone 不支持 WITH ORDINALITY, 也没有 unnest()/generate_series()
+-- 缺失: WITH ORDINALITY 直接报 42000 语法错; 另外 unnest()/generate_series() 也没有
 select * from rngfunct(1) with ordinality as z(a,b,ord);
 select * from unnest(array['a','b']) with ordinality as z(a,ord);
 -- PG 期望: 多出一列 ord(从 1 开始的行号)
