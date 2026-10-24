@@ -222,11 +222,16 @@ public class AOTransaction implements Transaction {
     }
 
     private void writeRedoLog(boolean asyncCommit) {
-        // 同一条语句会被重复stop，此时事务可能已经提交结束，不用再写一次redo log，
-        // 结果由第一次提交负责回调
+        // 同一条语句会被重复stop，此时事务可能已经提交结束，不用再写一次redo log；
+        // 但异步提交的完成回调必须补上，否则这条语句永远等不到响应(客户端挂死)。
+        // 不能用checkNotClosed()抛异常：ServerSession.commit/rollback没有try/finally，
+        // 这里抛出去会让session上的transaction引用悬空，后续语句跟着出问题。
         UndoLog ul = undoLog;
-        if (ul == null)
+        if (ul == null) {
+            if (asyncCommit)
+                asyncCommitComplete();
             return;
+        }
         if (session != null && !session.isRedoLogEnabled()) {
             if (asyncCommit)
                 asyncCommitComplete();
@@ -273,9 +278,13 @@ public class AOTransaction implements Transaction {
     @Override
     public void asyncCommitComplete() {
         commitFinal();
-        if (asyncTask != null) {
+        // 回调只跑一次：writeRedoLog 发现事务已结束时会补调本方法(否则语句等不到响应)，
+        // 那种情况下第一次提交已经跑过回调，这里必须先取走再置空，避免客户端收到两次响应
+        Runnable task = asyncTask;
+        asyncTask = null;
+        if (task != null) {
             try {
-                asyncTask.run();
+                task.run();
             } catch (Exception e) {
                 throw DbException.convert(e);
             }
@@ -349,12 +358,8 @@ public class AOTransaction implements Transaction {
 
     @Override
     public void rollback() {
-        // 已经提交或回滚过了，重复回滚当作空操作。
-        // 原来这里会抛异常，但finally里的endTransaction照样执行，
-        // 导致同一个事务被移除两次、解锁两次，可能把其他事务的锁解掉。
-        if (isClosed())
-            return;
         try {
+            checkNotClosed();
             rollbackTo(0);
         } finally {
             maxCommittedLogId = -2;
