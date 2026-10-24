@@ -47,6 +47,8 @@ public class IndexCursor implements Cursor {
     private Value[] inList;
     private Result inResult;
     private HashSet<Value> inResultTested;
+    // IN列表是按每个值分别扫描索引的，索引游标又只有下界，同一行会被多次返回，用它去重
+    private HashSet<Long> inRowKeys;
 
     public IndexCursor(TableFilter filter) {
         this.tableFilter = filter;
@@ -109,6 +111,7 @@ public class IndexCursor implements Cursor {
         inColumn = null;
         inResult = null;
         inResultTested = null;
+        inRowKeys = null;
         // don't use enhanced for loop to avoid creating objects
         for (int i = 0, size = indexConditions.size(); i < size; i++) {
             IndexCondition condition = indexConditions.get(i);
@@ -123,6 +126,7 @@ public class IndexCursor implements Cursor {
                         this.inColumn = column;
                         inList = condition.getCurrentValueList(session);
                         inListIndex = 0;
+                        inRowKeys = new HashSet<>();
                     }
                 }
             } else if (condition.getCompareType() == Comparison.IN_QUERY) {
@@ -130,6 +134,7 @@ public class IndexCursor implements Cursor {
                     if (canUseIndexForIn(column)) {
                         this.inColumn = column;
                         inResult = condition.getCurrentResult();
+                        inRowKeys = new HashSet<>();
                     }
                 }
             } else {
@@ -264,6 +269,12 @@ public class IndexCursor implements Cursor {
                 }
             }
             if (cursor.next()) {
+                if (inRowKeys != null) {
+                    SearchRow row = cursor.getSearchRow();
+                    if (row != null && !inRowKeys.add(row.getKey())) {
+                        continue; // 已经返回过了
+                    }
+                }
                 return true;
             }
             cursor = null;
