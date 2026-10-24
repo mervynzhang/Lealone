@@ -38,6 +38,21 @@ public class JdbcStatementTest extends ClientTestBase {
         testQueryTimeout();
         testGeneratedKeys();
         testClosedStatement();
+        testExecuteException();
+    }
+
+    void testExecuteException() throws Exception {
+        Connection conn = getConnection();
+        JdbcStatement s = (JdbcStatement) conn.createStatement();
+        try {
+            // Statement.execute()也必须抛SQLException
+            s.execute("SELECT * FROM no_such_table_for_execute");
+            fail();
+        } catch (SQLException e) {
+            assertJdbcErrorCode(e, ErrorCode.TABLE_OR_VIEW_NOT_FOUND_1);
+        } finally {
+            conn.close();
+        }
     }
 
     void testClosedStatement() throws Exception {
