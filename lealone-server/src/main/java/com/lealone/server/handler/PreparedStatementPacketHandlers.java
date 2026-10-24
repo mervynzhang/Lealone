@@ -73,7 +73,8 @@ class PreparedStatementPacketHandlers extends PacketHandlers {
     private static class GetMetaData implements PacketHandler<PreparedStatementGetMetaData> {
         @Override
         public Packet handle(ServerSession session, PreparedStatementGetMetaData packet) {
-            PreparedSQLStatement command = (PreparedSQLStatement) session.getCache(packet.commandId);
+            PreparedSQLStatement command = getPreparedSQLStatementFromCache(session,
+                    packet.commandId);
             Result result = command.getMetaData().get();
             return new PreparedStatementGetMetaDataAck(result);
         }
