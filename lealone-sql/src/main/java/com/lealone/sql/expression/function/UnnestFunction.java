@@ -17,6 +17,7 @@ import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueNull;
 import com.lealone.db.value.ValueResultSet;
 import com.lealone.sql.expression.Expression;
+import com.lealone.sql.expression.ValueExpression;
 
 /**
  * PostgreSQL的unnest(): 把一个或多个数组展开成多行。
@@ -53,7 +54,39 @@ public class UnnestFunction extends BuiltInFunction {
 
     @Override
     public ValueResultSet getValueForColumnList(ServerSession session, Expression[] args) {
+        // 实参可能引用当前行的列(解析期/准备期取不到值), 这时只按静态类型给列定义
+        if (!isConstantArguments(args)) {
+            SimpleResultSet simple = new SimpleResultSet();
+            simple.setAutoClose(false);
+            for (int i = 0; i < args.length; i++) {
+                addColumn(simple, i, getStaticElementType(args[i]));
+            }
+            return ValueResultSet.get(simple);
+        }
         return (ValueResultSet) getUnnest(session, args);
+    }
+
+    private static boolean isConstantArguments(Expression[] args) {
+        for (Expression arg : args) {
+            if (!(arg instanceof ValueExpression)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // 常量数组取第一个非NULL元素的类型; 不是常量时没法知道元素类型, 退化成字符串
+    private static int getStaticElementType(Expression arg) {
+        if (arg instanceof ValueExpression) {
+            Value v = ((ValueExpression) arg).getValue(null);
+            if (v.getType() == Value.ARRAY) {
+                return getElementType(v);
+            }
+            if (v != ValueNull.INSTANCE) {
+                return v.getType();
+            }
+        }
+        return Value.STRING;
     }
 
     private Value getUnnest(ServerSession session, Expression[] args) {
@@ -73,10 +106,7 @@ public class UnnestFunction extends BuiltInFunction {
         SimpleResultSet simple = new SimpleResultSet();
         simple.setAutoClose(false);
         for (int i = 0; i < arrays.length; i++) {
-            int type = getElementType(arrays[i]);
-            DataType dataType = DataType.getDataType(type);
-            simple.addColumn(getColumnName(i), DataType.convertTypeToSQLType(type),
-                    MathUtils.convertLongToInt(dataType.defaultPrecision), dataType.defaultScale);
+            addColumn(simple, i, getElementType(arrays[i]));
         }
         for (int row = 0; row < rowCount; row++) {
             Object[] objects = new Object[arrays.length];
@@ -87,6 +117,12 @@ public class UnnestFunction extends BuiltInFunction {
             simple.addRow(objects);
         }
         return ValueResultSet.get(simple);
+    }
+
+    private static void addColumn(SimpleResultSet simple, int index, int type) {
+        DataType dataType = DataType.getDataType(type);
+        simple.addColumn(getColumnName(index), DataType.convertTypeToSQLType(type),
+                MathUtils.convertLongToInt(dataType.defaultPrecision), dataType.defaultScale);
     }
 
     // 列名用函数名(和PostgreSQL一致)，多个数组时加序号避免重名

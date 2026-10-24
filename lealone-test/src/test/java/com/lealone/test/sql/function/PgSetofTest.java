@@ -81,10 +81,11 @@ public class PgSetofTest extends SqlTestBase {
         executeUpdate("CREATE OR REPLACE FUNCTION scalar_fn(a INT) RETURNS INT AS $$ SELECT a $$");
         assertEquals("[1]", queryIntList("SELECT * FROM scalar_fn(1)").toString());
 
-        // select列表里不会展开成多行, 要明确报错
-        executeQueryThanAssertErrorCode("SELECT setof_int(1)", ErrorCode.FEATURE_NOT_SUPPORTED_1);
-        executeQueryThanAssertErrorCode("SELECT id, setof_int(1) FROM pgs_user",
-                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+        // select列表里的setof函数按PostgreSQL语义展开成多行(ProjectSet算子)
+        assertEquals("[1, 2, 3]", queryIntList("SELECT setof_int(1)").toString());
+        // 每条记录各自展开: 实参引用当前行的列
+        assertEquals("[1:1, 1:2, 1:3, 2:2, 2:3, 3:3]",
+                queryRowList("SELECT id, setof_int(id) FROM pgs_user").toString());
     }
 
     // RETURNS TABLE: 多列多行, 列名用声明的名字

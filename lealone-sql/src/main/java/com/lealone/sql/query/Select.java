@@ -26,6 +26,7 @@ import com.lealone.db.index.Index;
 import com.lealone.db.index.IndexColumn;
 import com.lealone.db.index.IndexType;
 import com.lealone.db.result.LocalResult;
+import com.lealone.db.schema.Schema;
 import com.lealone.db.result.Result;
 import com.lealone.db.result.ResultTarget;
 import com.lealone.db.result.SortOrder;
@@ -45,6 +46,7 @@ import com.lealone.sql.expression.SelectOrderBy;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
 import com.lealone.sql.expression.function.Function;
+import com.lealone.sql.expression.function.FunctionTable;
 import com.lealone.sql.expression.visitor.ExpressionVisitor;
 import com.lealone.sql.expression.visitor.ExpressionVisitorFactory;
 import com.lealone.sql.optimizer.ColumnResolver;
@@ -70,6 +72,9 @@ import com.lealone.sql.optimizer.TableFilter;
 public class Select extends Query {
 
     private TableFilter topTableFilter;
+    // 目标列表里的setof函数(select unnest(...)), 由QProjectSet算子按行展开
+    private SrfExpression[] srfExpressions;
+    private int[] srfIndexes;
     private final ArrayList<TableFilter> filters = Utils.newSmallArrayList();
     private final ArrayList<TableFilter> topFilters = Utils.newSmallArrayList();
     private ArrayList<Expression> group;
@@ -386,18 +391,18 @@ public class Select extends Query {
             orderList = null;
         }
         rawExpressionInfoList = new ArrayList<>(expressions.size());
+        ArrayList<Integer> srfIndexList = null;
         for (int i = 0; i < expressions.size(); i++) {
             Expression e = expressions.get(i);
             String[] eInfo = { e.getAlias(), e.getColumnName() };
             rawExpressionInfoList.add(eInfo);
             Expression nonAlias = e.getNonAliasExpression();
-            // PostgreSQL里setof函数出现在select列表会展开成多行，Lealone不支持这种展开，
-            // 这里明确报错，避免把整个结果集当成一个值返回
+            // PostgreSQL里目标列表中的setof函数要按行展开成多行(ProjectSet算子)
             if (nonAlias instanceof Function && ((Function) nonAlias).isSetReturning()) {
-                String name = ((Function) nonAlias).getFunctionName();
-                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
-                        "set-returning function " + name + " in select list, use SELECT * FROM "
-                                + name + "(...) instead");
+                if (srfIndexList == null) {
+                    srfIndexList = new ArrayList<>();
+                }
+                srfIndexList.add(i);
             }
             expressions.set(i, e.optimize(session));
         }
@@ -429,11 +434,11 @@ public class Select extends Query {
         // 以下3个if为特殊的distinct、sort、group by选择更合适的索引
         // 1. distinct
         if (distinct && session.getDatabase().getSettings().optimizeDistinct && !isGroupQuery
-                && filters.size() == 1 && condition == null) {
+                && filters.size() == 1 && condition == null && srfIndexList == null) {
             optimizeDistinct();
         }
         // 2. sort
-        if (sort != null && !isQuickAggregateQuery && !isGroupQuery) {
+        if (sort != null && !isQuickAggregateQuery && !isGroupQuery && srfIndexList == null) {
             optimizeSort();
         }
         // 3. group by
@@ -447,11 +452,55 @@ public class Select extends Query {
                 }
             }
         }
+        if (srfIndexList != null) {
+            prepareSrfExpressions(srfIndexList);
+        }
         expressionArray = new Expression[expressions.size()];
         expressions.toArray(expressionArray);
         isPrepared = true;
 
         return this;
+    }
+
+    // 目标列表里的setof函数用FunctionTable(和FROM里一样的链路)拿到结果集，再由QProjectSet逐行展开
+    private void prepareSrfExpressions(ArrayList<Integer> indexList) {
+        if (isGroupQuery || isGroupSortedQuery) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "set-returning function in select list with GROUP BY or aggregate function");
+        }
+        Schema schema = topTableFilter.getTable().getSchema();
+        int size = indexList.size();
+        srfExpressions = new SrfExpression[size];
+        srfIndexes = new int[size];
+        for (int i = 0; i < size; i++) {
+            int index = indexList.get(i);
+            Expression e = expressions.get(index);
+            Function function = (Function) e.getNonAliasExpression();
+            FunctionTable functionTable = new FunctionTable(schema, session, function);
+            // 目标列表里暂时只支持单列的setof函数，多列的请用SELECT * FROM函数名(...)
+            if (functionTable.getColumns().length != 1) {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "set-returning function " + function.getFunctionName()
+                                + " with more than one column in select list, use SELECT * FROM "
+                                + function.getFunctionName() + "(...) instead");
+            }
+            srfExpressions[i] = new SrfExpression(function, functionTable, e.getAlias(),
+                    e.getColumnName());
+            srfIndexes[i] = index;
+            expressions.set(index, srfExpressions[i]);
+        }
+    }
+
+    boolean hasSrfExpressions() {
+        return srfExpressions != null;
+    }
+
+    SrfExpression[] getSrfExpressions() {
+        return srfExpressions;
+    }
+
+    int[] getSrfIndexes() {
+        return srfIndexes;
     }
 
     private void optimizeDistinct() {
