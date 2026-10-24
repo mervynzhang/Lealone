@@ -511,10 +511,14 @@ select functest_S_15(3) r;
 
 -- @case function_sql.pg_get_functiondef_sqlbody
 -- @pg create_function_sql.sql:214-228
--- 缺失: Lealone 没有 pg_get_functiondef() 和 regproc
-select pg_get_functiondef('functest_S_1'::regproc);
-select pg_get_functiondef('functest_S_15'::regproc);
--- PG 期望: 返回函数定义文本, SQL 标准体被转写成 AS 体
+-- 适配: Lealone 现在支持 SQL 标准函数体(RETURN <expr>/BEGIN ATOMIC)，但没有 regproc 类型，
+--       所以直接传函数名字符串(和上一个 pg_get_functiondef 用例一样)。
+--       RETURN 体的函数定义会被规范化成 AS 'SELECT ...'，BEGIN ATOMIC 体原样保留。
+select pg_get_functiondef('functest_S_1');
+>> CREATE FUNCTION FUNCTEST_S_1(A TEXT, B DATE) RETURNS BOOLEAN VOLATILE CALLED ON NULL INPUT AS 'SELECT a = ''abcd'' and b > date ''2001-01-01'''
+
+select pg_get_functiondef('functest_S_15');
+>> CREATE FUNCTION FUNCTEST_S_15(A INT) RETURNS BOOLEAN VOLATILE CALLED ON NULL INPUT BEGIN ATOMIC select case when a % 2 = 0 then true else false end; END
 
 -- @case function_sql.sql_body_view
 -- @pg create_function_sql.sql:232-242
