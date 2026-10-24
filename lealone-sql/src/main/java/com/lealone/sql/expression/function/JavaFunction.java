@@ -21,6 +21,7 @@ import com.lealone.db.value.ValueNull;
 import com.lealone.db.value.ValueResultSet;
 import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.expression.Expression;
+import com.lealone.sql.expression.ExpressionColumn;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.visitor.ExpressionVisitor;
 
@@ -36,12 +37,14 @@ public class JavaFunction extends Function {
     private FunctionAlias functionAlias;
     private final ArrayList<FunctionAlias> candidates;
     private FunctionAlias.JavaMethod javaMethod;
+    private final boolean[] untypedArguments;
 
     public JavaFunction(FunctionAlias functionAlias, Expression[] args) {
         this.functionAlias = functionAlias;
         this.candidates = null;
         this.javaMethod = functionAlias.findJavaMethod(args);
         this.args = args;
+        this.untypedArguments = getUntypedArguments(args);
         checkArgumentTypes();
     }
 
@@ -52,6 +55,34 @@ public class JavaFunction extends Function {
     public JavaFunction(ArrayList<FunctionAlias> candidates, Expression[] args) {
         this.candidates = candidates;
         this.args = args;
+        this.untypedArguments = getUntypedArguments(args);
+    }
+
+    // 字符串字面量在PostgreSQL里是没有类型的，可以按参数声明的类型解析，
+    // 这里记录下来，实参optimize成常量之后也还能按“没有类型”参与重载消解
+    private static boolean[] getUntypedArguments(Expression[] args) {
+        boolean[] untyped = new boolean[args.length];
+        for (int i = 0; i < args.length; i++) {
+            untyped[i] = args[i] instanceof ValueExpression && args[i].getType() == Value.STRING;
+        }
+        return untyped;
+    }
+
+    // 实参的静态类型，没有类型的字面量当成UNKNOWN
+    private int[] getArgumentTypeIds() {
+        int[] argumentTypeIds = new int[args.length];
+        for (int i = 0; i < args.length; i++) {
+            argumentTypeIds[i] = untypedArguments[i] ? Value.UNKNOWN : getType(args[i]);
+        }
+        return argumentTypeIds;
+    }
+
+    // 列表达式在mapColumns之前还拿不到类型，这时先当成UNKNOWN，等optimize之后再消解
+    private static int getType(Expression expr) {
+        if (expr instanceof ExpressionColumn && ((ExpressionColumn) expr).getColumn() == null) {
+            return Value.UNKNOWN;
+        }
+        return expr.getType();
     }
 
     // 按实参类型在候选函数里消解重载，匹配程度最好的那个胜出，一样好就算歧义
@@ -59,10 +90,7 @@ public class JavaFunction extends Function {
         if (javaMethod != null || candidates == null) {
             return;
         }
-        int[] argumentTypeIds = new int[args.length];
-        for (int i = 0; i < args.length; i++) {
-            argumentTypeIds[i] = args[i].getType();
-        }
+        int[] argumentTypeIds = getArgumentTypeIds();
         FunctionAlias best = null;
         int bestScore = Integer.MAX_VALUE;
         boolean ambiguous = false;
@@ -97,11 +125,7 @@ public class JavaFunction extends Function {
         if (!(functionAlias instanceof SqlFunction)) {
             return;
         }
-        int[] argumentTypeIds = new int[args.length];
-        for (int i = 0; i < args.length; i++) {
-            argumentTypeIds[i] = args[i].getType();
-        }
-        if (((SqlFunction) functionAlias).getMatchScore(argumentTypeIds) == SqlFunction.MATCH_NONE) {
+        if (((SqlFunction) functionAlias).getMatchScore(getArgumentTypeIds()) == SqlFunction.MATCH_NONE) {
             throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, getSignatureText());
         }
     }
@@ -115,7 +139,7 @@ public class JavaFunction extends Function {
             int count = m.getParameterCount();
             if (count == argumentTypeIds.length
                     || (m.isVarArgs() && count <= argumentTypeIds.length + 1)) {
-                return SqlFunction.MATCH_WEAK;
+                return SqlFunction.MATCH_UNTYPED;
             }
         }
         return SqlFunction.MATCH_NONE;
@@ -124,9 +148,11 @@ public class JavaFunction extends Function {
     // 用于报错信息的调用签名，例如 F(INT, VARCHAR)
     private String getSignatureText() {
         StatementBuilder buff = new StatementBuilder(getName()).append('(');
+        int[] argumentTypeIds = getArgumentTypeIds();
         for (int i = 0; i < args.length; i++) {
             buff.appendExceptFirst(", ");
-            buff.append(DataType.getDataType(args[i].getType()).name);
+            buff.append(argumentTypeIds[i] == Value.UNKNOWN ? "UNKNOWN"
+                    : DataType.getDataType(argumentTypeIds[i]).name);
         }
         return buff.append(')').toString();
     }

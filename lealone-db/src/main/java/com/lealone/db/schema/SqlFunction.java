@@ -352,11 +352,11 @@ public class SqlFunction extends FunctionAlias {
 
     /** 实参类型和参数类型完全一致，匹配程度最高 */
     public static final int MATCH_EXACT = 0;
-    /** 实参类型和参数类型属于同一类型族，可以隐式转换 */
-    public static final int MATCH_FAMILY = 1;
-    /** 实参类型未知(比如NULL)或者要跨类型族转换，匹配程度最低 */
-    public static final int MATCH_WEAK = 2;
-    /** 类型不兼容，这个函数不可能是被调用的重载 */
+    /** 实参类型可以隐式转成参数类型(PostgreSQL的castcontext=implicit) */
+    public static final int MATCH_IMPLICIT = 1;
+    /** 实参是没有类型的字面量(比如'5')或者NULL，由参数类型决定它的类型 */
+    public static final int MATCH_UNTYPED = 2;
+    /** 类型不兼容，需要显式CAST，这个函数不可能是被调用的重载 */
     public static final int MATCH_NONE = -1;
 
     /**
@@ -392,52 +392,69 @@ public class SqlFunction extends FunctionAlias {
         if (argumentType == parameterType) {
             return MATCH_EXACT;
         }
-        // 实参类型未知时先按弱匹配算，等optimize拿到类型后再决定
+        // 实参没有类型(NULL或者字符串字面量)时由参数类型决定，
+        // 和PostgreSQL一样优先选字符串类型的重载
         if (argumentType == Value.UNKNOWN || argumentType == Value.NULL) {
-            return MATCH_WEAK;
+            return DataType.isStringType(parameterType) ? MATCH_IMPLICIT : MATCH_UNTYPED;
         }
         if (parameterType == Value.UNKNOWN || parameterType == Value.NULL) {
-            return MATCH_WEAK;
+            return MATCH_UNTYPED;
         }
-        if (isSameTypeFamily(argumentType, parameterType)) {
-            return MATCH_FAMILY;
-        }
-        // 字符串到其它类型一直是可以转的(和PostgreSQL的未知类型字面量规则类似)，
-        // 但反过来不行: 数字/日期要当字符串用必须显式CAST，这一点和PostgreSQL一致
-        if (DataType.isStringType(argumentType)) {
-            return MATCH_WEAK;
+        if (isImplicitConvertible(argumentType, parameterType)) {
+            return MATCH_IMPLICIT;
         }
         return MATCH_NONE;
     }
 
-    private static boolean isSameTypeFamily(int type1, int type2) {
-        if (isNumericType(type1) && isNumericType(type2)) {
-            return true;
-        }
-        if (isDateTimeType(type1) && isDateTimeType(type2)) {
+    /**
+     * 实参类型能否隐式转成参数类型。只覆盖PostgreSQL里castcontext为implicit的类型对，
+     * 比如整数加宽、数值转浮点、字符串类型之间、DATE转TIMESTAMP；
+     * 而 int转varchar、varchar转int、boolean转int 这些在PostgreSQL里都不是隐式转换，
+     * 必须显式CAST，否则函数调用会报函数不存在。
+     */
+    public static boolean isImplicitConvertible(int fromType, int toType) {
+        if (fromType == toType) {
             return true;
         }
         // 字符串类型之间可以隐式转换，比如VARCHAR到CHAR
-        return DataType.isStringType(type1) && DataType.isStringType(type2);
-    }
-
-    private static boolean isNumericType(int type) {
-        switch (type) {
-        case Value.BYTE:
-        case Value.SHORT:
-        case Value.INT:
-        case Value.LONG:
-        case Value.DECIMAL:
-        case Value.DOUBLE:
-        case Value.FLOAT:
+        if (DataType.isStringType(fromType) && DataType.isStringType(toType)) {
             return true;
+        }
+        // DECIMAL在Lealone里还兼作"数值类型还没推导出来"的默认类型(比如函数体里没类型的
+        // 参数占位符参与运算时就是DECIMAL)，所以DECIMAL转其它数值类型也按隐式转换处理
+        if (fromType == Value.DECIMAL && isNumericType(toType)) {
+            return true;
+        }
+        switch (toType) {
+        // 整数只能往更宽的类型转
+        case Value.SHORT:
+            return fromType == Value.BYTE;
+        case Value.INT:
+            return fromType == Value.BYTE || fromType == Value.SHORT;
+        case Value.LONG:
+            return fromType == Value.BYTE || fromType == Value.SHORT || fromType == Value.INT;
+        // 整数和REAL可以隐式转成DECIMAL/DOUBLE
+        case Value.DECIMAL:
+            return isIntegerType(fromType) || fromType == Value.FLOAT;
+        case Value.DOUBLE:
+            return isIntegerType(fromType) || fromType == Value.FLOAT || fromType == Value.DECIMAL;
+        case Value.FLOAT:
+            return isIntegerType(fromType);
+        // PostgreSQL允许DATE隐式转TIMESTAMP，反过来不行
+        case Value.TIMESTAMP:
+            return fromType == Value.DATE;
         default:
             return false;
         }
     }
 
-    private static boolean isDateTimeType(int type) {
-        return type == Value.DATE || type == Value.TIME || type == Value.TIMESTAMP;
+    private static boolean isIntegerType(int type) {
+        return type == Value.BYTE || type == Value.SHORT || type == Value.INT || type == Value.LONG;
+    }
+
+    private static boolean isNumericType(int type) {
+        return isIntegerType(type) || type == Value.DECIMAL || type == Value.DOUBLE
+                || type == Value.FLOAT;
     }
 
     // 用于报错信息的签名，例如 F(INT, VARCHAR)
