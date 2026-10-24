@@ -9,7 +9,9 @@ import java.lang.reflect.Method;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Arrays;
 
@@ -898,7 +900,7 @@ public class SqlFunction extends FunctionAlias {
         if (!rs.next()) {
             return ValueNull.INSTANCE;
         }
-        Value v = DataType.convertToValue(session, rs.getObject(1), returnType);
+        Value v = getBodyValue(session, rs, 1, returnType);
         return v.convertTo(returnType);
     }
 
@@ -1034,10 +1036,41 @@ public class SqlFunction extends FunctionAlias {
         Value[] row = new Value[outputIndexes.length];
         for (int i = 0; i < outputIndexes.length; i++) {
             int type = parameterTypeIds[outputIndexes[i]];
-            Value v = DataType.convertToValue(session, rs.getObject(i + 1), type);
+            Value v = getBodyValue(session, rs, i + 1, type);
             row[i] = v.convertTo(type);
         }
         return ValueArray.get(row);
+    }
+
+    /**
+     * 取函数体结果集里一列的值。时间类型必须按"墙上时间"取值：java.sql.Timestamp/Date/Time
+     * 表示的是epoch毫秒，转回Value时要按JVM默认时区把毫秒拆成年月日时分秒，
+     * 而DateTimeUtils缓存了第一次用到时的Calendar，运行期默认时区变过之后(比如测试里改了
+     * TimeZone.setDefault)就会和显式CAST(DATE AS TIMESTAMP)差一个时区偏移，
+     * 所以时间列改成按结果集里的文本还原，和显式CAST一样只用墙上时间字段。
+     */
+    private static Value getBodyValue(ServerSession session, ResultSet rs, int column, int targetType)
+            throws SQLException {
+        int sourceType = getDateTimeType(rs.getMetaData().getColumnType(column));
+        if (sourceType != Value.UNKNOWN) {
+            return DataType.convertToValue(session, rs.getString(column), sourceType)
+                    .convertTo(sourceType).convertTo(targetType);
+        }
+        return DataType.convertToValue(session, rs.getObject(column), targetType);
+    }
+
+    // 结果集里的列是时间类型时返回对应的Value类型，否则返回UNKNOWN
+    private static int getDateTimeType(int sqlType) {
+        switch (sqlType) {
+        case Types.DATE:
+            return Value.DATE;
+        case Types.TIME:
+            return Value.TIME;
+        case Types.TIMESTAMP:
+            return Value.TIMESTAMP;
+        default:
+            return Value.UNKNOWN;
+        }
     }
 
     private Value createEmptyResultSet() {
