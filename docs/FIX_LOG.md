@@ -16,6 +16,7 @@
 |---|---|---|---|---|
 | 1 | 关联子查询只在最内层与外层关联时，中间层子查询结果被跨外层行复用，返回上一行的过期值（静默错数据） | `CorrelatedVisitor` 展开嵌套子查询，并把嵌套查询自己的 `TableFilter` 并入"自己的列"集合 | 新增 `CorrelatedSubqueryTest` 4 例；回退本改动后正好两条嵌套用例变红（`expected:<2> but was:<1>`），两条对照仍绿 | 已修复 |
 | 2 | 异步提交回调在事务已结束时会丢失（语句挂死），重复提交时会重复执行（客户端收到两次响应） | `undoLog == null` 时补调 `asyncCommitComplete()`；`asyncCommitComplete()` 先取走 `asyncTask` 再置空，保证恰好一次 | 新增 `AsyncCommitCallbackTest` 2 例；去掉补调 → 30s 超时"没有回调"；去掉取走置空 → `expected:<1> but was:<2>` | 已修复 |
+| 18 | 全量备份把每个文件读两遍（先算 crc 决定是否写，再读一遍写 zip），而全量备份每个文件都要写、根本不需要先算 crc | 全量备份改为**边写边算 crc 只读一遍**；增量备份保留两遍（必须先算 crc 才能和基准清单比对） | 插桩实测（6 万行 / 19MB 数据）：读取量 **39MB → 19MB**（正好省掉一整遍全库读）；墙钟 212ms→233ms（页缓存命中时无差别，冷缓存/大库才有收益）。`BackupTest`/`IncrementalBackupTest`/`CheckpointDurabilityTest`/`ScriptRoundTripTest`/`CompactTest` 共 11 项全绿；新增 `BackupManifestCrcTest` 断言清单里每个条目都仍有 size 与 crc32 | 已修复 |
 | 17 | `AOTransaction.rollbackToSavepoint` 对"事务已结束"静默 return（与已回退的 `137de5658` 同型）：直接调用方（`Connection.rollback(savepoint)`）看不到这个编程错误 | 事务层恢复 `checkNotClosed()`；把容错移到真正的收尾点 `ServerSession.rollbackCurrentCommand`——捕获后打 warn 并**保证仍执行解锁**，语句不会挂死、锁也不会泄漏 | 新增 `SavepointRollbackAfterCloseTest` 3 例（提交后/回滚后回滚保存点要抛异常、引擎仍可用）；回退事务层改动后 3 例中 2 例红。另跑 9 个错误路径相关用例共 22 项全绿，无挂死 | 已修复 |
 | 16 | 单表查询去重表超过 10 万条后**静默**停止去重，之后若出现重复行完全无从判断原因 | 保留上限（防内存无界增长），超过时打一次 warn 说明"本语句后续不再去重" | 新增 `FlatQueryDedupeLimitTest`（10.01 万行，批量插入 1.15s）；服务端日志实测恰好出现 1 次该 warn，且超限后行数仍准确（100100 行、`a=3` 10010 行） | 已修复（改为可见） |
 | 15 | 加密文件/损坏文件的块长度越界时**静默**当 EOF，LOB 读损坏数据会被悄悄截断且事后无法排查 | 保留"按 EOF 处理"的契约（`ScriptBase.verifyMagic` 已有明确的加密错误），但补一条 warn 日志带上块长度/可用长度/文件名 | 新增 `FileStorageTest.testChunkLengthExceedsFileSize`（长度为正但超出文件范围，此前只覆盖 `Integer.MAX_VALUE` 极端值）；`FileStorageTest` 5/5 通过 | 已修复（改为可见） |
@@ -50,7 +51,6 @@
 |---|---|---|
 | 17 | 每条 UPDATE/DELETE 多一次 `map.put`（页锁 + 可能分裂） | `AOTransactionMap.java:453-457` |
 | 19 | 每次事务性叶子页写多一次 `getCommittedObjects` + 每行 `copySelf`，最坏 4 次序列化，且重试 3 次后静默放弃 | `RowStorageLeafPage.java:87-127` |
-| 20 | 全量备份也把整个库读两遍（crc 预读 + 写 zip） | `StorageBase.java:275-300` |
 | 21 | 每个游标一份 HashMap 随扫描行数无界增长 | `StandardSecondaryIndex.java:326,385-411` |
 
 ### 测试基建
