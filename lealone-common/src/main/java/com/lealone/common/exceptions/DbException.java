@@ -116,6 +116,21 @@ public class DbException extends RuntimeException {
      * @param sql the SQL statement
      * @return the exception
      */
+    /**
+     * 是否是数据类错误(SQLSTATE 22xxx: 除以0、转换失败、数值越界、值超长等)。
+     * 常量折叠时这类错误是正常的(例如 CASE/COALESCE 里不会被求值的分支)，可以容忍；
+     * 内部错误/参数未设置这类错误则必须抛出去，不能被吞掉。
+     */
+    public static boolean isDataException(Throwable e) {
+        DbException dbe = convert(e);
+        try {
+            int code = dbe.getErrorCode();
+            return code >= 22000 && code < 23000;
+        } catch (Exception e2) { // 不是SQL异常时按非数据错误处理
+            return false;
+        }
+    }
+
     public DbException addSQL(String sql) {
         SQLException e = getSQLException();
         if (e instanceof JdbcSQLException) {
