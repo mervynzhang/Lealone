@@ -1319,6 +1319,19 @@ public class Database extends DbObjectBase implements DataHandler {
         return new ArrayList<>(map.values());
     }
 
+    /**
+     * 对象上有没有授权记录(包括REVOKE之后留下的0权限标记)。
+     * 函数/过程的EXECUTE检查只在有授权记录时才做，没有授权历史的对象保持"人人可调用"的历史行为。
+     */
+    public boolean hasGrantedRights(DbObject object) {
+        HashMap<String, Right> map = getDbObjects(DbObjectType.RIGHT);
+        for (Right right : map.values()) {
+            if (right.getGrantedObject() == object)
+                return true;
+        }
+        return false;
+    }
+
     public ArrayList<Role> getAllRoles() {
         HashMap<String, Role> map = getDbObjects(DbObjectType.ROLE);
         return new ArrayList<>(map.values());

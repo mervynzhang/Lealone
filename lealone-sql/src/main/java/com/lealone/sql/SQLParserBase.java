@@ -154,6 +154,7 @@ import com.lealone.sql.dml.Restore;
 import com.lealone.sql.dml.RunScript;
 import com.lealone.sql.dml.SetDatabase;
 import com.lealone.sql.dml.SetSession;
+import com.lealone.sql.dml.SetRole;
 import com.lealone.sql.dml.SetSessionAuthorization;
 import com.lealone.sql.dml.SetStatement;
 import com.lealone.sql.dml.TransactionStatement;
@@ -6612,7 +6613,9 @@ public class SQLParserBase implements SQLParser {
     }
 
     protected StatementBase parseReset() {
-        // 只支持RESET SESSION AUTHORIZATION
+        // RESET ROLE恢复成登录用户
+        if (readIf("ROLE"))
+            return new SetRole(session);
         read("SESSION");
         read("AUTHORIZATION");
         // 不写用户名表示恢复成登录用户
@@ -6621,7 +6624,15 @@ public class SQLParserBase implements SQLParser {
     }
 
     protected StatementBase parseSet() {
-        if (readIf("SESSION")) {
+        if (readIf("ROLE")) {
+            // SET ROLE <角色/用户> / SET ROLE NONE(等价于RESET ROLE)
+            SetRole command = new SetRole(session);
+            readIfEqualOrTo();
+            if (!readIf("NONE")) {
+                command.setRoleName(readAliasIdentifier());
+            }
+            return command;
+        } else if (readIf("SESSION")) {
             // SET SESSION AUTHORIZATION <user>
             read("AUTHORIZATION");
             SetSessionAuthorization command = new SetSessionAuthorization(session);

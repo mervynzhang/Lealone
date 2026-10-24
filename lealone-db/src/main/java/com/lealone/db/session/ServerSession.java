@@ -27,6 +27,12 @@ import com.lealone.db.ConnectionSetting;
 import com.lealone.db.Constants;
 import com.lealone.db.DataHandler;
 import com.lealone.db.Database;
+import com.lealone.db.DbObject;
+import com.lealone.db.api.ErrorCode;
+import com.lealone.db.auth.Right;
+import com.lealone.db.auth.RightOwner;
+import com.lealone.db.schema.SqlFunction;
+import com.lealone.db.schema.SqlProcedure;
 import com.lealone.db.DbSetting;
 import com.lealone.db.LealoneDatabase;
 import com.lealone.db.ManualCloseable;
@@ -91,6 +97,8 @@ public class ServerSession extends SessionBase implements InternalSession {
     private final User user;
     // 当前用户, SET SESSION AUTHORIZATION 只改这个
     private User currentUser;
+    // SET ROLE之后的当前角色, null表示没切换过(SET ROLE NONE/RESET ROLE恢复成null)
+    private RightOwner currentRole;
     private final int id;
     private final ArrayList<Lock> locks = new ArrayList<>();
     private Random random;
@@ -429,6 +437,53 @@ public class ServerSession extends SessionBase implements InternalSession {
 
     public void setCurrentUser(User currentUser) {
         this.currentUser = currentUser;
+    }
+
+    // SET ROLE之后的当前角色, null表示做权限检查时用当前用户
+    public RightOwner getCurrentRole() {
+        return currentRole;
+    }
+
+    public void setCurrentRole(RightOwner currentRole) {
+        this.currentRole = currentRole;
+    }
+
+    /**
+     * 函数/过程的EXECUTE权限检查。
+     * 没有授权记录时人人可调用(保持历史行为，避免大面积破坏既有用例)；
+     * 有授权记录时按PostgreSQL语义检查：超级用户和属主总是可以，PUBLIC的授权对所有人生效，
+     * 具体用户/角色的授权按角色继承，SET ROLE之后按当前角色检查。
+     */
+    public void checkExecuteRight(DbObject object) {
+        // 回放sys(meta)时对象还没全部创建出来，不做权限检查
+        if (database.isStarting())
+            return;
+        // SET ROLE之后按当前角色算权限, SET SESSION AUTHORIZATION之后按当前用户算,
+        // 所以超级用户在被SET SESSION AUTHORIZATION切成普通用户后也要受检查(和PostgreSQL一致)
+        RightOwner principal = currentRole != null ? currentRole : getUser();
+        if (principal instanceof User && ((User) principal).isAdmin())
+            return;
+        if (!database.hasGrantedRights(object))
+            return;
+        if (isOwner(object, principal))
+            return;
+        Right publicRight = database.getPublicRole().getRightForObject(object);
+        if (publicRight != null && (publicRight.getRightMask() & Right.EXECUTE) != 0)
+            return;
+        if (principal.isRightGrantedFor(object, Right.EXECUTE))
+            return;
+        throw DbException.get(ErrorCode.INSUFFICIENT_PRIVILEGE_1, object.getSQL());
+    }
+
+    // 属主总是可以执行自己的函数/过程(属主默认是创建者，只有显式OWNER TO时才有名字)
+    private static boolean isOwner(DbObject object, RightOwner principal) {
+        String ownerName = null;
+        if (object instanceof SqlFunction) {
+            ownerName = ((SqlFunction) object).getOwnerName();
+        } else if (object instanceof SqlProcedure) {
+            ownerName = ((SqlProcedure) object).getOwnerName();
+        }
+        return ownerName != null && ownerName.equalsIgnoreCase(principal.getName());
     }
 
     public int getLockTimeout() {
@@ -1109,6 +1164,8 @@ public class ServerSession extends SessionBase implements InternalSession {
     private ServerSession createNestedSession(User user, boolean add) {
         ServerSession session = database.createSession(user, getScheduler());
         session.setAutoCommit(isAutoCommit());
+        // 嵌套会话(函数体/过程体)沿用SET ROLE切出来的角色，权限检查口径和调用方一致
+        session.setCurrentRole(currentRole);
         if (add) {
             if (nestedSessions == null) {
                 nestedSessions = new ArrayList<>();

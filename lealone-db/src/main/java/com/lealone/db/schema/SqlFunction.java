@@ -1141,6 +1141,8 @@ public class SqlFunction extends FunctionAlias {
     }
 
     private Value executeBody(ServerSession session, IExpression[] args, boolean columnList) {
+        // 有授权记录时才检查EXECUTE权限，没有授权历史的对象保持"人人可调用"
+        session.checkExecuteRight(this);
         boolean setReturning = isSetReturning();
         // setof/table和多个OUT参数需要返回列定义, 但只有setof/table真的返回多行
         boolean rowReturning = setReturning || isRecordReturning();

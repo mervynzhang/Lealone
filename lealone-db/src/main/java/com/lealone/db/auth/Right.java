@@ -147,36 +147,45 @@ public class Right extends DbObjectBase {
 
     @Override
     public String getCreateSQL() {
+        // 0权限记录是"显式REVOKE掉了"的标记(函数/过程才有)，回放时也要还原成REVOKE
+        if (grantedRole == null && grantedRight == 0 && grantedObject != null) {
+            StringBuilder buff = new StringBuilder("REVOKE EXECUTE");
+            appendObjectSQL(buff, grantedObject);
+            buff.append(" FROM ").append(grantee.getSQL());
+            return buff.toString();
+        }
         StringBuilder buff = new StringBuilder();
         buff.append("GRANT ");
         if (grantedRole != null) {
             buff.append(grantedRole.getSQL());
         } else {
             buff.append(getRights());
-            if (grantedObject != null) {
-                if (grantedObject instanceof Schema) {
-                    buff.append(" ON SCHEMA ").append(grantedObject.getSQL());
-                } else if (grantedObject instanceof Service) {
-                    buff.append(" ON SERVICE ").append(grantedObject.getSQL());
-                } else if (grantedObject instanceof Table) {
-                    buff.append(" ON ").append(grantedObject.getSQL());
-                } else if (grantedObject instanceof SqlProcedure) {
-                    // 过程要带上完整参数签名，回放时才能定位到指定的重载
-                    SqlProcedure procedure = (SqlProcedure) grantedObject;
-                    buff.append(" ON PROCEDURE ").append(procedure.getSQL()).append('(')
-                            .append(procedure.getParameterSignatureSQL()).append(')');
-                } else if (grantedObject instanceof FunctionAlias) {
-                    buff.append(" ON FUNCTION ").append(grantedObject.getSQL());
-                    if (grantedObject instanceof SqlFunction) {
-                        buff.append('(')
-                                .append(((SqlFunction) grantedObject).getInputParameterTypesSQL())
-                                .append(')');
-                    }
-                }
-            }
+            appendObjectSQL(buff, grantedObject);
         }
         buff.append(" TO ").append(grantee.getSQL());
         return buff.toString();
+    }
+
+    // 拼出" ON SCHEMA ..."/" ON PROCEDURE ...(签名)"这段，GRANT和REVOKE共用
+    private static void appendObjectSQL(StringBuilder buff, DbObject object) {
+        if (object instanceof Schema) {
+            buff.append(" ON SCHEMA ").append(object.getSQL());
+        } else if (object instanceof Service) {
+            buff.append(" ON SERVICE ").append(object.getSQL());
+        } else if (object instanceof Table) {
+            buff.append(" ON ").append(object.getSQL());
+        } else if (object instanceof SqlProcedure) {
+            // 过程要带上完整参数签名，回放时才能定位到指定的重载
+            SqlProcedure procedure = (SqlProcedure) object;
+            buff.append(" ON PROCEDURE ").append(procedure.getSQL()).append('(')
+                    .append(procedure.getParameterSignatureSQL()).append(')');
+        } else if (object instanceof FunctionAlias) {
+            buff.append(" ON FUNCTION ").append(object.getSQL());
+            if (object instanceof SqlFunction) {
+                buff.append('(').append(((SqlFunction) object).getInputParameterTypesSQL())
+                        .append(')');
+            }
+        }
     }
 
     @Override

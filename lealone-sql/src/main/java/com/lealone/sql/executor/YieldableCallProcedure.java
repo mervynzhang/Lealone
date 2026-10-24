@@ -75,6 +75,8 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
 
     @Override
     protected void startInternal() {
+        // 有授权记录时才检查EXECUTE权限，没有授权历史的对象保持"人人可调用"
+        session.checkExecuteRight(procedure);
         evalArgs();
         nestedSession = session.createNestedSession();
         if (session.isAutoCommit())
