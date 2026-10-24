@@ -83,8 +83,7 @@ public class AlterSqlFunction extends SchemaStatement {
     }
 
     // 按名字和参数类型找要修改的函数，有重载时必须写参数类型
-    private FunctionAlias findFunction() {
-        ArrayList<FunctionAlias> list = schema.findFunctions(session, functionName);
+    private FunctionAlias findFunction(ArrayList<FunctionAlias> list) {
         if (list.isEmpty()) {
             return null;
         }
@@ -114,12 +113,17 @@ public class AlterSqlFunction extends SchemaStatement {
         if (lock == null)
             return -1;
 
-        FunctionAlias function = findFunction();
+        ArrayList<FunctionAlias> list = schema.findFunctions(session, functionName);
+        FunctionAlias function = findFunction(list);
         if (function == null) {
             if (ifExists) {
                 return 0;
             }
-            throw DbException.get(ErrorCode.FUNCTION_ALIAS_NOT_FOUND_1, functionName);
+            // 名字根本不存在和参数类型对不上是两种错误
+            if (list.isEmpty()) {
+                throw DbException.get(ErrorCode.FUNCTION_ALIAS_NOT_FOUND_1, functionName);
+            }
+            throw DbException.get(ErrorCode.FUNCTION_NOT_FOUND_1, functionName);
         }
         if (!(function instanceof SqlFunction)) {
             // CREATE ALIAS建的Java函数没有这些属性
