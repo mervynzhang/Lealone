@@ -133,6 +133,18 @@ public class StringFunctionMatrixTest extends SqlAssertTestBase {
         assertQueryEquals(24L, "SELECT BIT_LENGTH('中')");
     }
 
+    // 二进制类型的字节数就是字节数本身: 不能转成十六进制字符串再数(那样会翻倍)
+    @Test
+    public void octetAndBitLengthOnBinary() {
+        assertQueryEquals(1L, "SELECT OCTET_LENGTH(CAST(X'41' AS BINARY))");
+        assertQueryEquals(8L, "SELECT BIT_LENGTH(CAST(X'41' AS BINARY))");
+        assertQueryEquals(2L, "SELECT OCTET_LENGTH(CAST(X'00FF' AS BLOB))");
+        assertQueryEquals(16L, "SELECT BIT_LENGTH(CAST(X'00FF' AS BLOB))");
+        // 多字节文本仍按 UTF-8 字节算
+        assertQueryEquals(6L, "SELECT OCTET_LENGTH('中文')");
+        assertQueryEquals(48L, "SELECT BIT_LENGTH('中文')");
+    }
+
     // BUG: 没有 QUOTE_IDENT 函数（90022 FUNCTION_NOT_FOUND_1）。
     // QUOTE_IDENT返回带双引号且内部引号翻倍的标识符
     @Test
