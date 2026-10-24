@@ -698,6 +698,33 @@ public class PlpgsqlTest extends SqlTestBase {
         assertSqlState("2F005", "SELECT * FROM plp_bad_setof_return()");
     }
 
+    // plpgsql的SETOF/TABLE函数要能通过SCRIPT重建
+    @Test
+    public void testSetofRoundTrip() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_rt_t");
+        executeUpdate("CREATE TABLE plp_rt_t(id INT PRIMARY KEY, name VARCHAR(20))");
+        executeUpdate("INSERT INTO plp_rt_t VALUES(1, 'a'), (2, 'b')");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_table_rt(p INT) RETURNS TABLE(id INT, name VARCHAR) LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN QUERY SELECT t.id, t.name FROM plp_rt_t t WHERE t.id >= p ORDER BY t.id; END; $$");
+        String createSql = getCreateSql("PLP_TABLE_RT");
+        assertNotNull(createSql);
+        assertTrue(createSql, createSql.contains("RETURNS TABLE"));
+        assertTrue(createSql, createSql.toLowerCase().contains("language plpgsql"));
+        executeUpdate("DROP FUNCTION plp_table_rt");
+        executeUpdate(createSql);
+        assertEquals("[2:b]", queryRowList("SELECT id, name FROM plp_table_rt(2)").toString());
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_setof_rt() RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN NEXT 1; RETURN NEXT 2; END; $$");
+        String setofSql = getCreateSql("PLP_SETOF_RT");
+        assertNotNull(setofSql);
+        assertTrue(setofSql, setofSql.contains("RETURNS SETOF INT"));
+        executeUpdate("DROP FUNCTION plp_setof_rt");
+        executeUpdate(setofSql);
+        assertEquals("[1, 2]",
+                queryIntList("SELECT * FROM plp_setof_rt() ORDER BY 1").toString());
+    }
+
     // GET DIAGNOSTICS ... = ROW_COUNT
     @Test
     public void testGetDiagnosticsRowCount() throws Exception {
