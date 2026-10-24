@@ -165,11 +165,8 @@ public class DdlCascadeTest extends SqlAssertTestBase {
     // 以下为已确认缺陷（期望值按 SQL 标准与 H2 2.4.240 实测）
     // ------------------------------------------------------------------
 
-    // BUG: ALTER TABLE ... DROP COLUMN 被视图引用时，报的是 90109 (VIEW_IS_INVALID_2)，
-    // 而且错误信息错位：把 SQL 语句本身当作视图名。
-    // 期望: 90083 COLUMN_IS_REFERENCED_1，信息形如 "Column B is referenced by view DC_V1"；
-    // 实际: 90109，信息是 View "ALTER TABLE dc_t DROP COLUMN b" is invalid: Column "B" not found。
-    @Ignore("BUG: DROP COLUMN referenced by a view reports 90109 with the SQL text as the view name; expected 90083")
+    // ALTER TABLE ... DROP COLUMN 被视图引用时，报 90083 COLUMN_IS_REFERENCED_1，
+    // 信息形如 "Column may be referenced by "DC_V1""，不能把 DDL 语句本身当成视图名。
     @Test
     public void dropColumnReferencedByViewErrorCode() {
         cleanup();
