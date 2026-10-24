@@ -515,6 +515,15 @@ public class StandardTable extends Table {
         AtomicInteger count = new AtomicInteger(size);
         AtomicBoolean isFailed = new AtomicBoolean();
         Value[] oldColumns = row.getColumns(); // 会改变，所以提前保留旧的
+        if (oldColumns == null) {
+            // 有的计划路径只带主键过来(行里的列值为null, 比如按主键删除时只读了主键)。
+            // 删除要按索引列算key来删二级索引项, 没有列值会直接空指针; 这里补读一次完整行。
+            Row fullRow = primaryIndex.getRow(session, row.getKey(), null);
+            if (fullRow != null) {
+                oldColumns = fullRow.getColumns();
+                row = fullRow;
+            }
+        }
 
         IndexOperation io = null;
         if (!indexesAsync.isEmpty()) {
