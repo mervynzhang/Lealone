@@ -904,6 +904,130 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals(3, getLongValue(1));
     }
 
+    // record变量支持IS [NOT] NULL和RAISE整行
+    @Test
+    public void testRecordIsNullAndRaise() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_rec_null_t");
+        executeUpdate("CREATE TABLE plp_rec_null_t(id INT, name VARCHAR(20))");
+        executeUpdate("INSERT INTO plp_rec_null_t VALUES(1, 'alice')");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_nullshapes() RETURNS INT "
+                + "LANGUAGE plpgsql AS $$ DECLARE r plp_rec_null_t%ROWTYPE; n INT := 0;" //
+                + " BEGIN" //
+                + "   IF r IS NULL THEN n := n + 1; END IF;" //
+                + "   SELECT * INTO r FROM plp_rec_null_t WHERE id = 1;" //
+                + "   IF r IS NOT NULL THEN n := n + 2; END IF;" //
+                + "   RAISE NOTICE 'row = %', r;" //
+                + "   RETURN n;" //
+                + " END; $$");
+        executeQuery("SELECT plp_rec_nullshapes()");
+        assertEquals(3, getIntValue(1));
+
+        // 未赋值的plain record也是NULL
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_plain_null() RETURNS BOOLEAN "
+                + "LANGUAGE plpgsql AS $$ DECLARE r record; BEGIN RETURN r IS NULL; END; $$");
+        executeQuery("SELECT plp_rec_plain_null()");
+        assertTrue(getBooleanValue(1));
+    }
+
+    // RETURNS RECORD由OUT参数定义返回行，支持SELECT *和复合字段访问
+    @Test
+    public void testReturnsRecord() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_ret(i INT, OUT a INT, OUT b VARCHAR) "
+                + "RETURNS RECORD LANGUAGE plpgsql AS $$" //
+                + " BEGIN a := i; b := 'x'; END; $$");
+        try (java.sql.ResultSet result = stmt.executeQuery("SELECT * FROM plp_rec_ret(1)")) {
+            assertTrue(result.next());
+            assertEquals(1, result.getInt(1));
+            assertEquals("x", result.getString(2));
+            assertEquals("A", result.getMetaData().getColumnName(1));
+            assertEquals("B", result.getMetaData().getColumnName(2));
+            assertFalse(result.next());
+        }
+        executeQuery("SELECT (plp_rec_ret(2)).a");
+        assertEquals(2, getIntValue(1));
+        executeQuery("SELECT (plp_rec_ret(3)).b");
+        assertEquals("x", getStringValue(1));
+        executeQuery("SELECT (plp_rec_ret(4)).a + 1");
+        assertEquals(5, getIntValue(1));
+
+        // 单OUT参数也能用RETURNS RECORD返回一列结果集
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_rec_one(i INT, OUT a INT) "
+                + "RETURNS RECORD LANGUAGE plpgsql AS $$ BEGIN a := i * 2; END; $$");
+        assertEquals("[6]", queryIntList("SELECT * FROM plp_rec_one(3)").toString());
+        executeQuery("SELECT (plp_rec_one(3)).a");
+        assertEquals(6, getIntValue(1));
+
+        // getCreateSQL必须带上RETURNS RECORD并能回放
+        String createSql = getCreateSql("PLP_REC_RET");
+        assertNotNull(createSql);
+        assertTrue(createSql, createSql.contains("RETURNS RECORD"));
+        executeUpdate("DROP FUNCTION plp_rec_ret");
+        executeUpdate(createSql);
+        assertEquals("[8:x]",
+                queryRowList("SELECT a, b FROM plp_rec_ret(8)").toString());
+
+        // SQL语言的函数同样可以用RETURNS RECORD
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_sql_rec(i INT, OUT a INT, OUT b VARCHAR) "
+                + "RETURNS RECORD LANGUAGE SQL AS $$ SELECT i, 'y' $$");
+        assertEquals("[9:y]",
+                queryRowList("SELECT a, b FROM plp_sql_rec(9)").toString());
+        executeQuery("SELECT (plp_sql_rec(9)).a");
+        assertEquals(9, getIntValue(1));
+
+        // 没有OUT参数时RETURNS RECORD没有行结构，明确不支持
+        executeUpdateThanAssertErrorCode(
+                "CREATE FUNCTION plp_rec_noout() RETURNS RECORD LANGUAGE plpgsql AS $$ BEGIN RETURN; END; $$",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+    }
+
+    // RETURNS SETOF <表名>返回表的所有列
+    @Test
+    public void testReturnsSetofTable() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_row_t");
+        executeUpdate("CREATE TABLE plp_row_t(id INT PRIMARY KEY, name VARCHAR(20))");
+        executeUpdate("INSERT INTO plp_row_t VALUES(1, 'a'), (2, 'b')");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_all_rows() RETURNS SETOF plp_row_t "
+                + "LANGUAGE plpgsql AS $$ BEGIN RETURN QUERY SELECT * FROM plp_row_t ORDER BY id; END; $$");
+        assertEquals("[1:a, 2:b]",
+                queryRowList("SELECT id, name FROM plp_all_rows() ORDER BY id").toString());
+
+        String createSql = getCreateSql("PLP_ALL_ROWS");
+        assertNotNull(createSql);
+        assertTrue(createSql, createSql.contains("SETOF"));
+        executeUpdate("DROP FUNCTION plp_all_rows");
+        executeUpdate(createSql);
+        assertEquals("[1:a, 2:b]",
+                queryRowList("SELECT id, name FROM plp_all_rows() ORDER BY id").toString());
+
+        // SQL语言的函数同样可以返回SETOF <表名>
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_sql_rows() RETURNS SETOF plp_row_t "
+                + "LANGUAGE SQL AS $$ SELECT * FROM plp_row_t $$");
+        assertEquals("[1:a, 2:b]",
+                queryRowList("SELECT id, name FROM plp_sql_rows() ORDER BY id").toString());
+
+        // RETURN NEXT用record变量给表行类型追加一行
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_next_row(p INT) RETURNS SETOF plp_row_t "
+                + "LANGUAGE plpgsql AS $$ DECLARE r record;" //
+                + " BEGIN SELECT * INTO r FROM plp_row_t WHERE plp_row_t.id = p; RETURN NEXT r; END; $$");
+        assertEquals("[2:b]",
+                queryRowList("SELECT id, name FROM plp_next_row(2)").toString());
+    }
+
+    // %ROWTYPE数组要给出干净的不支持错误（两种写法）
+    @Test
+    public void testRowTypeArrayUnsupported() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_arr_t");
+        executeUpdate("CREATE TABLE plp_arr_t(id INT)");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_arr1() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE arr plp_arr_t%ROWTYPE[]; BEGIN RETURN 1; END; $$");
+        executeQueryThanAssertErrorCode("SELECT plp_arr1()",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_arr2() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE arr plp_arr_t[]%ROWTYPE; BEGIN RETURN 1; END; $$");
+        executeQueryThanAssertErrorCode("SELECT plp_arr2()",
+                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+    }
+
     private ArrayList<Integer> queryIntList(String sql) {
         try (Statement s = conn.createStatement(); ResultSet result = s.executeQuery(sql)) {
             ArrayList<Integer> list = new ArrayList<>();
