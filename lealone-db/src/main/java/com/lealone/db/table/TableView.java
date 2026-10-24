@@ -372,6 +372,11 @@ public class TableView extends Table {
         return querySQL;
     }
 
+    // 视图的列名列表，派生表用它来给输出列指定别名
+    public String[] getColumnNames() {
+        return columnNames;
+    }
+
     private void removeViewFromTables() {
         if (tables != null) {
             for (Table t : tables) {
@@ -407,13 +412,23 @@ public class TableView extends Table {
      */
     public static TableView createTempView(ServerSession session, User owner, String name, IQuery query,
             IQuery topQuery) {
+        return createTempView(session, owner, name, query, topQuery, null);
+    }
+
+    // 派生表带列别名列表时用这个重载，如 (SELECT 1, 2) t(a, b)
+    public static TableView createTempView(ServerSession session, User owner, String name, IQuery query,
+            IQuery topQuery, String[] columnNames) {
+        if (columnNames != null && columnNames.length != query.getColumnCount()) {
+            throw DbException.get(ErrorCode.COLUMN_COUNT_DOES_NOT_MATCH);
+        }
         Schema mainSchema = session.getDatabase().getSchema(session, Constants.SCHEMA_MAIN);
         String querySQL = query.getPlanSQL();
         int size = query.getParameters().size();
         ArrayList<CommandParameter> parms = new ArrayList<CommandParameter>(size);
         for (CommandParameter p : query.getParameters())
             parms.add(p);
-        TableView v = new TableView(mainSchema, 0, name, querySQL, parms, null, session, false);
+        TableView v = new TableView(mainSchema, 0, name, querySQL, parms, columnNames, session,
+                false);
         if (v.createException != null) {
             throw v.createException;
         }
