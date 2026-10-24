@@ -137,6 +137,7 @@ import com.lealone.sql.dml.GenScript;
 import com.lealone.sql.dml.Insert;
 import com.lealone.sql.dml.Merge;
 import com.lealone.sql.dml.NoOperation;
+import com.lealone.sql.dml.Restore;
 import com.lealone.sql.dml.RunScript;
 import com.lealone.sql.dml.SetDatabase;
 import com.lealone.sql.dml.SetSession;
@@ -460,6 +461,8 @@ public class SQLParserBase implements SQLParser {
                     s = parseReleaseSavepoint();
                 } else if (readIf("REPAIR")) {
                     s = parseRepair();
+                } else if (readIf("RESTORE")) {
+                    s = parseRestore();
                 }
                 break;
             case 's':
@@ -579,7 +582,19 @@ public class SQLParserBase implements SQLParser {
         if (readIf("LAST")) {
             read("DATE");
             command.setLastDate(readString());
+        } else if (readIf("INCREMENTAL")) {
+            read("FROM");
+            command.setBaseFileName(readString());
         }
+        return command;
+    }
+
+    protected StatementBase parseRestore() {
+        Restore command = new Restore(session);
+        read("FROM");
+        command.setFileName(readString());
+        read("TO");
+        command.setTargetDir(readString());
         return command;
     }
 
