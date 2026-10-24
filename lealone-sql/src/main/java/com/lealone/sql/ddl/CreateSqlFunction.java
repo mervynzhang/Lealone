@@ -12,6 +12,7 @@ import com.lealone.db.DbObjectType;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.lock.DbObjectLock;
 import com.lealone.db.result.Result;
+import com.lealone.db.schema.CompositeType;
 import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SqlFunction;
@@ -49,6 +50,9 @@ public class CreateSqlFunction extends SchemaStatement {
     private boolean returnsRecord;
     // RETURNS SETOF <表名>时原样保留表名用于SCRIPT回放
     private String setofTableName;
+    // RETURNS comp / RETURNS SETOF comp
+    private CompositeType compositeReturnType;
+    private boolean compositeSetof;
     private String[] columnNames;
     private String[] columnTypeSqls;
     private int[] columnTypes;
@@ -105,6 +109,11 @@ public class CreateSqlFunction extends SchemaStatement {
      */
     public void setRecordReturnType() {
         returnsRecord = true;
+    }
+
+    public void setCompositeReturnType(CompositeType type, boolean setof) {
+        this.compositeReturnType = type;
+        this.compositeSetof = setof;
     }
 
     /**
@@ -211,9 +220,12 @@ public class CreateSqlFunction extends SchemaStatement {
 
     // PL/pgSQL解释器用CAST解析参数类型，数组类型(含VARIADIC)的写法还解析不了
     private boolean hasArrayParameter() {
-        for (int typeId : parameterTypeIds) {
-            if (typeId == Value.ARRAY) {
-                return true;
+        for (int i = 0; i < parameterTypeIds.length; i++) {
+            if (parameterTypeIds[i] == Value.ARRAY) {
+                // 复合类型参数也是Value.ARRAY，但它是record而不是数组
+                if (parameterTypes[i] == null
+                        || schema.findCompositeType(session, parameterTypes[i]) == null)
+                    return true;
             }
         }
         return false;
@@ -380,6 +392,10 @@ public class CreateSqlFunction extends SchemaStatement {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
                     "RETURNS RECORD requires OUT parameters");
         }
+        if (compositeReturnType != null && getOutputParameterCount() > 0) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "RETURNS composite type can not be used with OUT parameters");
+        }
         if (plpgsql) {
             PlpgSqlParser.parse(body);
             // PL/pgSQL的数组参数还没有实现
@@ -431,7 +447,11 @@ public class CreateSqlFunction extends SchemaStatement {
         }
         if (returnsRecord)
             function.setReturnsRecord(true);
-        function.setReturnType(returnTypeSql, returnType);
+        if (compositeReturnType != null) {
+            function.setCompositeReturnType(compositeReturnType, compositeSetof);
+        } else {
+            function.setReturnType(returnTypeSql, returnType);
+        }
         function.setBody(body, bodySql, bodyParameterIndexes);
         if (atomicBodySqls != null) {
             function.setAtomicBody(atomicBodySqls, atomicBodyParameterIndexes);

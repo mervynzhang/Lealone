@@ -101,9 +101,14 @@ public enum DbObjectType {
     /**
      * This object is a stored procedure.
      */
-    PROCEDURE(17, 16);
+    PROCEDURE(17, 16),
 
-    private static final int MAX = 18;
+    /**
+     * This object is a user-defined composite type.
+     */
+    COMPOSITE_TYPE(18, 3);
+
+    private static final int MAX = 19;
 
     public final int value; // 值被存入SYS表中，不能随意改动
 

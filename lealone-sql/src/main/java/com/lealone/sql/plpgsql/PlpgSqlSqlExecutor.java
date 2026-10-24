@@ -20,6 +20,7 @@ import com.lealone.db.value.ValueNull;
 import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.PreparedSQLStatement;
 import com.lealone.sql.StatementBase;
+import com.lealone.sql.expression.CompositeFieldExpression;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.ValueExpression;
 
@@ -459,6 +460,27 @@ public class PlpgSqlSqlExecutor {
             if (currentTokenType == IDENTIFIER && resolver != null) {
                 PlpgSqlVariable variable = resolver.findVariable(currentToken, currentTokenQuoted);
                 if (variable != null && canSubstitute()) {
+                    if (variable.isComposite()) {
+                        read();
+                        return new PlpgSqlCompositeVariableExpression(variable);
+                    }
+                    if (variable.isRecordArray()) {
+                        read();
+                        if (readIf("[")) {
+                            Expression indexExpression = readExpression();
+                            read("]");
+                            int index = indexExpression.getValue(session).getInt();
+                            if (readIf(".")) {
+                                String fieldName = readColumnIdentifier();
+                                return ValueExpression.get(
+                                        variable.getRecordArrayField(index, fieldName));
+                            }
+                            return ValueExpression.get(variable.getRecordArrayElement(index));
+                        }
+                        throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                                "PL/pgSQL record array variable " + variable.getName()
+                                        + " must be used as arr[index] or arr[index].field");
+                    }
                     if (variable.isRecord()) {
                         // record变量支持IS [NOT] NULL和RAISE整行输出，其他标量用法暂不支持
                         read();
@@ -492,6 +514,11 @@ public class PlpgSqlSqlExecutor {
                     && objectName.equals(lastIdentifier)) {
                 PlpgSqlVariable variable = resolver.findVariable(lastIdentifier,
                         lastIdentifierQuoted);
+                if (variable != null && variable.isComposite()) {
+                    String fieldName = readColumnIdentifier();
+                    return CompositeFieldExpression.create(session, session.getDatabase(),
+                            new PlpgSqlCompositeVariableExpression(variable), fieldName);
+                }
                 if (variable != null && variable.isRecord()) {
                     String fieldName = readColumnIdentifier();
                     return ValueExpression.get(variable.getRecordField(fieldName));

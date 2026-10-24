@@ -339,6 +339,19 @@ public class ExpressionColumn extends Expression {
     }
 
     @Override
+    public Expression[] getExpressionColumns(ServerSession session) {
+        if (column != null && column.getCompositeType() != null) {
+            Column[] columns = column.getCompositeType().getColumns();
+            ExpressionColumn[] expressions = new ExpressionColumn[columns.length];
+            for (int i = 0; i < columns.length; i++) {
+                expressions[i] = new ExpressionColumn(database, columns[i]);
+            }
+            return expressions;
+        }
+        return super.getExpressionColumns(session);
+    }
+
+    @Override
     public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitExpressionColumn(this);
     }

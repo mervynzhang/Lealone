@@ -24,6 +24,7 @@ import com.lealone.db.api.ErrorCode;
 import com.lealone.db.auth.User;
 import com.lealone.db.result.SimpleResultSet;
 import com.lealone.db.session.ServerSession;
+import com.lealone.db.table.Column;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueArray;
@@ -83,6 +84,9 @@ public class SqlFunction extends FunctionAlias {
     private boolean returnsRecord;
     // RETURNS SETOF <表名>时保存表名用于getCreateSQL
     private String setofTableName;
+    // RETURNS comp / RETURNS SETOF comp声明的复合类型
+    private CompositeType compositeReturnType;
+    private boolean compositeSetof;
     private String[] columnNames;
     private String[] columnTypeSqls;
     private int[] columnTypes;
@@ -618,8 +622,46 @@ public class SqlFunction extends FunctionAlias {
 
     @Override
     public boolean isRecordReturning() {
-        // RETURNS RECORD和多个OUT/INOUT参数都用ValueArray表示一行record
-        return returnsRecord || outputIndexes.length > 1;
+        // RETURNS RECORD、复合类型和多个OUT/INOUT参数都用ValueArray表示一行record
+        return !isSetReturning()
+                && (returnsRecord || outputIndexes.length > 1 || compositeReturnType != null);
+    }
+
+    public void setCompositeReturnType(CompositeType type, boolean setof) {
+        this.compositeReturnType = type;
+        this.compositeSetof = setof;
+        this.returnType = Value.ARRAY;
+        this.returnTypeSql = type.getName();
+        this.hasDeclaredReturnType = true;
+        if (setof) {
+            Column[] columns = type.getColumns();
+            String[] names = new String[columns.length];
+            String[] typeSqls = new String[columns.length];
+            int[] types = new int[columns.length];
+            long[] precisions = new long[columns.length];
+            int[] scales = new int[columns.length];
+            for (int i = 0; i < columns.length; i++) {
+                Column column = columns[i];
+                names[i] = column.getName();
+                typeSqls[i] = column.getOriginalSQL() == null ? column.getName() : column.getOriginalSQL();
+                types[i] = column.getType();
+                precisions[i] = column.getPrecision();
+                scales[i] = column.getScale();
+            }
+            setReturnColumns(false, names, typeSqls, types, precisions, scales);
+        }
+    }
+
+    public boolean isCompositeReturning() {
+        return compositeReturnType != null && !compositeSetof;
+    }
+
+    protected CompositeType getCompositeReturnType() {
+        return compositeReturnType;
+    }
+
+    protected boolean isCompositeSetof() {
+        return compositeSetof;
     }
 
     protected boolean isReturnsRecord() {
@@ -673,7 +715,11 @@ public class SqlFunction extends FunctionAlias {
             buff.append(" RETURNS RECORD");
         } else if (outputIndexes.length == 0) {
             buff.append(" RETURNS ");
-            if (isSetReturning()) {
+            if (compositeReturnType != null) {
+                if (compositeSetof)
+                    buff.append("SETOF ");
+                buff.append(database.quoteIdentifier(compositeReturnType.getName()));
+            } else if (isSetReturning()) {
                 if (returnsTable) {
                     buff.append("TABLE(");
                     buff.resetCount();
@@ -1033,9 +1079,18 @@ public class SqlFunction extends FunctionAlias {
         if (!rs.next()) {
             return ValueNull.INSTANCE;
         }
-        Value[] row = new Value[outputIndexes.length];
-        for (int i = 0; i < outputIndexes.length; i++) {
-            int type = parameterTypeIds[outputIndexes[i]];
+        // 函数体直接返回一个复合值(如SELECT ROW(...)::comp)时按单列处理
+        if (compositeReturnType != null && rs.getMetaData().getColumnCount() == 1) {
+            Object object = rs.getObject(1);
+            if (object instanceof Value && ((Value) object).getType() == Value.ARRAY)
+                return compositeReturnType.convert((Value) object);
+        }
+        int count = compositeReturnType == null ? outputIndexes.length
+                : compositeReturnType.getColumns().length;
+        Value[] row = new Value[count];
+        for (int i = 0; i < count; i++) {
+            int type = compositeReturnType == null ? parameterTypeIds[outputIndexes[i]]
+                    : compositeReturnType.getColumns()[i].getType();
             Value v = getBodyValue(session, rs, i + 1, type);
             row[i] = v.convertTo(type);
         }
@@ -1074,8 +1129,12 @@ public class SqlFunction extends FunctionAlias {
     }
 
     private Value createEmptyResultSet() {
-        // setof/table用声明的结果列，多个OUT参数用参数名作为列名
-        return ValueResultSet.get(isSetReturning() ? createSimpleResultSet() : createResultSet());
+        // setof/table用声明的结果列，复合类型用类型列，多个OUT参数用参数名作为列名
+        if (isSetReturning())
+            return ValueResultSet.get(createSimpleResultSet());
+        if (compositeReturnType != null)
+            return ValueResultSet.get(createCompositeResultSet());
+        return ValueResultSet.get(createResultSet());
     }
 
     private SimpleResultSet createResultSet() {
@@ -1084,6 +1143,16 @@ public class SqlFunction extends FunctionAlias {
             DataType dataType = DataType.getDataType(parameterTypeIds[index]);
             simple.addColumn(parameterNames[index], dataType.sqlType, (int) dataType.defaultPrecision,
                     dataType.defaultScale);
+        }
+        return simple;
+    }
+
+    private SimpleResultSet createCompositeResultSet() {
+        SimpleResultSet simple = new SimpleResultSet();
+        for (Column column : compositeReturnType.getColumns()) {
+            DataType dataType = DataType.getDataType(column.getType());
+            simple.addColumn(column.getName(), dataType.sqlType,
+                    MathUtils.convertLongToInt(column.getPrecision()), column.getScale());
         }
         return simple;
     }

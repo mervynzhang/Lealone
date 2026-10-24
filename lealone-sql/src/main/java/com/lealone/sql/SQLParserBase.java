@@ -38,6 +38,7 @@ import com.lealone.db.constraint.ConstraintReferential;
 import com.lealone.db.index.Index;
 import com.lealone.db.index.IndexColumn;
 import com.lealone.db.result.SortOrder;
+import com.lealone.db.schema.CompositeType;
 import com.lealone.db.schema.FunctionAlias;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.Sequence;
@@ -95,6 +96,7 @@ import com.lealone.sql.ddl.AlterUser;
 import com.lealone.sql.ddl.AlterView;
 import com.lealone.sql.ddl.Analyze;
 import com.lealone.sql.ddl.CreateAggregate;
+import com.lealone.sql.ddl.CreateCompositeType;
 import com.lealone.sql.ddl.CreateConstant;
 import com.lealone.sql.ddl.CreateDatabase;
 import com.lealone.sql.ddl.CreateFunctionAlias;
@@ -114,6 +116,7 @@ import com.lealone.sql.ddl.CreateView;
 import com.lealone.sql.ddl.DeallocateProcedure;
 import com.lealone.sql.ddl.DefinitionStatement;
 import com.lealone.sql.ddl.DropAggregate;
+import com.lealone.sql.ddl.DropCompositeType;
 import com.lealone.sql.ddl.DropConstant;
 import com.lealone.sql.ddl.DropDatabase;
 import com.lealone.sql.ddl.DropFunctionAlias;
@@ -154,6 +157,7 @@ import com.lealone.sql.dml.SetStatement;
 import com.lealone.sql.dml.TransactionStatement;
 import com.lealone.sql.dml.Update;
 import com.lealone.sql.expression.Alias;
+import com.lealone.sql.expression.CompositeCastExpression;
 import com.lealone.sql.expression.CompositeFieldExpression;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.ExpressionColumn;
@@ -1412,7 +1416,7 @@ public class SQLParserBase implements SQLParser {
         } else if (readIf("DOMAIN")) {
             return parseDropUserDataType();
         } else if (readIf("TYPE")) {
-            return parseDropUserDataType();
+            return parseDropType();
         } else if (readIf("DATATYPE")) {
             return parseDropUserDataType();
         } else if (readIf("AGGREGATE")) {
@@ -2475,6 +2479,20 @@ public class SQLParserBase implements SQLParser {
         return Aggregate.getAggregateType(name);
     }
 
+    // ROW(a, b, ...)构造复合值，复用ExpressionList的ValueArray语义
+    protected Expression readRowExpression() {
+        ArrayList<Expression> list = Utils.newSmallArrayList();
+        if (!readIf(")")) {
+            do {
+                list.add(readExpression());
+            } while (readIf(","));
+            read(")");
+        }
+        Expression[] array = new Expression[list.size()];
+        list.toArray(array);
+        return new ExpressionList(array);
+    }
+
     protected Expression readFunction(Schema schema, String name) {
         if (schema != null) {
             UserAggregate aggregate = schema.findAggregate(session, name);
@@ -2498,9 +2516,14 @@ public class SQLParserBase implements SQLParser {
         }
         switch (function.getFunctionType()) {
         case SystemFunction.CAST: {
-            function.setParameter(0, readExpression());
+            Expression value = readExpression();
             read("AS");
             Column type = parseColumnWithType(null);
+            if (type.getCompositeType() != null) {
+                read(")");
+                return CompositeCastExpression.create(type.getCompositeType(), value);
+            }
+            function.setParameter(0, value);
             function.setDataType(type);
             read(")");
             break;
@@ -2826,7 +2849,11 @@ public class SQLParserBase implements SQLParser {
                     // not
                     r = readCase();
                 } else if (readIf("(")) {
-                    r = readFunction(null, name);
+                    if (equalsToken("ROW", name)) {
+                        r = readRowExpression();
+                    } else {
+                        r = readFunction(null, name);
+                    }
                 } else if (equalsToken("CURRENT_USER", name)) {
                     r = readFunctionWithoutParameters("USER");
                 } else if (equalsToken("SESSION_USER", name)) {
@@ -3028,10 +3055,14 @@ public class SQLParserBase implements SQLParser {
                 r = func;
             } else {
                 Column col = parseColumnWithType(null);
-                Function function = Function.getFunction(database, "CAST");
-                function.setDataType(col);
-                function.setParameter(0, r);
-                r = function;
+                if (col.getCompositeType() != null) {
+                    r = CompositeCastExpression.create(col.getCompositeType(), r);
+                } else {
+                    Function function = Function.getFunction(database, "CAST");
+                    function.setDataType(col);
+                    function.setParameter(0, r);
+                    r = function;
+                }
             }
         }
         return r;
@@ -4194,6 +4225,19 @@ public class SQLParserBase implements SQLParser {
             original = StringUtils.toUpperEnglish(original);
         }
         Schema schema = getSchema();
+        if (schema == null && session != null)
+            schema = session.getDatabase().findSchema(session, session.getCurrentSchemaName());
+        CompositeType compositeType = null;
+        if (schema != null)
+            compositeType = schema.findCompositeType(session, original);
+        if (compositeType != null) {
+            // 复合类型列按ValueArray处理，列结构由CompositeType保存
+            Column c = new Column(columnName, Value.ARRAY);
+            c.setCompositeType(compositeType);
+            c.setOriginalSQL(compositeType.getName());
+            read();
+            return c;
+        }
         UserDataType userDataType = null;
         if (schema != null)
             userDataType = schema.findUserDataType(session, original);
@@ -4387,7 +4431,7 @@ public class SQLParserBase implements SQLParser {
         } else if (readIf("DOMAIN")) {
             return parseCreateUserDataType();
         } else if (readIf("TYPE")) {
-            return parseCreateUserDataType();
+            return parseCreateType();
         } else if (readIf("DATATYPE")) {
             return parseCreateUserDataType();
         } else if (readIf("AGGREGATE")) {
@@ -4993,6 +5037,62 @@ public class SQLParserBase implements SQLParser {
         return command;
     }
 
+    // CREATE TYPE name AS (a INT, b VARCHAR, ...)创建复合类型；AS单类型仍按DOMAIN处理
+    protected StatementBase parseCreateType() {
+        boolean ifNotExists = readIfNotExists();
+        String name = readIdentifierWithSchema();
+        Schema schema = getSchema();
+        read("AS");
+        if (isToken("(")) {
+            read("(");
+            ArrayList<Column> columns = new ArrayList<>();
+            do {
+                String columnName = readColumnIdentifier();
+                for (Column column : columns) {
+                    if (column.getName().equalsIgnoreCase(columnName))
+                        throw DbException.get(ErrorCode.DUPLICATE_COLUMN_NAME_1, columnName);
+                }
+                columns.add(parseColumnWithType(columnName));
+            } while (readIf(","));
+            read(")");
+            CreateCompositeType command = new CreateCompositeType(session, schema);
+            command.setTypeName(name);
+            command.setColumns(columns.toArray(new Column[0]));
+            command.setIfNotExists(ifNotExists);
+            return command;
+        }
+        CreateUserDataType command = new CreateUserDataType(session, schema);
+        command.setTypeName(name);
+        Column col = parseColumnForTable("VALUE", true);
+        if (readIf("CHECK")) {
+            Expression expr = readExpression();
+            SingleColumnResolver resolver = new SingleColumnResolver(col);
+            col.addCheckConstraint(session, expr, resolver);
+        }
+        col.rename(null);
+        command.setColumn(col);
+        command.setIfNotExists(ifNotExists);
+        return command;
+    }
+
+    protected StatementBase parseDropType() {
+        boolean ifExists = readIfExists(false);
+        String name = readIdentifierWithSchema();
+        Schema schema = getSchema();
+        if (schema.findCompositeType(session, name) != null) {
+            DropCompositeType command = new DropCompositeType(session, schema);
+            command.setTypeName(name);
+            ifExists = readIfExists(ifExists);
+            command.setIfExists(ifExists);
+            return command;
+        }
+        DropUserDataType command = new DropUserDataType(session, schema);
+        command.setTypeName(name);
+        ifExists = readIfExists(ifExists);
+        command.setIfExists(ifExists);
+        return command;
+    }
+
     protected CreateUserDataType parseCreateUserDataType() {
         boolean ifNotExists = readIfNotExists();
         String name = readIdentifierWithSchema();
@@ -5363,7 +5463,9 @@ public class SQLParserBase implements SQLParser {
                             dataType.defaultScale);
                 } else {
                     Column returnColumn = parseColumnWithType(null);
-                    if (returnColumn.getTable() != null
+                    if (returnColumn.getCompositeType() != null) {
+                        command.setCompositeReturnType(returnColumn.getCompositeType(), true);
+                    } else if (returnColumn.getTable() != null
                             && returnColumn.getType() == Value.JAVA_OBJECT) {
                         // SETOF <表名>：返回表的所有列
                         command.setSetofTableReturnType(returnColumn.getTable());
@@ -5416,7 +5518,11 @@ public class SQLParserBase implements SQLParser {
                 command.setReturnType("VOID", Value.NULL);
             } else {
                 Column returnColumn = parseColumnWithType(null);
-                command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
+                if (returnColumn.getCompositeType() != null) {
+                    command.setCompositeReturnType(returnColumn.getCompositeType(), false);
+                } else {
+                    command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
+                }
             }
         } else {
             // 有OUT/INOUT参数时可以省略RETURNS，返回类型由OUT参数推导

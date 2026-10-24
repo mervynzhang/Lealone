@@ -44,6 +44,7 @@ import com.lealone.db.index.Index;
 import com.lealone.db.result.LocalResult;
 import com.lealone.db.result.Result;
 import com.lealone.db.row.Row;
+import com.lealone.db.schema.CompositeType;
 import com.lealone.db.schema.Constant;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.schema.SchemaObject;
@@ -212,6 +213,17 @@ public class GenScript extends ScriptBase {
                 }
                 UserDataType dt = (UserDataType) obj;
                 add(dt.getCreateSQL(), false);
+            }
+            // 复合类型必须排在函数之前，否则函数定义里的参数/返回类型无法解析
+            for (SchemaObject obj : db.getAllSchemaObjects(DbObjectType.COMPOSITE_TYPE)) {
+                if (excludeSchema(obj.getSchema())) {
+                    continue;
+                }
+                CompositeType type = (CompositeType) obj;
+                if (drop) {
+                    add(type.getDropSQL(), false);
+                }
+                add(type.getCreateSQL(), false);
             }
             for (SchemaObject obj : db.getAllSchemaObjects(DbObjectType.CONSTANT)) {
                 if (excludeSchema(obj.getSchema())) {

@@ -81,6 +81,10 @@ public final class PlpgSqlAst {
         public boolean qualifierQuoted;
         public String target;
         public boolean targetQuoted;
+        // record数组元素赋值：arr[index] 或 arr[index].field
+        public String arrayIndex;
+        public String arrayField;
+        public boolean arrayFieldQuoted;
         public String expression;
 
         public Assignment(int position) {

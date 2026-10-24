@@ -152,6 +152,7 @@ public class Schema extends DbObjectBase {
         removeSchemaObjects(session, lock, DbObjectType.CONSTANT);
         removeSchemaObjects(session, lock, DbObjectType.FUNCTION_ALIAS);
         removeSchemaObjects(session, lock, DbObjectType.AGGREGATE);
+        removeSchemaObjects(session, lock, DbObjectType.COMPOSITE_TYPE);
         removeSchemaObjects(session, lock, DbObjectType.USER_DATATYPE);
         removeSchemaObjects(session, lock, DbObjectType.SERVICE);
         super.removeChildrenAndResources(session, lock);
@@ -572,6 +573,17 @@ public class Schema extends DbObjectBase {
      */
     public UserDataType findUserDataType(ServerSession session, String name) {
         return find(DbObjectType.USER_DATATYPE, session, name);
+    }
+
+    public CompositeType findCompositeType(ServerSession session, String name) {
+        return find(DbObjectType.COMPOSITE_TYPE, session, name);
+    }
+
+    public CompositeType getCompositeType(ServerSession session, String name) {
+        CompositeType type = findCompositeType(session, name);
+        if (type == null)
+            throw DbException.get(ErrorCode.USER_DATA_TYPE_NOT_FOUND_1, name);
+        return type;
     }
 
     public Service findService(ServerSession session, String name) {
