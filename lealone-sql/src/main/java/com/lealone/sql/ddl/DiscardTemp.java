@@ -41,9 +41,14 @@ public class DiscardTemp extends DefinitionStatement {
         for (Sequence sequence : session.getLocalTempSequences()) {
             names.add(sequence.getName());
         }
-        // 先删掉依赖临时对象的函数/过程，避免留下悬空引用
-        ArrayList<SchemaObject> routines = RoutineDependencyAnalyzer
-                .findRoutinesReferencingNames(session, names);
+        // 先删掉依赖临时对象的函数/过程，避免留下悬空引用。
+        // 级联删除的是持久例程，和DROP FUNCTION/PROCEDURE一样要admin权限：
+        // 普通用户可以随便建临时序列/临时表，如果按名字匹配就能删别人的过程，
+        // 建一个和过程体里字符串同名的临时序列再DISCARD TEMP就能删掉别人的持久过程。
+        ArrayList<SchemaObject> routines = new ArrayList<>();
+        if (session.getUser().isAdmin()) {
+            routines = RoutineDependencyAnalyzer.findRoutinesReferencingNames(session, names);
+        }
         HashMap<String, DbObjectLock> locks = new HashMap<>();
         for (SchemaObject routine : routines) {
             Schema schema = routine.getSchema();
