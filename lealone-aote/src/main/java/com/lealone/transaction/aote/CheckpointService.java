@@ -291,9 +291,9 @@ public class CheckpointService implements Runnable {
         }
         if (pendingTransactionId > 0 && pendingTransactionId < lastTransactionId)
             lastTransactionId = pendingTransactionId;
-        try {
-            for (Entry<StorageMap<?, ?>, AtomicLong> e : maps.entrySet()) {
-                StorageMap<?, ?> map = e.getKey();
+        for (Entry<StorageMap<?, ?>, AtomicLong> e : maps.entrySet()) {
+            StorageMap<?, ?> map = e.getKey();
+            try {
                 // 准备刷页前如果表被删除了那就直接忽略
                 if (map.isClosed())
                     continue;
@@ -307,28 +307,31 @@ public class CheckpointService implements Runnable {
                     needSave = map.hasUnsavedChanges()
                             && (force || (size > 0 && size > map.getCacheSize()));
                 }
-                if (needSave) {
-                    long t1 = System.currentTimeMillis();
-                    if (!isClosing && workingThread != null) // SYNC时在调用线程上保存，没有workingThread
-                        workingThread.setName("Saving-" + map.getName());
-                    map.setLastTransactionId(lastTransactionId);
-                    try {
-                        if (isClosing)
-                            map.saveForClosing(Math.max(size, 4096));
-                        else
-                            map.save(Math.max(size, 4096));
-                    } finally {
-                        map.setLastTransactionId(-1);
-                    }
-                    if (logger.isDebugEnabled()) {
-                        long time = System.currentTimeMillis() - t1;
-                        logger.debug("Save {}, size: {}, time: {} ms", map.getName(), size, time);
-                    }
+                if (!needSave)
+                    continue;
+                long t1 = System.currentTimeMillis();
+                if (!isClosing && workingThread != null) // SYNC时在调用线程上保存，没有workingThread
+                    workingThread.setName("Saving-" + map.getName());
+                map.setLastTransactionId(lastTransactionId);
+                try {
+                    if (isClosing)
+                        map.saveForClosing(Math.max(size, 4096));
+                    else
+                        map.save(Math.max(size, 4096));
+                } finally {
+                    map.setLastTransactionId(-1);
                 }
+                if (logger.isDebugEnabled()) {
+                    long time = System.currentTimeMillis() - t1;
+                    logger.debug("Save {}, size: {}, time: {} ms", map.getName(), size, time);
+                }
+            } catch (Throwable t) {
+                // 单个StorageMap保存失败(比如它所属数据库的存储目录已经不存在)时不能中止整轮检查点:
+                // 异常抛出去会让后面所有数据库的脏页都保存不了, 而它们的redo log随后可能被截断,
+                // 重启后就真的丢数据了。失败的map自己的redo log没有被截断, 重启时按redo重放即可。
+                logger.error("Failed to save " + map.getName() + ", continue with the rest", t);
             }
-            lastSavedAt = System.currentTimeMillis();
-        } catch (Throwable t) {
-            logger.error("Failed to execute save", t);
         }
+        lastSavedAt = System.currentTimeMillis();
     }
 }

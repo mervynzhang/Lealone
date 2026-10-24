@@ -321,6 +321,8 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         private final ServerSession session;
         private SearchRow searchRow;
         private Row row;
+        // row缓存的是哪个rowKey对应的主表行，-1表示还没有缓存
+        private long rowKey = -1;
         // 单条语句/单个游标内"rowKey -> 首次见到时的索引列值"，必须是不可变的列值数组，
         // 不能缓存Row对象(行是原地更新的，缓存对象本身会被改掉，等于没有快照)
         private HashMap<Long, Value[]> rowSnapshots;
@@ -336,8 +338,12 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
 
         @Override
         public Row get(int[] columnIndexes) {
-            if (row == null && searchRow != null) {
+            // 不能只判断row是否为null: SsiBuildingCursor的主表尾段直接返回主表行，
+            // 而上一条索引项校验时已经缓存了另一行，直接返回会让调用方(比如按rowKey去重的QFlat)
+            // 一直拿到第一条主表行，后面的行全被当成重复行丢掉
+            if (searchRow != null && (row == null || rowKey != searchRow.getKey())) {
                 row = table.getRow(session, searchRow.getKey(), columnIndexes);
+                rowKey = row == null ? -1 : searchRow.getKey();
             }
             return row;
         }
@@ -357,8 +363,15 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
             searchRow = nextSearchRow();
             // 不能在这里把 row 清空: nextSearchRow 校验索引项时(见 isRowStillMatching)已经把这一行的
             // 主表记录读出来了, 清空会让随后 get() 再读一次同一个主表行, 覆盖索引查询的读放大直接翻倍。
-            // 每条索引项开始校验时 getIndexKey 都会自己清 row, 所以这里不清也不会读到上一条的行。
+            // 每条索引项开始校验时 getIndexKey 都会自己清 row, 主表尾段则由 nextSearchRow 直接设置缓存行，
+            // get() 还会校验 rowKey，所以这里不清也不会读到上一条的行。
             return searchRow != null;
+        }
+
+        // 当前searchRow本身就是主表行时直接复用，避免再按rowKey读一次主表
+        protected void setCachedRow(Row r) {
+            row = r;
+            rowKey = r == null ? -1 : r.getKey();
         }
 
         protected SearchRow createSearchRow(IndexKey key) {
@@ -371,6 +384,7 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
         protected IndexKey getIndexKey(TransactionMapCursor<IndexKey, IndexKey> tmCursor) {
             // 每条索引项都必须用它自己对应的主表行来校验，不能复用上一条的缓存
             row = null;
+            rowKey = -1;
             IndexKey current = tmCursor.getKey();
             // 索引项可能是墓碑(正在被删)或残留的孤儿项，只有主表行当前值还等于它时才返回，
             // 否则该行会通过更新后的索引项再产出一次，同一个rowKey会返回两次
@@ -395,8 +409,10 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
                 currentColumns = rowSnapshots.get(rowKey);
             } else {
                 // 复用游标里缓存的这一行，避免和后续TableFilter取值时重复读一次主表
-                if (row == null)
+                if (row == null) {
                     row = table.getRow(session, rowKey);
+                    this.rowKey = row == null ? -1 : rowKey;
+                }
                 IndexKey currentKey = row == null ? null : convertToKey(row);
                 currentColumns = currentKey == null ? null : currentKey.getColumns();
                 rowSnapshots.put(rowKey, currentColumns);
@@ -482,6 +498,8 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
             }
             if (primaryCursor.next()) {
                 searchRow = primaryCursor.get();
+                // 主表尾段返回的searchRow就是完整的主表行，直接作为缓存行，get()不用再读一次主表
+                setCachedRow((Row) searchRow);
             } else {
                 searchRow = null;
             }
