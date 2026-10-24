@@ -9,6 +9,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
+import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.db.api.ErrorCode;
@@ -248,6 +249,26 @@ public class DdlCascadeTest extends SqlAssertTestBase {
                 assertTrue("stale plan swallowed the new row", r.next());
             }
         }
+        cleanup();
+    }
+
+    // CREATE INDEX建在非空表上时没有回填已有行，优化器却已按index sorted跳过排序，
+    // 导致ORDER BY返回插入顺序；关闭重开库后才恢复正常。这是本仓库既有缺陷，不是本次改动引入。
+    @Ignore("BUG: CREATE INDEX does not backfill existing rows, ORDER BY returns insertion order until reopen")
+    @Test
+    public void orderByAfterCreateIndexOnExistingRows() throws Exception {
+        cleanup();
+        executeUpdate("DROP TABLE IF EXISTS dc_ix");
+        executeUpdate("CREATE TABLE dc_ix(id int primary key, name varchar(10))");
+        executeUpdate("INSERT INTO dc_ix VALUES(1, 'b'), (2, 'a'), (3, 'd'), (4, 'c')");
+        executeUpdate("CREATE INDEX dc_ix_name ON dc_ix(name)");
+        try (ResultSet r = stmt.executeQuery("SELECT name FROM dc_ix ORDER BY name")) {
+            StringBuilder buff = new StringBuilder();
+            while (r.next())
+                buff.append(r.getString(1));
+            assertEquals("abcd", buff.toString());
+        }
+        executeUpdate("DROP TABLE IF EXISTS dc_ix");
         cleanup();
     }
 }
