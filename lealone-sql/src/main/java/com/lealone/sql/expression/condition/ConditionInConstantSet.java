@@ -11,6 +11,7 @@ import java.util.HashSet;
 import com.lealone.common.util.StatementBuilder;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueNull;
 import com.lealone.sql.expression.Expression;
@@ -68,6 +69,26 @@ public class ConditionInConstantSet extends Condition {
         Value x = left.getValue(session);
         if (x == ValueNull.INSTANCE) {
             return x;
+        }
+        // 行值不能在HashSet里按equals判断: 含NULL的行值永远不相等, 但标准要求结果是UNKNOWN
+        if (x instanceof ValueArray) {
+            ValueArray row = (ValueArray) x;
+            boolean unknown = false;
+            for (Value v : valueSet) {
+                if (v == ValueNull.INSTANCE) {
+                    unknown = true;
+                    continue;
+                }
+                if (!(v instanceof ValueArray))
+                    continue;
+                Value cmp = Comparison.compareRowValue(session.getDatabase(), row, (ValueArray) v,
+                        Comparison.EQUAL);
+                if (cmp == ValueNull.INSTANCE)
+                    unknown = true;
+                else if (cmp.getBoolean())
+                    return ValueBoolean.get(true);
+            }
+            return unknown ? ValueNull.INSTANCE : ValueBoolean.get(false);
         }
         boolean result = valueSet.contains(x);
         if (!result) {

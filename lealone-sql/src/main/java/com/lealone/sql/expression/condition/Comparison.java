@@ -279,6 +279,14 @@ public class Comparison extends Condition {
      * 例如 (1, NULL) = (1, NULL) 和 (NULL, 2) IN ((1, 2)) 的结果都是 UNKNOWN。
      */
     private Value compareRowValue(ValueArray l, ValueArray r, int compareType) {
+        return compareRowValue(database, l, r, compareType);
+    }
+
+    /**
+     * 行值比较的三值逻辑实现，供行值 IN 列表复用(IN 不能只看 compareNotNull，
+     * 否则 (1, NULL) IN ((1, 2)) 会得到 FALSE，而标准要求 UNKNOWN)。
+     */
+    static Value compareRowValue(Database database, ValueArray l, ValueArray r, int compareType) {
         Value[] list1 = l.getList();
         Value[] list2 = r.getList();
         if (list1.length != list2.length) {
