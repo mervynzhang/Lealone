@@ -618,7 +618,12 @@ public class FileStorage {
     // }
 
     public InputStream getInputStream() {
+        return getInputStream(0);
+    }
+
+    // 从指定位置开始流式读整个文件，用独立的读位置，不影响存储引擎正在用的文件指针
+    public InputStream getInputStream(long fromPos) {
         checkPowerOff();
-        return new FileStorageInputStream(this, handler, false, false, true);
+        return new FileStorageInputStream(this, handler, false, false, true, fromPos);
     }
 }

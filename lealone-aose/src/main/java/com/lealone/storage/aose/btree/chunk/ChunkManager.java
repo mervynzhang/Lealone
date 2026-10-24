@@ -6,6 +6,7 @@
 package com.lealone.storage.aose.btree.chunk;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -226,11 +227,13 @@ public class ChunkManager {
     public InputStream getChunkInputStream(FilePath file) {
         String name = file.getName();
         if (name.endsWith(AOStorage.SUFFIX_AO_FILE)) {
-            // chunk文件名格式: c_[chunkId]_[sequence]
-            String str = name.substring(2, name.length() - AOStorage.SUFFIX_AO_FILE_LENGTH);
-            int pos = str.indexOf('_');
-            int chunkId = Integer.parseInt(str.substring(0, pos));
-            return getChunk(chunkId).fileStorage.getInputStream();
+            try {
+                // 直接读磁盘上真实存在的这个文件，条目名和内容天然同代，
+                // 也不会影响存储引擎正在用的文件指针
+                return file.newInputStream();
+            } catch (IOException e) {
+                throw DbException.convertIOException(e, file.getName());
+            }
         }
         return null;
     }
