@@ -8,6 +8,7 @@ package com.lealone.server.scheduler;
 import java.io.IOException;
 import java.nio.channels.Selector;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -42,7 +43,10 @@ public class GlobalScheduler extends InternalSchedulerBase {
     // 预防客户端不断创建新连接试探用户名和密码，试错多次后降低接入新连接的速度
     private final SessionValidator sessionValidator = new SessionValidator();
     private final LinkableList<SessionInitTask> sessionInitTasks = new LinkableList<>();
-    private final LinkableList<ServerSessionInfo> sessions = new LinkableList<>();
+    // 按session索引: 一次语句里可能创建大量嵌套session(比如函数调用), 链表的查找和删除都是O(n),
+    // 累加后整条语句会退化成O(n^2); 换成并发Map后add/remove都是O(1)。
+    // 遍历只用来跑后台任务/检查超时/挑最高优先级命令, 不依赖顺序
+    private final ConcurrentHashMap<ServerSession, ServerSessionInfo> sessions = new ConcurrentHashMap<>();
 
     // 杂七杂八的任务，数量不多，执行完就删除
     private final LinkableList<LinkableTask> miscTasks = new LinkableList<>();
@@ -116,14 +120,14 @@ public class GlobalScheduler extends InternalSchedulerBase {
     }
 
     private void addSessionInfo(ServerSessionInfo si) {
-        sessions.add(si);
+        sessions.put(si.getSession(), si);
         // 此时可以初始化了
         si.getSession().init();
     }
 
     private void removeSessionInfo(ServerSessionInfo si) {
         if (!si.getSession().isClosed())
-            sessions.remove(si);
+            sessions.remove(si.getSession());
     }
 
     @Override
@@ -137,24 +141,16 @@ public class GlobalScheduler extends InternalSchedulerBase {
     public void removeSession(InternalSession session) {
         if (sessions.isEmpty() || session.isClosed())
             return;
-        ServerSessionInfo si = sessions.getHead();
-        while (si != null) {
-            if (si.getSession() == session) {
-                sessions.remove(si);
-                break;
-            }
-            si = si.next;
-        }
+        if (session instanceof ServerSession)
+            sessions.remove((ServerSession) session);
     }
 
     private void runSessionTasks() {
         if (sessions.isEmpty())
             return;
-        ServerSessionInfo si = sessions.getHead();
-        while (si != null) {
+        for (ServerSessionInfo si : sessions.values()) {
             if (!si.isMarkClosed())
                 si.runSessionTasks();
-            si = si.next;
         }
     }
 
@@ -162,10 +158,8 @@ public class GlobalScheduler extends InternalSchedulerBase {
         if (sessions.isEmpty())
             return;
         long currentTime = System.currentTimeMillis();
-        ServerSessionInfo si = sessions.getHead();
-        while (si != null) {
+        for (ServerSessionInfo si : sessions.values()) {
             si.checkSessionTimeout(currentTime);
-            si = si.next;
         }
     }
 
@@ -210,10 +204,8 @@ public class GlobalScheduler extends InternalSchedulerBase {
 
     private void gc() {
         if (MemoryManager.needFullGc()) {
-            ServerSessionInfo si = sessions.getHead();
-            while (si != null) {
+            for (ServerSessionInfo si : sessions.values()) {
                 si.getSession().clearQueryCache();
-                si = si.next;
             }
         }
     }
@@ -278,13 +270,11 @@ public class GlobalScheduler extends InternalSchedulerBase {
                     return;
                 }
             } catch (Throwable t) {
-                ServerSessionInfo si = sessions.getHead();
-                while (si != null) {
+                for (ServerSessionInfo si : sessions.values()) {
                     if (si.getSessionId() == c.getSessionId()) {
                         si.sendError(c.getPacketId(), t);
                         break;
                     }
-                    si = si.next;
                 }
                 handleException("Failed to execute statement: " + c, t);
             }
@@ -337,15 +327,11 @@ public class GlobalScheduler extends InternalSchedulerBase {
         if (sessions.isEmpty())
             return null;
         YieldableCommand best = null;
-        ServerSessionInfo si = sessions.getHead();
-        while (si != null) {
+        for (ServerSessionInfo si : sessions.values()) {
             // 执行yieldIfNeeded时，不需要检查当前session
-            if (currentSession == si.getSession() || si.isMarkClosed()) {
-                si = si.next;
+            if (currentSession == si.getSession() || si.isMarkClosed())
                 continue;
-            }
             YieldableCommand c = si.getYieldableCommand(checkTimeout);
-            si = si.next;
             if (c == null)
                 continue;
             if (c.getPriority() > priority) {
