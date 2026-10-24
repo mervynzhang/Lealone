@@ -122,30 +122,36 @@ select * from test_ret_set_scalar(1,10);
 
 -- @case plpgsql.setof_composite_record
 -- @pg plpgsql.sql:1487-1512
--- 缺失: 这段用 FOR rec IN SELECT * FROM tbl LOOP(plpgsql 的 FOR ... IN 查询) 还未支持,
---       报 50100 "PL/pgSQL: FOR ... IN query"; RETURNS SETOF <表行类型> 本身已经可以
---       DECLARE rec RECORD / row 表%ROWTYPE 本身已经可用, 卡在返回类型上
-create function test_table_func_rec() returns setof found_test_tbl as '
-DECLARE
-	rec RECORD;
-BEGIN
-	FOR rec IN select * from found_test_tbl LOOP
-		RETURN NEXT rec;
-	END LOOP;
-	RETURN;
-END;' language plpgsql;
+-- 适配: 函数体写成一行(runner 按行末 ; 切语句); 这里正是 FOR rec IN <query> 的用法:
+--       DECLARE rec RECORD / row 表%ROWTYPE, 用查询结果逐行赋值再 RETURN NEXT 到 SETOF <表行类型>
+create function test_table_func_rec() returns setof found_test_tbl as $$ DECLARE rec RECORD; BEGIN FOR rec IN select * from found_test_tbl LOOP RETURN NEXT rec; END LOOP; RETURN; END; $$ language plpgsql;
+> update count: 0
+
+-- 和 PG 一样: found_test_tbl 里是上一个用例留下的 6 行
 select * from test_table_func_rec();
-create function test_table_func_row() returns setof found_test_tbl as '
-DECLARE
-	row found_test_tbl%ROWTYPE;
-BEGIN
-	FOR row IN select * from found_test_tbl LOOP
-		RETURN NEXT row;
-	END LOOP;
-	RETURN;
-END;' language plpgsql;
+> A
+> ---
+> 2
+> 100
+> 3
+> 4
+> 5
+> 6
+> rows: 6
+
+create function test_table_func_row() returns setof found_test_tbl as $$ DECLARE row found_test_tbl%ROWTYPE; BEGIN FOR row IN select * from found_test_tbl LOOP RETURN NEXT row; END LOOP; RETURN; END; $$ language plpgsql;
+> update count: 0
+
 select * from test_table_func_row();
--- PG 期望: 两张表里的行原样返回
+> A
+> ---
+> 2
+> 100
+> 3
+> 4
+> 5
+> 6
+> rows: 6
 
 -- @case plpgsql.polymorphic
 -- @pg plpgsql.sql:1565-1568
