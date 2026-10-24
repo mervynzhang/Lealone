@@ -5,15 +5,19 @@
  */
 package com.lealone.sql.plpgsql;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.db.result.SimpleResultSet;
 import com.lealone.db.session.ServerSession;
+import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueInt;
 import com.lealone.db.value.ValueLong;
 import com.lealone.db.value.ValueNull;
+import com.lealone.db.value.ValueResultSet;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Assignment;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Block;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Branch;
@@ -80,10 +84,14 @@ public class PlpgSqlInterpreter {
 
     private final ServerSession session;
     private final Block body;
+    private final PlpgSqlResultInfo resultInfo;
     private final int returnType;
     private final PlpgSqlSqlExecutor sqlExecutor;
 
     private PlpgSqlScope scope;
+    private String[] parameterNames;
+    // RETURNS SETOF/TABLE累积的结果行
+    private final List<Value[]> returnedRows = new ArrayList<>();
     // FOUND魔法变量，DML/PERFORM/SELECT INTO之后由解释器设置
     private PlpgSqlVariable foundVariable;
     // 最近一条SQL语句处理的行数，GET DIAGNOSTICS ROW_COUNT用
@@ -91,10 +99,11 @@ public class PlpgSqlInterpreter {
     // 正在被EXCEPTION handler处理的异常，RAISE;用它重新抛出
     private RuntimeException currentException;
 
-    public PlpgSqlInterpreter(ServerSession session, Block body, int returnType) {
+    public PlpgSqlInterpreter(ServerSession session, Block body, PlpgSqlResultInfo resultInfo) {
         this.session = session;
         this.body = body;
-        this.returnType = returnType;
+        this.resultInfo = resultInfo;
+        this.returnType = resultInfo.returnType;
         this.sqlExecutor = new PlpgSqlSqlExecutor(session);
     }
 
@@ -103,18 +112,17 @@ public class PlpgSqlInterpreter {
      */
     public Value execute(String[] parameterNames, String[] parameterTypes,
             Value[] parameterValues) {
+        this.parameterNames = parameterNames;
         PlpgSqlScope parameterScope = new PlpgSqlScope(null);
         scope = parameterScope;
         try {
             declareParameters(parameterNames, parameterTypes, parameterValues);
+            declareTableColumns(parameterScope);
             declareFoundVariable(parameterScope);
             try {
                 executeBlock(body);
-                // 非void函数执行到结尾还没有RETURN，PostgreSQL会报错
-                if (returnType != Value.UNKNOWN && returnType != Value.NULL)
-                    throw PlpgSqlException.raise("2F005",
-                            "control reached end of function without RETURN");
-                return ValueNull.INSTANCE;
+                // 自然结束时按返回形态组装返回值
+                return finishWithoutReturn();
             } catch (ReturnSignal signal) {
                 return signal.value;
             } catch (ExitSignal signal) {
@@ -125,6 +133,112 @@ public class PlpgSqlInterpreter {
             }
         } finally {
             scope = null;
+        }
+    }
+
+    // 函数自然结束或执行RETURN;时按返回形态组装返回值
+    private Value finishWithoutReturn() {
+        if (resultInfo.setReturning)
+            return buildSetResult();
+        if (resultInfo.hasMultipleOutputParameters())
+            return buildOutputResultSet();
+        if (resultInfo.hasOutputParameters())
+            return getOutputValue();
+        if (returnType != Value.UNKNOWN && returnType != Value.NULL)
+            throw PlpgSqlException.raise("2F005",
+                    "control reached end of function without RETURN");
+        return ValueNull.INSTANCE;
+    }
+
+    // 单个OUT/INOUT参数的返回值
+    private Value getOutputValue() {
+        int index = resultInfo.outputIndexes[0];
+        PlpgSqlVariable variable = scope.findVariable(parameterNames[index], false);
+        Value value = variable == null ? ValueNull.INSTANCE : variable.getValue();
+        if (returnType != Value.UNKNOWN && returnType != Value.NULL)
+            value = value.convertTo(returnType);
+        return value;
+    }
+
+    // 多个OUT/INOUT参数组成一行结果集，列名用参数名
+    private Value buildOutputResultSet() {
+        int count = resultInfo.outputIndexes.length;
+        String[] names = new String[count];
+        int[] types = new int[count];
+        long[] precisions = new long[count];
+        int[] scales = new int[count];
+        Value[] row = new Value[count];
+        for (int i = 0; i < count; i++) {
+            int index = resultInfo.outputIndexes[i];
+            names[i] = parameterNames[index];
+            PlpgSqlVariable variable = scope.findVariable(names[i], false);
+            row[i] = variable == null ? ValueNull.INSTANCE : variable.getValue();
+            types[i] = variable == null ? Value.UNKNOWN : variable.getType();
+            if (types[i] == Value.UNKNOWN)
+                types[i] = Value.NULL;
+            precisions[i] = DataType.getDataType(types[i]).defaultPrecision;
+            scales[i] = DataType.getDataType(types[i]).defaultScale;
+        }
+        ArrayList<Value[]> rows = new ArrayList<>();
+        rows.add(row);
+        return buildResultSet(rows, names, types, precisions, scales);
+    }
+
+    private Value buildSetResult() {
+        // SETOF/TABLE：列名和类型来自函数声明
+        int count = resultInfo.columnTypes == null ? 0 : resultInfo.columnTypes.length;
+        String[] names = new String[count];
+        int[] types = new int[count];
+        long[] precisions = new long[count];
+        int[] scales = new int[count];
+        for (int i = 0; i < count; i++) {
+            names[i] = resultInfo.getColumnName(i);
+            types[i] = resultInfo.columnTypes[i];
+            precisions[i] = resultInfo.columnPrecisions != null ? resultInfo.columnPrecisions[i]
+                    : DataType.getDataType(types[i]).defaultPrecision;
+            scales[i] = resultInfo.columnScales != null ? resultInfo.columnScales[i]
+                    : DataType.getDataType(types[i]).defaultScale;
+        }
+        return buildResultSet(returnedRows, names, types, precisions, scales);
+    }
+
+    // 把Value行转换成SimpleResultSet，供RETURNS SETOF/TABLE和多个OUT参数使用
+    private static Value buildResultSet(List<Value[]> rows, String[] names, int[] types,
+            long[] precisions, int[] scales) {
+        SimpleResultSet simple = new SimpleResultSet();
+        simple.setAutoClose(false);
+        for (int i = 0; i < types.length; i++) {
+            simple.addColumn(names[i], DataType.convertTypeToSQLType(types[i]), (int) precisions[i],
+                    scales[i]);
+        }
+        for (Value[] row : rows) {
+            Object[] objects = new Object[types.length];
+            for (int i = 0; i < types.length; i++) {
+                Value value = i < row.length ? row[i] : ValueNull.INSTANCE;
+                if (value == null)
+                    value = ValueNull.INSTANCE;
+                if (types[i] != Value.UNKNOWN && types[i] != Value.NULL)
+                    value = value.convertTo(types[i]);
+                objects[i] = value.getObject();
+            }
+            simple.addRow(objects);
+        }
+        return ValueResultSet.get(simple);
+    }
+
+    // RETURNS TABLE的列在函数体里也是变量，RETURN NEXT不带表达式时用它们组行
+    private void declareTableColumns(PlpgSqlScope parameterScope) {
+        if (!resultInfo.setReturning || !resultInfo.returnsTable || resultInfo.columnNames == null)
+            return;
+        for (int i = 0; i < resultInfo.columnNames.length; i++) {
+            PlpgSqlVariable variable = new PlpgSqlVariable(resultInfo.columnNames[i], false, false,
+                    false);
+            int type = resultInfo.columnTypes != null && i < resultInfo.columnTypes.length
+                    ? resultInfo.columnTypes[i]
+                    : Value.UNKNOWN;
+            variable.setType(type);
+            variable.setInitialValue(ValueNull.INSTANCE);
+            parameterScope.declare(variable);
         }
     }
 
@@ -320,12 +434,24 @@ public class PlpgSqlInterpreter {
     }
 
     private void executeReturn(Return node) {
-        if (node.expression == null) {
-            if (returnType != Value.UNKNOWN && returnType != Value.NULL)
-                throw PlpgSqlException.raise("2F005",
-                        "RETURN; cannot be used in a function returning a value");
-            throw new ReturnSignal(ValueNull.INSTANCE);
+        if (node.next) {
+            executeReturnNext(node);
+            return;
         }
+        if (node.query) {
+            executeReturnQuery(node);
+            return;
+        }
+        if (node.expression == null) {
+            // RETURN; 在SETOF/TABLE里结束结果集，在OUT参数函数里返回OUT变量的值
+            throw new ReturnSignal(finishWithoutReturn());
+        }
+        if (resultInfo.setReturning)
+            throw PlpgSqlException.raise("2F005",
+                    "RETURN cannot have a parameter in function returning set");
+        if (resultInfo.hasMultipleOutputParameters())
+            throw PlpgSqlException.raise("2F005",
+                    "RETURN cannot have a parameter in function with OUT parameters");
         if (returnType == Value.NULL)
             throw PlpgSqlException.raise("2F005",
                     "RETURN cannot have a parameter in function with void return type");
@@ -333,6 +459,81 @@ public class PlpgSqlInterpreter {
         if (returnType != Value.UNKNOWN)
             value = value.convertTo(returnType);
         throw new ReturnSignal(value);
+    }
+
+    // RETURN NEXT只追加一行，不结束函数
+    private void executeReturnNext(Return node) {
+        if (!resultInfo.setReturning)
+            throw PlpgSqlException.raise("2F005",
+                    "RETURN NEXT can only be used in a set-returning function");
+        Value[] row = buildReturnedRow(node.expression);
+        returnedRows.add(row);
+    }
+
+    // 根据表达式或OUT/TABLE变量组装一行结果
+    private Value[] buildReturnedRow(String expression) {
+        int count = resultInfo.columnTypes == null ? 0 : resultInfo.columnTypes.length;
+        if (count == 0)
+            throw PlpgSqlException.raise("2F005", "RETURN NEXT in a function without columns");
+        Value[] row = new Value[count];
+        if (expression == null) {
+            // RETURNS TABLE：列变量里就是当前行的值
+            if (!resultInfo.returnsTable && count == 1)
+                throw PlpgSqlException.raise("2F005",
+                        "RETURN NEXT requires an expression in a scalar set-returning function");
+            for (int i = 0; i < count; i++) {
+                PlpgSqlVariable variable = scope.findVariable(resultInfo.getColumnName(i), false);
+                row[i] = variable == null ? ValueNull.INSTANCE : variable.getValue();
+            }
+            return row;
+        }
+        if (count == 1) {
+            Value value = sqlExecutor.evalExpression(expression, scope);
+            row[0] = convertColumnValue(0, value);
+            return row;
+        }
+        // 多列时允许表达式是一个record变量
+        PlpgSqlVariable record = scope.findVariable(expression.trim(), false);
+        if (record == null || !record.isRecord())
+            throw DbException.getUnsupportedException(
+                    "PL/pgSQL RETURN NEXT with multiple columns requires a record variable");
+        for (int i = 0; i < count; i++) {
+            row[i] = convertColumnValue(i,
+                    record.getRecordField(resultInfo.getColumnName(i)));
+        }
+        return row;
+    }
+
+    private Value convertColumnValue(int index, Value value) {
+        if (value == null)
+            value = ValueNull.INSTANCE;
+        int type = resultInfo.columnTypes[index];
+        if (type != Value.UNKNOWN && type != Value.NULL)
+            value = value.convertTo(type);
+        return value;
+    }
+
+    // RETURN QUERY执行查询并把所有行追加到结果集
+    private void executeReturnQuery(Return node) {
+        if (!resultInfo.setReturning)
+            throw PlpgSqlException.raise("2F005",
+                    "RETURN QUERY can only be used in a set-returning function");
+        if (node.expression == null || node.expression.trim().isEmpty())
+            throw PlpgSqlException.raise("42601", "RETURN QUERY requires a query");
+        PlpgSqlSqlExecutor.QueryRows queryRows = sqlExecutor.queryWithColumns(node.expression,
+                scope, 0);
+        int count = resultInfo.columnTypes == null ? 0 : resultInfo.columnTypes.length;
+        if (queryRows.columnTypes.length != count)
+            throw PlpgSqlException.raise("42804",
+                    "RETURN QUERY has " + queryRows.columnTypes.length + " columns but "
+                            + count + " expected");
+        for (Value[] source : queryRows.rows) {
+            Value[] row = new Value[count];
+            for (int i = 0; i < count; i++)
+                row[i] = convertColumnValue(i, source[i]);
+            returnedRows.add(row);
+        }
+        lastRowCount = queryRows.rows.size();
     }
 
     private void executeSql(SqlExec node) {

@@ -41,7 +41,7 @@ public class PlpgSqlFunction extends SqlFunction {
         if (schemaName != null && !Constants.SCHEMA_MAIN.equals(schemaName))
             nestedSession.setCurrentSchemaName(schemaName);
         PlpgSqlInterpreter interpreter = new PlpgSqlInterpreter(nestedSession, block,
-                getReturnType());
+                getResultInfo());
         try {
             return interpreter.execute(getParameterNames(), getParameterTypes(), values);
         } catch (PlpgSqlException e) {
@@ -49,6 +49,27 @@ public class PlpgSqlFunction extends SqlFunction {
             throw DbException.convert(
                     new SQLException(e.getMessage(), e.getSqlState(), ErrorCode.GENERAL_ERROR_1));
         }
+    }
+
+    private PlpgSqlResultInfo getResultInfo() {
+        int returnType = getReturnType();
+        boolean setReturning = isSetReturning();
+        boolean returnsTable = isReturnsTable();
+        int[] parameterModes = getParameterModes();
+        int[] outputIndexes = getOutputIndexes();
+        String[] columnNames = null;
+        int[] columnTypes = null;
+        long[] columnPrecisions = null;
+        int[] columnScales = null;
+        if (setReturning) {
+            columnNames = returnsTable ? getReturnColumnNames() : null;
+            columnTypes = getReturnColumnTypes();
+            columnPrecisions = getReturnColumnPrecisions();
+            columnScales = getReturnColumnScales();
+        }
+        return new PlpgSqlResultInfo(getName(), returnType, setReturning, returnsTable,
+                parameterModes, outputIndexes, columnNames, columnTypes, columnPrecisions,
+                columnScales);
     }
 
     @Override

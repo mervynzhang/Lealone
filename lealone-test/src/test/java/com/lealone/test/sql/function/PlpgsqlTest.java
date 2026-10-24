@@ -588,6 +588,26 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals(6, getIntValue(1));
     }
 
+    // 有OUT/INOUT参数时，裸RETURN;和自然结束都返回OUT参数的值
+    @Test
+    public void testOutParameterBareReturn() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_out_bare(i INT, OUT j INT) AS $$"
+                + " BEGIN j := i + 1; RETURN; END $$ LANGUAGE plpgsql");
+        executeQuery("SELECT plp_out_bare(42)");
+        assertEquals(43, getIntValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_inout_natural(INOUT i INT) AS $$"
+                + " BEGIN i := i + 1; END $$ LANGUAGE plpgsql");
+        executeQuery("SELECT plp_inout_natural(42)");
+        assertEquals(43, getIntValue(1));
+
+        // 显式RETURN表达式仍然可用
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_out_value(i INT, OUT j INT) AS $$"
+                + " BEGIN j := i + 1; RETURN j * 2; END $$ LANGUAGE plpgsql");
+        executeQuery("SELECT plp_out_value(42)");
+        assertEquals(86, getIntValue(1));
+    }
+
     // GET DIAGNOSTICS ... = ROW_COUNT
     @Test
     public void testGetDiagnosticsRowCount() throws Exception {
