@@ -1082,8 +1082,24 @@ public class SqlFunction extends FunctionAlias {
         // 函数体直接返回一个复合值(如SELECT ROW(...)::comp)时按单列处理
         if (compositeReturnType != null && rs.getMetaData().getColumnCount() == 1) {
             Object object = rs.getObject(1);
-            if (object instanceof Value && ((Value) object).getType() == Value.ARRAY)
-                return compositeReturnType.convert((Value) object);
+            if (object instanceof Object[]) {
+                Object[] values = (Object[]) object;
+                Column[] columns = compositeReturnType.getColumns();
+                if (values.length == columns.length) {
+                    Value[] list = new Value[values.length];
+                    for (int i = 0; i < values.length; i++)
+                        list[i] = DataType.convertToValue(session, values[i], columns[i].getType());
+                    return compositeReturnType.convert(ValueArray.get(list));
+                }
+            }
+            if (object instanceof Value) {
+                Value v = (Value) object;
+                if (v.getType() == Value.ARRAY)
+                    return compositeReturnType.convert(v);
+                return compositeReturnType.convert(v.getString());
+            }
+            if (object instanceof String)
+                return compositeReturnType.convert((String) object);
         }
         int count = compositeReturnType == null ? outputIndexes.length
                 : compositeReturnType.getColumns().length;
