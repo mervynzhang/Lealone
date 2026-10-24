@@ -271,9 +271,32 @@ public abstract class StorageBase implements Storage {
         }
     }
 
-    // 先流式计算size和crc32，只有新增或变化的文件才写入zip，全程不把文件读进内存
+    // 全量备份不需要先算crc再决定写不写: 每个文件都要写, 所以边写边算crc, 只读一遍。
+    // 增量备份必须先算出size/crc才能和基准清单比对, 只有变化的文件才写入zip, 这时才需要两遍。
     private void backupFile(BackupContext ctx, String entryName, String mapName, FilePath file)
             throws IOException {
+        if (!ctx.isIncremental()) {
+            CRC32 crc = new CRC32();
+            long size = 0;
+            ZipOutputStream out = ctx.getZipOutputStream();
+            try (InputStream in = open(mapName, file)) {
+                if (in == null)
+                    return;
+                out.putNextEntry(new ZipEntry(entryName));
+                byte[] buff = new byte[8192];
+                int read;
+                while ((read = in.read(buff)) > 0) {
+                    crc.update(buff, 0, read);
+                    out.write(buff, 0, read);
+                    size += read;
+                }
+                out.closeEntry();
+            }
+            ctx.addPresent(entryName);
+            ctx.addEntry(entryName, size, crc.getValue());
+            return;
+        }
+        // 增量备份: 先流式计算size和crc32，只有新增或变化的文件才写入zip，全程不把文件读进内存
         long size;
         long crc32;
         CRC32 crc = new CRC32();
