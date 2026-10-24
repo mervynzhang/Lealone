@@ -376,6 +376,14 @@ public class DataType {
     public static Value readValue(Session session, ResultSet rs, int columnIndex, int type) {
         try {
             Value v;
+            if (type == Value.DATE || type == Value.TIME || type == Value.TIMESTAMP) {
+                // 时间类型的值可能直接以Value形式放在结果集里(比如setof函数)，不要物化成
+                // java.sql.Date/Time/Timestamp再转回来，那会按默认时区做epoch换算
+                Object o = rs.getObject(columnIndex);
+                if (o instanceof Value) {
+                    return ((Value) o).convertTo(type);
+                }
+            }
             switch (type) {
             case Value.NULL: {
                 return ValueNull.INSTANCE;

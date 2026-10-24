@@ -900,7 +900,7 @@ public class SqlFunction extends FunctionAlias {
         if (!rs.next()) {
             return ValueNull.INSTANCE;
         }
-        Value v = getBodyValue(session, rs, 1, returnType);
+        Value v = getBodyValue(session, rs, rs.getMetaData(), 1, returnType);
         return v.convertTo(returnType);
     }
 
@@ -939,12 +939,14 @@ public class SqlFunction extends FunctionAlias {
         if (columnCount != columnTypes.length) {
             throw DbException.get(ErrorCode.COLUMN_COUNT_DOES_NOT_MATCH);
         }
+        ResultSetMetaData meta = rs.getMetaData();
         while (rs.next()) {
             Object[] row = new Object[columnCount];
             for (int i = 0; i < columnCount; i++) {
-                Value v = DataType.convertToValue(session, rs.getObject(i + 1), columnTypes[i]);
+                Value v = getBodyValue(session, rs, meta, i + 1, columnTypes[i]);
                 v = v.convertTo(columnTypes[i]);
-                row[i] = v.getObject();
+                // 时间列直接放Value，物化成java.sql.Date/Time/Timestamp再读回来要按默认时区换算
+                row[i] = isDateTimeType(columnTypes[i]) ? v : v.getObject();
             }
             simple.addRow(row);
         }
@@ -1033,10 +1035,11 @@ public class SqlFunction extends FunctionAlias {
         if (!rs.next()) {
             return ValueNull.INSTANCE;
         }
+        ResultSetMetaData meta = rs.getMetaData();
         Value[] row = new Value[outputIndexes.length];
         for (int i = 0; i < outputIndexes.length; i++) {
             int type = parameterTypeIds[outputIndexes[i]];
-            Value v = getBodyValue(session, rs, i + 1, type);
+            Value v = getBodyValue(session, rs, meta, i + 1, type);
             row[i] = v.convertTo(type);
         }
         return ValueArray.get(row);
@@ -1049,14 +1052,19 @@ public class SqlFunction extends FunctionAlias {
      * TimeZone.setDefault)就会和显式CAST(DATE AS TIMESTAMP)差一个时区偏移，
      * 所以时间列改成按结果集里的文本还原，和显式CAST一样只用墙上时间字段。
      */
-    private static Value getBodyValue(ServerSession session, ResultSet rs, int column, int targetType)
-            throws SQLException {
-        int sourceType = getDateTimeType(rs.getMetaData().getColumnType(column));
+    private static Value getBodyValue(ServerSession session, ResultSet rs, ResultSetMetaData meta,
+            int column, int targetType) throws SQLException {
+        int sourceType = getDateTimeType(meta.getColumnType(column));
         if (sourceType != Value.UNKNOWN) {
             return DataType.convertToValue(session, rs.getString(column), sourceType)
                     .convertTo(sourceType).convertTo(targetType);
         }
         return DataType.convertToValue(session, rs.getObject(column), targetType);
+    }
+
+    // 时间类型: DATE/TIME/TIMESTAMP，物化成java.sql.*再转回来会按默认时区换算
+    private static boolean isDateTimeType(int type) {
+        return type == Value.DATE || type == Value.TIME || type == Value.TIMESTAMP;
     }
 
     // 结果集里的列是时间类型时返回对应的Value类型，否则返回UNKNOWN

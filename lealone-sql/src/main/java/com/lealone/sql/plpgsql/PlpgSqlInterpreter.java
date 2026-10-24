@@ -218,11 +218,20 @@ public class PlpgSqlInterpreter {
                     value = ValueNull.INSTANCE;
                 if (types[i] != Value.UNKNOWN && types[i] != Value.NULL)
                     value = value.convertTo(types[i]);
-                objects[i] = value.getObject();
+                // 时间列直接放Value，物化成java.sql.Date/Time/Timestamp再读回来要按默认时区换算
+                if (isDateTimeType(types[i])) {
+                    objects[i] = value;
+                } else {
+                    objects[i] = value.getObject();
+                }
             }
             simple.addRow(objects);
         }
         return ValueResultSet.get(simple);
+    }
+
+    private static boolean isDateTimeType(int type) {
+        return type == Value.DATE || type == Value.TIME || type == Value.TIMESTAMP;
     }
 
     // RETURNS TABLE的列在函数体里也是变量，RETURN NEXT不带表达式时用它们组行

@@ -178,6 +178,65 @@ public class FunctionOverloadTest extends SqlTestBase {
         }
     }
 
+    // SETOF/RETURNS TABLE的时间列不能物化成java.sql.Date/Time/Timestamp再转回来，
+    // 否则运行期改过默认时区后结果会整体偏移。
+    // DateTimeUtils缓存的是第一次用到时的Calendar，所以换两个不同的时区各验一遍:
+    // 至少有一个和缓存里的时区不同，能把"隐式转换和显式CAST不一致"暴露出来
+    @Test
+    public void testSetofAndTableDateTimeAfterTimeZoneChange() throws Exception {
+        executeUpdate("CREATE FUNCTION sz_ts(i INT) RETURNS SETOF TIMESTAMP AS "
+                + "$$ SELECT TIMESTAMP '2020-01-02 00:00:00' $$");
+        executeUpdate(
+                "CREATE FUNCTION sz_td(i INT) RETURNS SETOF DATE AS $$ SELECT DATE '2020-01-02' $$");
+        executeUpdate(
+                "CREATE FUNCTION sz_tt(i INT) RETURNS SETOF TIME AS $$ SELECT TIME '03:04:05' $$");
+        executeUpdate("CREATE FUNCTION sz_tbl(i INT) RETURNS TABLE(x TIMESTAMP, d DATE, t TIME) AS "
+                + "$$ SELECT TIMESTAMP '2020-01-02 00:00:00', DATE '2020-01-02', TIME '03:04:05' $$");
+        executeUpdate("CREATE FUNCTION sz_pts(i INT) RETURNS SETOF TIMESTAMP AS $$ "
+                + "BEGIN RETURN NEXT TIMESTAMP '2020-01-02 00:00:00'; END $$ LANGUAGE plpgsql");
+
+        TimeZone defaultZone = TimeZone.getDefault();
+        try {
+            checkSetofDateTime("GMT+8");
+            checkSetofDateTime("America/Los_Angeles");
+        } finally {
+            TimeZone.setDefault(defaultZone);
+        }
+    }
+
+    private void checkSetofDateTime(String zone) throws Exception {
+        TimeZone.setDefault(TimeZone.getTimeZone(zone));
+        // 期望值取引擎自己的显式CAST
+        executeQuery("SELECT CAST(TIMESTAMP '2020-01-02 00:00:00' AS TIMESTAMP), "
+                + "CAST(DATE '2020-01-02' AS DATE), CAST(TIME '03:04:05' AS TIME)");
+        String expectedTs = getStringValue(1);
+        String expectedDate = getStringValue(2);
+        String expectedTime = getStringValue(3);
+        long expectedMillis = rs.getTimestamp(1).getTime();
+
+        executeQuery("SELECT * FROM sz_ts(1)");
+        assertEquals(expectedTs, getStringValue(1));
+        executeQuery("SELECT * FROM sz_ts(1)");
+        assertEquals(expectedMillis, rs.getTimestamp(1).getTime());
+        // WITH ORDINALITY
+        executeQuery("SELECT * FROM sz_ts(1) WITH ORDINALITY");
+        assertEquals(expectedTs, getStringValue(1));
+        assertEquals(1, getIntValue(2));
+        // setof DATE / TIME
+        executeQuery("SELECT * FROM sz_td(1)");
+        assertEquals(expectedDate, getStringValue(1));
+        executeQuery("SELECT * FROM sz_tt(1)");
+        assertEquals(expectedTime, getStringValue(1));
+        // plpgsql的setof
+        executeQuery("SELECT * FROM sz_pts(1)");
+        assertEquals(expectedTs, getStringValue(1));
+        // RETURNS TABLE的三个时间列
+        executeQuery("SELECT * FROM sz_tbl(1)");
+        assertEquals(expectedTs, getStringValue(1));
+        assertEquals(expectedDate, getStringValue(2));
+        assertEquals(expectedTime, getStringValue(3));
+    }
+
     // 隐式转换矩阵: 只允许PostgreSQL里implicit的类型对，其余必须显式CAST
     @Test
     public void testImplicitConversionMatrix() throws Exception {
