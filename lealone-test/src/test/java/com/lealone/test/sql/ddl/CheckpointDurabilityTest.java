@@ -13,12 +13,13 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 
-import org.junit.Ignore;
 import org.junit.After;
 import org.junit.Test;
 
+import com.lealone.common.exceptions.DbException;
 import com.lealone.db.Database;
 import com.lealone.db.LealoneDatabase;
+import com.lealone.db.session.ServerSession;
 import com.lealone.storage.fs.FileUtils;
 import com.lealone.test.TestBase;
 
@@ -94,7 +95,14 @@ public class CheckpointDurabilityTest extends TestBase {
         // 关闭数据库，等价于干净的进程退出
         Database database = LealoneDatabase.getInstance().findDatabase(dbName.toUpperCase());
         database.close(false);
-        // 把lealone库的元数据(db_0)和本库的存储目录一起复制到隔离目录，供子进程打开
+        // close(false) 如果被静默跳过(库还开着)，"干净退出"这个前提就不成立:
+        // 下面复制到的只是还没刷盘的文件，重启校验会随机失败，所以必须先确认真的关掉了
+        assertFalse("Database.close(false)必须真的关闭数据库: " + dbName, database.isInitialized());
+        copyToIsolatedDir(database, dbName);
+    }
+
+    // 把lealone库的元数据(db_0)和本库的存储目录一起复制到隔离目录，供子进程打开
+    private void copyToIsolatedDir(Database database, String dbName) throws Exception {
         String storagePath = database.getStoragePath();
         File dbDir = new File(storagePath);
         File storageRoot = dbDir.getParentFile();
@@ -104,6 +112,41 @@ public class CheckpointDurabilityTest extends TestBase {
         copyDir(dbDir, new File(isoDir, dbDir.getName()));
         isoDirs.put(dbName, isoDir);
         dbDirs.put(dbName, dbDir);
+    }
+
+    // 后台分析表(TableAnalyzer)每次DML变更超过2000行就会用一个"没有连接信息的内部session"执行ANALYZE,
+    // 这种session如果被当成用户连接, Database.close(false) 就会静默返回(库根本没关),
+    // 关闭时的刷脏页/写redo都不会执行, 调用方以为干净退出了, 重启后丢更新。
+    // 这里显式持有一个内部session, 确定性地覆盖这条路径。
+    @Test
+    public void testCloseWithInternalSession() throws Exception {
+        String db = "ckptdurE" + System.nanoTime();
+        String dir = TEST_DIR + File.separatorChar + db;
+        FileUtils.deleteRecursive(dir, false);
+        String url = "jdbc:lealone:embed:" + dir + ";user=root;password=";
+        Class.forName("com.lealone.client.jdbc.JdbcDriver");
+        execute(url, "create table if not exists t(id int primary key, v varchar(200))");
+        execute(url, "insert into t select x, 'v'||x from system_range(1, 2000)");
+        execute(url, "BACKUP TO '" + new File(TEST_DIR, db + ".zip").getAbsolutePath() + "'");
+        assertEquals(100, executeUpdate(url, "update t set v='changed'||id where id <= 100"));
+
+        Database database = LealoneDatabase.getInstance().findDatabase(db.toUpperCase());
+        dbDirs.put(db, new File(database.getStoragePath()));
+        // 与TableAnalyzer创建的分析session等价: 没有ConnectionInfo的引擎内部session
+        ServerSession internalSession = database.createSession(database.getSystemUser());
+        try {
+            database.close(false);
+            assertFalse("引擎内部session不能阻止Database.close(false)关闭数据库: " + db,
+                    database.isInitialized());
+        } finally {
+            try {
+                internalSession.close();
+            } catch (DbException e) {
+                // 库已经关闭, 内部session收尾时报错可以忽略
+            }
+        }
+        copyToIsolatedDir(database, db);
+        assertRestarted(db, 2000, 100);
     }
 
     private final java.util.Map<String, File> isoDirs = new java.util.HashMap<>();
