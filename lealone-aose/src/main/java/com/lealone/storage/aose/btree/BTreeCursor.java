@@ -10,6 +10,7 @@ import com.lealone.agent.SystemOutlineNode;
 import com.lealone.storage.CursorParameters;
 import com.lealone.storage.StorageMapCursor;
 import com.lealone.storage.aose.btree.page.Page;
+import com.lealone.storage.aose.btree.page.PageReference;
 
 /**
  * A cursor to iterate over elements in ascending order.
@@ -75,14 +76,25 @@ public class BTreeCursor<K, V> implements StorageMapCursor<K, V> {
                 return false;
             }
             if (pos.index < map.getChildPageCount(pos.page)) {
-                // 子页在遍历过程中被切割或删除了，它的ref会重定向到父节点，
-                // 从父节点的第一个子页往下找会把父节点左边已经遍历过的记录再遍历一遍，
-                // 所以只能按最后返回的key从根节点重新定位
-                if (pos.page.getChildPageReference(pos.index).isDataStructureChanged()) {
+                PageReference childRef = pos.page.getChildPageReference(pos.index);
+                Page child = childRef.getOrReadPage();
+                // 取页后如果拿到的不是这个ref自己的页面，说明ref在遍历过程中被切割或删除了，
+                // 它已经重定向到父节点，从父节点第一个子页往下找会把左边已经遍历过的记录再遍历一遍，
+                // 只能按最后返回的key从根节点重新定位
+                if (child != childRef.getPage()) {
                     reposition();
                     continue;
                 }
-                min(pos.page.getChildPage(pos.index++), null);
+                pos.index++;
+                min(child, null);
+                // 保证只向前推进：定位到的第一个key必须大于已经返回过的key，
+                // 否则说明父page对象在遍历过程中被替换过(过期的父节点)，按key重新定位
+                // 这里假设key唯一(Lealone的索引key都含rowKey)，如果用于允许重复key的map，
+                // 相等的那一项会被reposition过滤掉
+                if (key != null && pos != null && pos.index < pos.page.getKeyCount()
+                        && map.getKeyType().compare(pos.page.getKey(pos.index), key) <= 0) {
+                    reposition();
+                }
             }
         }
         return false;

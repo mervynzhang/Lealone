@@ -373,10 +373,33 @@ public class StandardSecondaryIndex extends StandardDataIndex<IndexKey, IndexKey
 
         protected IndexKey getIndexKey(TransactionMapCursor<IndexKey, IndexKey> tmCursor) {
             IndexKey current = tmCursor.getKey();
-            // 正在被删除时，读老的
-            if (current.getLockedValue() == null)
-                current = tmCursor.getValue();
-            return current;
+            // 索引项可能是墓碑(正在被删)或残留的孤儿项，只有主表行当前值还等于它时才返回，
+            // 否则该行会通过更新后的索引项再产出一次，同一个rowKey会返回两次
+            if (current.getLockedValue() == null) {
+                IndexKey old = tmCursor.getValue();
+                if (old == null || !isRowStillMatching(old))
+                    return null;
+                return old;
+            }
+            return isRowStillMatching(current) ? current : null;
+        }
+
+        // 主表行当前的索引列值是否还等于这条索引项保存的值
+        private boolean isRowStillMatching(IndexKey indexKey) {
+            Row row = table.getRow(session, indexKey.getKey());
+            if (row == null)
+                return false;
+            IndexKey currentKey = convertToKey(row);
+            Value[] oldColumns = indexKey.getColumns();
+            Value[] currentColumns = currentKey.getColumns();
+            if (oldColumns == null || currentColumns == null
+                    || oldColumns.length != currentColumns.length)
+                return false;
+            for (int i = 0; i < oldColumns.length; i++) {
+                if (oldColumns[i].compareTo(currentColumns[i]) != 0)
+                    return false;
+            }
+            return true;
         }
 
         protected abstract SearchRow nextSearchRow();
