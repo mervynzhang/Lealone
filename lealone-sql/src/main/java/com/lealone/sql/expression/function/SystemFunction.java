@@ -719,6 +719,16 @@ public class SystemFunction extends BuiltInFunction {
                 }
                 i++;
             }
+            if (info.type == NULLIF) {
+                // NULLIF(x, y)等价于CASE WHEN x=y THEN NULL ELSE x END，结果类型取第一个参数
+                int type = args[0].getType();
+                if (type != Value.UNKNOWN && type != Value.NULL) {
+                    t = type;
+                    s = args[0].getScale();
+                    p = args[0].getPrecision();
+                    d = args[0].getDisplaySize();
+                }
+            }
             if (t == Value.UNKNOWN) {
                 t = Value.STRING;
                 s = 0;
