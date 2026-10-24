@@ -155,7 +155,6 @@ public class ValueSemanticsTest extends SqlAssertTestBase {
     // BUG: 单参数 TRUNC(x) 抛 NPE。
     // 期望: TRUNC(x) 等价于 TRUNC(x, 0)，返回 1（H2 返回 NUMERIC 1）；
     // 实际: General error + NullPointerException（错误码 50000）。
-    @Ignore("BUG: TRUNC(x) with one argument throws NPE (50000); expected TRUNC(x,0)=1")
     @Test
     public void truncWithSingleArgument() {
         assertQueryEquals(1, "SELECT TRUNC(1.9)");

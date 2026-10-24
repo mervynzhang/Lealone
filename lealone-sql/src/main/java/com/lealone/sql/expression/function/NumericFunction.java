@@ -304,7 +304,8 @@ public class NumericFunction extends BuiltInFunction {
                 result = ValueTimestamp.get(new java.sql.Timestamp(c.getTimeInMillis()));
             } else {
                 double d = v0.getDouble();
-                int p = v1.getInt();
+                // 只有一个参数时等价于TRUNC(x, 0)
+                int p = v1 == null ? 0 : v1.getInt();
                 double f = Math.pow(10., p);
                 double g = d * f;
                 result = ValueDouble.get(((d < 0) ? Math.ceil(g) : Math.floor(g)) / f);
