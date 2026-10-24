@@ -5,6 +5,7 @@
  */
 package com.lealone.sql.expression.visitor;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import com.lealone.sql.expression.ExpressionColumn;
@@ -12,6 +13,7 @@ import com.lealone.sql.expression.condition.ConditionExists;
 import com.lealone.sql.expression.condition.ConditionInSelect;
 import com.lealone.sql.expression.subquery.SubQuery;
 import com.lealone.sql.optimizer.TableFilter;
+import com.lealone.sql.query.Query;
 
 /**
  * 检查一个查询是否引用了外层查询的列，也就是判断它是不是关联子查询。
@@ -36,17 +38,31 @@ public class CorrelatedVisitor extends BooleanExpressionVisitor {
 
     @Override
     public Boolean visitSubQuery(SubQuery e) {
-        return true;
+        return visitNestedQuery(e.getQuery());
     }
 
     @Override
     public Boolean visitConditionExists(ConditionExists e) {
-        return true;
+        return visitNestedQuery(e.getQuery());
     }
 
     @Override
     public Boolean visitConditionInSelect(ConditionInSelect e) {
-        // 只看左边的表达式，不展开右边的子查询
-        return e.getLeft().accept(this);
+        return e.getLeft().accept(this) && visitNestedQuery(e.getQuery());
+    }
+
+    /**
+     * 展开嵌套子查询时把嵌套查询自己的TableFilter也算成"自己的列"：
+     * 它向内层的引用不算关联，只有引用更外层查询的列才判为关联。
+     * 之前这里直接返回true(当作非关联)，导致"关联只发生在最内层"的查询被漏判，
+     * 中间层子查询的结果被跨外层行复用，从第二行起返回上一行的过期值。
+     */
+    private Boolean visitNestedQuery(Query query) {
+        List<TableFilter> nestedFilters = query.getFilters();
+        if (nestedFilters == null || nestedFilters.isEmpty())
+            return query.accept(this);
+        List<TableFilter> all = new ArrayList<>(filters != null ? filters : List.<TableFilter> of());
+        all.addAll(nestedFilters);
+        return query.accept(new CorrelatedVisitor(all));
     }
 }
