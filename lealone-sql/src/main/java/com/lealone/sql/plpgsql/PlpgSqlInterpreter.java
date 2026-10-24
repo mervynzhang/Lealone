@@ -150,8 +150,10 @@ public class PlpgSqlInterpreter {
     private Value finishWithoutReturn() {
         if (resultInfo.setReturning)
             return buildSetResult();
-        // RETURNS RECORD和多个OUT参数都返回ValueArray形式的一行record
-        if (resultInfo.returnsRecord || resultInfo.hasMultipleOutputParameters())
+        // RETURNS RECORD和多个OUT参数都返回ValueArray形式的一行record;
+        // 过程只要有OUT/INOUT参数就返回一行(单个OUT参数的过程也要一行, 和CALL的结果集对应)
+        if (resultInfo.returnsRecord || resultInfo.hasMultipleOutputParameters()
+                || resultInfo.procedure && resultInfo.hasOutputParameters())
             return buildOutputRecord();
         if (resultInfo.hasOutputParameters())
             return getOutputValue();
@@ -506,7 +508,8 @@ public class PlpgSqlInterpreter {
         if (resultInfo.setReturning)
             throw PlpgSqlException.raise("2F005",
                     "RETURN cannot have a parameter in function returning set");
-        if (resultInfo.returnsRecord || resultInfo.hasMultipleOutputParameters())
+        if (resultInfo.returnsRecord || resultInfo.hasMultipleOutputParameters()
+                || resultInfo.procedure && resultInfo.hasOutputParameters())
             throw PlpgSqlException.raise("2F005",
                     "RETURN cannot have a parameter in function with OUT parameters");
         if (returnType == Value.NULL)

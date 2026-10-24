@@ -832,6 +832,11 @@ public class SqlFunction extends FunctionAlias {
                 for (int i = 0; i < bodyParameterIndexes.length; i++) {
                     prep.setObject(i + 1, values[bodyParameterIndexes[i]]);
                 }
+                if (isPlainVoidReturn()) {
+                    // RETURNS VOID时函数体可以是普通DML, 执行完丢弃结果并返回NULL
+                    executeVoidBody(prep);
+                    return ValueNull.INSTANCE;
+                }
                 ResultSet rs = prep.executeQuery();
                 try {
                     return valueFromResultSet(session, rs);
@@ -843,6 +848,20 @@ public class SqlFunction extends FunctionAlias {
             }
         } catch (SQLException e) {
             throw DbException.convert(e);
+        }
+    }
+
+    // RETURNS VOID且不是SETOF/RECORD时, 函数体允许是普通DML(不带RETURNING)
+    private boolean isPlainVoidReturn() {
+        return returnType == Value.NULL && !isSetReturning() && !isRecordReturning();
+    }
+
+    // VOID函数体既可能是查询也可能是DML, 用execute()执行后把结果丢弃
+    private void executeVoidBody(PreparedStatement prep) throws SQLException {
+        if (prep.execute()) {
+            ResultSet rs = prep.getResultSet();
+            if (rs != null)
+                rs.close();
         }
     }
 

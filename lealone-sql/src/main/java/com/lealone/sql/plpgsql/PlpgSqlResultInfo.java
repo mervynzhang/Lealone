@@ -21,6 +21,8 @@ public class PlpgSqlResultInfo {
     // 参数模式和OUT/INOUT参数下标
     public final int[] parameterModes;
     public final int[] outputIndexes;
+    // 过程体也是用这个类描述返回形态: 没有OUT/INOUT时什么都不返回, 有OUT/INOUT时返回一行
+    public final boolean procedure;
     // SETOF/TABLE结果列；SETOF标量的columnNames为null，列名用函数名
     public final String[] columnNames;
     public final int[] columnTypes;
@@ -29,8 +31,8 @@ public class PlpgSqlResultInfo {
 
     public PlpgSqlResultInfo(String functionName, int returnType, boolean returnsRecord,
             boolean setReturning, boolean returnsTable, int[] parameterModes, int[] outputIndexes,
-            String[] columnNames, int[] columnTypes, long[] columnPrecisions,
-            int[] columnScales) {
+            String[] columnNames, int[] columnTypes, long[] columnPrecisions, int[] columnScales,
+            boolean procedure) {
         this.functionName = functionName;
         this.returnType = returnType;
         this.returnsRecord = returnsRecord;
@@ -42,6 +44,7 @@ public class PlpgSqlResultInfo {
         this.columnTypes = columnTypes;
         this.columnPrecisions = columnPrecisions;
         this.columnScales = columnScales;
+        this.procedure = procedure;
     }
 
     public boolean hasOutputParameters() {

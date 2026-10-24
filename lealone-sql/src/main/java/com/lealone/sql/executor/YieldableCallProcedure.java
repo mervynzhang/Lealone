@@ -5,9 +5,12 @@
  */
 package com.lealone.sql.executor;
 
+import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.List;
 
 import com.lealone.common.exceptions.DbException;
+import com.lealone.db.Constants;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.async.AsyncResultHandler;
 import com.lealone.db.async.AsyncTask;
@@ -20,6 +23,7 @@ import com.lealone.db.session.SessionStatus;
 import com.lealone.db.table.Column;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueInt;
+import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueNull;
 import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.PreparedSQLStatement;
@@ -27,6 +31,11 @@ import com.lealone.sql.PreparedSQLStatement.YieldableCommand;
 import com.lealone.sql.SQLStatement;
 import com.lealone.sql.dml.CallProcedure;
 import com.lealone.sql.expression.Expression;
+import com.lealone.sql.plpgsql.PlpgSqlAst;
+import com.lealone.sql.plpgsql.PlpgSqlException;
+import com.lealone.sql.plpgsql.PlpgSqlInterpreter;
+import com.lealone.sql.plpgsql.PlpgSqlParser;
+import com.lealone.sql.plpgsql.PlpgSqlResultInfo;
 
 /**
  * 执行一个存储过程。过程体里的每条SQL语句都编译成一个子yieldable，
@@ -47,6 +56,8 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
     private String[] statements; // 过程体拆分后得到的SQL语句
     private PreparedSQLStatement.Yieldable<?> yieldable;
     private Value[] argValues;
+    // PL/pgSQL过程体的执行结果(OUT/INOUT参数组成的一行ValueArray)
+    private Value plpgSqlValue;
     private int[] inputArgIndexes; // 第i个入参(IN/INOUT)对应的实参下标
     private Result result;
     private int updateCount;
@@ -67,8 +78,81 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         nestedSession = session.createNestedSession();
         if (session.isAutoCommit())
             nestedSession.setAutoCommit(false);
+        if (procedure.isPlpgSql()) {
+            // PL/pgSQL过程体和plpgsql函数一样同步解释执行, 执行完再走完成回调
+            plpgSqlValue = executePlpgSqlBody();
+            onComplete(null);
+            return;
+        }
         statements = splitBody(procedure.getBody());
         createNextYieldable();
+    }
+
+    // 在嵌套会话里解释执行PL/pgSQL过程体，返回OUT/INOUT参数组成的一行(没有OUT/INOUT时是NULL)
+    private Value executePlpgSqlBody() {
+        PlpgSqlAst.Block block = (PlpgSqlAst.Block) procedure.getCompiledBody();
+        if (block == null) {
+            block = PlpgSqlParser.parse(procedure.getBody());
+            procedure.setCompiledBody(block);
+        }
+        String schemaName = session.getCurrentSchemaName();
+        if (schemaName != null && !Constants.SCHEMA_MAIN.equals(schemaName))
+            nestedSession.setCurrentSchemaName(schemaName);
+        PlpgSqlInterpreter interpreter = new PlpgSqlInterpreter(nestedSession, block,
+                createResultInfo());
+        try {
+            return interpreter.execute(getPlpgSqlParameterNames(), getPlpgSqlParameterTypes(),
+                    getPlpgSqlParameterValues());
+        } catch (PlpgSqlException e) {
+            // 离开过程时把PL/pgSQL异常转换成带SQLSTATE的DbException
+            throw DbException.convert(new SQLException(e.getMessage(), e.getSqlState(),
+                    ErrorCode.GENERAL_ERROR_1));
+        }
+    }
+
+    // 过程只有两种返回形态: 没有OUT/INOUT时什么都不返回, 有OUT/INOUT时返回一行
+    private PlpgSqlResultInfo createResultInfo() {
+        int count = procedure.getParameterCount();
+        int[] parameterModes = new int[count];
+        for (int i = 0; i < count; i++)
+            parameterModes[i] = procedure.getParameterMode(i);
+        int outputCount = procedure.getOutputParameterCount();
+        int[] outputIndexes = new int[outputCount];
+        for (int i = 0; i < outputCount; i++)
+            outputIndexes[i] = procedure.getOutputParameterIndex(i);
+        return new PlpgSqlResultInfo(procedure.getName(), Value.NULL, false, false, false,
+                parameterModes, outputIndexes, null, null, null, null, true);
+    }
+
+    private String[] getPlpgSqlParameterNames() {
+        int count = procedure.getParameterCount();
+        String[] names = new String[count];
+        for (int i = 0; i < count; i++)
+            names[i] = procedure.getParameter(i).getName();
+        return names;
+    }
+
+    private String[] getPlpgSqlParameterTypes() {
+        int count = procedure.getParameterCount();
+        String[] types = new String[count];
+        for (int i = 0; i < count; i++) {
+            Column column = procedure.getParameter(i);
+            String typeSql = column.getOriginalSQL();
+            types[i] = typeSql != null ? typeSql
+                    : com.lealone.db.value.DataType.getDataType(column.getType()).name;
+        }
+        return types;
+    }
+
+    // PL/pgSQL按参数位置拿值，OUT参数的实参永远没有(调用时只能写NULL或者省略)
+    private Value[] getPlpgSqlParameterValues() {
+        int count = procedure.getParameterCount();
+        Value[] values = new Value[count];
+        Arrays.fill(values, ValueNull.INSTANCE);
+        for (int i = 0; i < inputArgIndexes.length; i++) {
+            values[procedure.getInputParameterIndex(i)] = argValues[inputArgIndexes[i]];
+        }
+        return values;
     }
 
     @Override
@@ -97,8 +181,13 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         }
     }
 
-    // 把过程体最后一条查询的第一行按OUT/INOUT参数声明的类型转换成一结果行
+    // 把过程体的OUT/INOUT值按参数声明的类型转换成一结果行
     private void buildOutputResult() {
+        if (procedure.isPlpgSql()) {
+            // plpgsql过程体把OUT/INOUT参数组装成一行ValueArray
+            buildPlpgSqlOutputResult();
+            return;
+        }
         int count = procedure.getOutputParameterCount();
         if (result == null) {
             throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
@@ -135,6 +224,26 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         } finally {
             result.close();
         }
+        result = output;
+    }
+
+    // plpgsql过程体的OUT/INOUT值已经在ValueArray里，按参数类型转换后组成结果行
+    private void buildPlpgSqlOutputResult() {
+        int count = procedure.getOutputParameterCount();
+        Value[] list = null;
+        if (plpgSqlValue != null && plpgSqlValue.getType() == Value.ARRAY)
+            list = ((ValueArray) plpgSqlValue).getList();
+        Value[] row = new Value[count];
+        for (int i = 0; i < count; i++) {
+            Value v = list != null && i < list.length ? list[i] : ValueNull.INSTANCE;
+            if (v == null)
+                v = ValueNull.INSTANCE;
+            Column column = procedure.getParameter(procedure.getOutputParameterIndex(i));
+            row[i] = column.convert(v);
+        }
+        LocalResult output = new LocalResult(session, call.getOutputExpressions(), count);
+        output.addRow(row);
+        output.done();
         result = output;
     }
 

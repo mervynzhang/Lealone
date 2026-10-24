@@ -78,15 +78,27 @@ select ptest1('x');
 
 -- @case procedure.atomic_body
 -- @pg create_procedure.sql:32-43
--- 缺失: Lealone 的过程体是分号分隔的 SQL 串, 不支持 SQL 标准体的 BEGIN ATOMIC ... END
+-- 适配: Lealone 过程体里用 ? 引用参数(PG 用参数名 x); PG 的 collate "C" 换成普通的 order by;
+--       断言改成"能查到新增的那一行", 不依赖前面用例留下的数据
 create procedure ptest1s(x text)
 language sql
 begin atomic
-  insert into cp_test values (1, x);
+  insert into cp_test values (1, ?);
 end;
+> update count: 0
+
 call ptest1s('b');
-select * from cp_test order by b collate "C";
--- PG 期望: CALL 成功, cp_test 多一行 (1,b)
+> update count: 1
+
+select count(*) c from cp_test where a = 1 and b = 'b';
+> C
+> -
+> 1
+> rows: 1
+
+-- 适配: 后面的用例依赖 cp_test 的行数, 这里把自己插入的行删掉
+delete from cp_test where b = 'b';
+> update count: 1
 
 -- @case procedure.utility_body
 -- @pg create_procedure.sql:46-50
@@ -204,13 +216,14 @@ call ptest7(least('a', 'b'), 'a');
 
 -- @case procedure.empty_body
 -- @pg create_procedure.sql:174-180
--- 缺失: Lealone 的过程体不能为空, 也不支持 BEGIN ATOMIC
+-- 适配: PG 里用 psql 的 \df 看过程定义, Lealone 的脚本执行器不支持元命令, 这里去掉
 create procedure ptest8(x text)
 begin atomic
 end;
-\df ptest8
+> update count: 0
+
 call ptest8('');
--- PG 期望: 建空过程成功, CALL 什么都不做
+> update count: 0
 
 -- @case procedure.out_params
 -- @pg create_procedure.sql:185-212
@@ -338,4 +351,40 @@ select count(*) c from cp_test;
 > C
 > -
 > 0
+> rows: 1
+
+-- ---------------------------------------------------------------------------
+-- PL/pgSQL过程体 + OUT/INOUT参数
+-- ---------------------------------------------------------------------------
+
+-- @case procedure.plpgsql_body
+-- @pg create_procedure.sql:79-102
+-- 适配: PG 的 INOUT 用例用 language sql + 参数名引用, Lealone 的过程体用 ? 引用参数;
+--       这里用 PG 原样的 language plpgsql 写法验证 OUT/INOUT, 过程体写成一行避免被脚本按分号切断
+create procedure ptest4d(in x int, out y int, inout z text) language plpgsql
+as $$ begin y := x * 2; z := z || '!'; end $$;
+> update count: 0
+
+call ptest4d(3, 'a');
+> Y Z
+> - --
+> 6 a!
+> rows: 1
+
+-- OUT参数写NULL占位是PostgreSQL的标准写法
+call ptest4d(4, null, 'b');
+> Y Z
+> - --
+> 8 b!
+> rows: 1
+
+-- plpgsql过程体里可以写循环和变量声明
+create procedure ptest4e(in n int, out s int) language plpgsql
+as $$ declare i int := 0; begin s := 0; while i < n loop i := i + 1; s := s + i; end loop; end $$;
+> update count: 0
+
+call ptest4e(4);
+> S
+> --
+> 10
 > rows: 1

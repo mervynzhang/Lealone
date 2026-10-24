@@ -28,6 +28,7 @@ public class CreateProcedure extends SchemaStatement {
 
     private String procedureName;
     private String body;
+    private String language;
     private boolean atomicBody;
     private boolean ifNotExists;
     private final ArrayList<Column> parameters = new ArrayList<>();
@@ -48,6 +49,14 @@ public class CreateProcedure extends SchemaStatement {
 
     public void setBody(String body) {
         this.body = body;
+    }
+
+    public void setLanguage(String language) {
+        this.language = language;
+    }
+
+    private boolean isPlpgSql() {
+        return "PLPGSQL".equalsIgnoreCase(language);
     }
 
     // BEGIN ATOMIC ... END形式的函数体
@@ -71,8 +80,11 @@ public class CreateProcedure extends SchemaStatement {
         return array;
     }
 
-    // 有OUT/INOUT参数的过程，OUT/INOUT的值来自过程体最后一条查询，所以过程体必须以查询语句结尾
+    // 有OUT/INOUT参数的过程，OUT/INOUT的值来自过程体最后一条查询，所以过程体必须以查询语句结尾;
+    // plpgsql过程体例外, OUT/INOUT参数就是plpgsql里的变量, 由过程体自己赋值
     private void checkOutputParameters() {
+        if (isPlpgSql())
+            return;
         int modeCount = parameterModes.size();
         boolean hasOutput = false;
         for (int i = 0; i < modeCount; i++) {
@@ -103,9 +115,14 @@ public class CreateProcedure extends SchemaStatement {
                 return 0;
             throw DbException.get(ErrorCode.PROCEDURE_ALREADY_EXISTS_1, procedureName);
         }
+        // PL/pgSQL只有BEGIN ... END块, 没有SQL标准的BEGIN ATOMIC体
+        if (isPlpgSql() && atomicBody) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                    "BEGIN ATOMIC procedure body with LANGUAGE " + language);
+        }
         checkOutputParameters();
         SqlProcedure procedure = new SqlProcedure(schema, getObjectId(), procedureName, body,
-                atomicBody, parameters.toArray(new Column[0]), toIntArray(parameterModes));
+                language, atomicBody, parameters.toArray(new Column[0]), toIntArray(parameterModes));
         schema.add(session, procedure, lock);
         return 0;
     }

@@ -325,20 +325,128 @@ public class PgRegressRunner {
     private void runStatements(Statement stat) throws Exception {
         StringBuilder buff = new StringBuilder();
         for (String line; (line = source.readLine()) != null;) {
-            if (line.startsWith(">"))
+            if (line.startsWith(">")) {
                 addError("<SQL语句>", line, null);
-            else if (line.endsWith(";")) {
-                buff.append(line, 0, line.length() - 1);
+                continue;
+            }
+            buff.append(line).append('\n');
+            // BEGIN ATOMIC ... END里面的分号不是语句结束, 要等END出现
+            if (line.endsWith(";") && countOpenBlocks(buff.toString()) == 0) {
                 String sql = buff.toString().trim();
+                sql = sql.substring(0, sql.length() - 1);
                 buff.setLength(0);
                 process(stat, sql);
-            } else
-                buff.append(line).append('\n');
+            }
         }
         if (buff.length() > 0) {
             addError("<用';'结束的语句>", buff.toString().replace('\n', ' '), null);
             failedInCase++;
         }
+    }
+
+    // BEGIN ATOMIC ... END和CASE ... END里面还有分号, 要等END出现后才算一条语句结束;
+    // 字符串常量、$$字符串、双引号标识符和注释里的关键字不算
+    private static int countOpenBlocks(String text) {
+        int depth = 0;
+        int i = 0;
+        int len = text.length();
+        while (i < len) {
+            char c = text.charAt(i);
+            if (c == '\'') {
+                i = skipQuoted(text, i, '\'');
+            } else if (c == '"') {
+                i = skipQuoted(text, i, '"');
+            } else if (c == '$') {
+                int next = skipDollarQuoted(text, i);
+                i = next > i ? next : i + 1;
+            } else if (c == '-' && i + 1 < len && text.charAt(i + 1) == '-') {
+                i = skipLineComment(text, i);
+            } else if (c == '/' && i + 1 < len && text.charAt(i + 1) == '*') {
+                i = skipBlockComment(text, i);
+            } else if (isWordStart(c)) {
+                int end = i + 1;
+                while (end < len && isWordPart(text.charAt(end)))
+                    end++;
+                String word = text.substring(i, end);
+                if (word.equalsIgnoreCase("begin")) {
+                    int j = skipSpaces(text, end);
+                    if (startsWithIgnoreCase(text, j, "atomic")) {
+                        depth++;
+                        i = j + "atomic".length();
+                        continue;
+                    }
+                } else if (word.equalsIgnoreCase("case")) {
+                    depth++;
+                } else if (word.equalsIgnoreCase("end") && depth > 0) {
+                    depth--;
+                }
+                i = end;
+            } else {
+                i++;
+            }
+        }
+        return depth;
+    }
+
+    private static int skipQuoted(String text, int start, char quote) {
+        int i = start + 1;
+        int len = text.length();
+        while (i < len) {
+            if (text.charAt(i) == quote) {
+                // 两个连续引号是转义
+                if (i + 1 < len && text.charAt(i + 1) == quote) {
+                    i += 2;
+                    continue;
+                }
+                return i + 1;
+            }
+            i++;
+        }
+        return len;
+    }
+
+    // 跳过$$...$$或者$tag$...$tag$，不是这种形式时返回-1
+    private static int skipDollarQuoted(String text, int start) {
+        int len = text.length();
+        int i = start + 1;
+        while (i < len && (isWordPart(text.charAt(i)) || text.charAt(i) == '$'))
+            i++;
+        if (i >= len || text.charAt(i) != '$')
+            return -1;
+        String tag = text.substring(start, i + 1);
+        int end = text.indexOf(tag, i + 1);
+        return end < 0 ? len : end + tag.length();
+    }
+
+    private static int skipLineComment(String text, int start) {
+        int end = text.indexOf('\n', start);
+        return end < 0 ? text.length() : end + 1;
+    }
+
+    private static int skipBlockComment(String text, int start) {
+        int end = text.indexOf("*/", start + 2);
+        return end < 0 ? text.length() : end + 2;
+    }
+
+    private static int skipSpaces(String text, int start) {
+        int i = start;
+        while (i < text.length() && Character.isWhitespace(text.charAt(i)))
+            i++;
+        return i;
+    }
+
+    private static boolean startsWithIgnoreCase(String text, int start, String other) {
+        if (start + other.length() > text.length())
+            return false;
+        return text.regionMatches(true, start, other, 0, other.length());
+    }
+
+    private static boolean isWordStart(char c) {
+        return Character.isLetter(c) || c == '_';
+    }
+
+    private static boolean isWordPart(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$';
     }
 
     private void process(Statement stat, String sql) throws Exception {

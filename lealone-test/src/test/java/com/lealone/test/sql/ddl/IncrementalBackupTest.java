@@ -75,7 +75,12 @@ public class IncrementalBackupTest extends TestBase {
         FileUtils.deleteRecursive(isoDir.getAbsolutePath(), false);
         File storageRoot = new File(LealoneDatabase.getInstance()
                 .findDatabase(DB_NAME.toUpperCase()).getStoragePath()).getParentFile();
-        copyDir(new File(storageRoot, "db_0"), new File(isoDir, "db_0"));
+        // lealone库(元数据库)的存储目录是按它第一次打开时的base.dir算出来的, 同一个JVM里
+        // 前面的用例可能改过base.dir(比如PgRegressTest), 所以不能按本库的父目录去拼db_0;
+        // 复制前先刷盘, 否则子进程拿到的是旧的"库名→id"映射
+        LealoneDatabase metaDb = LealoneDatabase.getInstance();
+        metaDb.checkpoint(true);
+        copyDir(new File(metaDb.getStoragePath()), new File(isoDir, "db_0"));
         try (Connection conn = DriverManager.getConnection(url); Statement stmt = conn.createStatement()) {
             stmt.executeUpdate("RESTORE FROM '" + full.getAbsolutePath() + "' TO '"
                     + isoDir.getAbsolutePath() + "'");
@@ -117,7 +122,12 @@ public class IncrementalBackupTest extends TestBase {
         FileUtils.deleteRecursive(isoDir.getAbsolutePath(), false);
         File storageRoot = new File(LealoneDatabase.getInstance()
                 .findDatabase((DB_NAME + "2").toUpperCase()).getStoragePath()).getParentFile();
-        copyDir(new File(storageRoot, "db_0"), new File(isoDir, "db_0"));
+        // lealone库(元数据库)的存储目录是按它第一次打开时的base.dir算出来的, 同一个JVM里
+        // 前面的用例可能改过base.dir(比如PgRegressTest), 所以不能按本库的父目录去拼db_0;
+        // 复制前先刷盘, 否则子进程拿到的是旧的"库名→id"映射
+        LealoneDatabase metaDb = LealoneDatabase.getInstance();
+        metaDb.checkpoint(true);
+        copyDir(new File(metaDb.getStoragePath()), new File(isoDir, "db_0"));
         try (Connection conn = DriverManager.getConnection(url); Statement stmt = conn.createStatement()) {
             stmt.executeUpdate("RESTORE FROM '" + full.getAbsolutePath() + "' TO '"
                     + isoDir.getAbsolutePath() + "'");

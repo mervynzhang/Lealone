@@ -87,7 +87,7 @@ public class PlpgSqlFunction extends SqlFunction {
         }
         return new PlpgSqlResultInfo(getName(), returnType, isReturnsRecord(), setReturning,
                 returnsTable, parameterModes, outputIndexes, columnNames, columnTypes,
-                columnPrecisions, columnScales);
+                columnPrecisions, columnScales, false);
     }
 
     @Override

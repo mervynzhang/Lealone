@@ -68,16 +68,16 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ## 四、一次完整运行的统计
 
 ```
-[pgregress]   create_function_sql.sql  用例 40(执行 16, skip 24)  脚本语句  58(通过  58, 失败 0)  被skip用例占  86 条
-[pgregress]   create_procedure.sql     用例 22(执行  8, skip 14)  脚本语句  26(通过  26, 失败 0)  被skip用例占  61 条
-[pgregress]   plpgsql.sql              用例 23(执行 16, skip  7)  脚本语句  45(通过  45, 失败 0)  被skip用例占  17 条
-[pgregress]   rangefuncs.sql           用例  9(执行  6, skip  3)  脚本语句  21(通过  21, 失败 0)  被skip用例占   9 条
-[pgregress] 合计: 用例 94 (执行 46, skip 48), 脚本语句 150 (通过 150, 失败 0), 耗时 452ms
-[pgregress] skip 清单: 48 条用例, 点名跳过的 PG 语句 274 条
-[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 146 条在 skip 清单里
-[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  84 条在 skip 清单里
-[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 23 条)
-[pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 21 条)
+[pgregress]   create_function_sql.sql  用例 40(执行 19, skip 21)  脚本语句  75(通过  75, 失败 0)  被skip用例占  70 条
+[pgregress]   create_procedure.sql     用例 23(执行 11, skip 12)  脚本语句  37(通过  37, 失败 0)  被skip用例占  55 条
+[pgregress]   plpgsql.sql              用例 23(执行 17, skip  6)  脚本语句  52(通过  52, 失败 0)  被skip用例占  16 条
+[pgregress]   rangefuncs.sql           用例 10(执行  8, skip  2)  脚本语句  31(通过  31, 失败 0)  被skip用例占   8 条
+[pgregress] 合计: 用例 96 (执行 55, skip 41), 脚本语句 195 (通过 195, 失败 0), 耗时 525ms
+[pgregress] skip 清单: 41 条用例, 点名跳过的 PG 语句 236 条
+[pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 129 条在 skip 清单里
+[pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  76 条在 skip 清单里
+[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 21 条)
+[pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 10 条)
 ```
 
 口径说明：
@@ -88,7 +88,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 48 条 / 274 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 41 条 / 236 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -306,3 +306,22 @@ call pe();                                     -- 42000 Syntax error "BEGIN ATOM
    * 游标 → `plpgsql.cursor` 1 条；`WITH ORDINALITY` → `rangefuncs.with_ordinality` 1 条。
 4. **补齐 PG 覆盖面**：`plpgsql.sql` 按段登记（尤其是游标、`RETURN QUERY EXECUTE`、`CASE` 语句）；
    `rangefuncs.sql` 里 `WITH ORDINALITY` 落地后再补；`portals.sql` 如果以后支持游标再纳入。
+
+## 七、这一轮刷新：VOID函数体、PL/pgSQL过程体、BEGIN ATOMIC
+
+三件事一起做，解锁 6 个用例（1 个新增），执行用例 49 → 55，脚本语句 167 → 195，
+skip 清单 46 → 41 条：
+
+| 用例 | 之前 | 现在 | 靠什么能力 |
+| --- | --- | --- | --- |
+| `function_sql.void_insert` | skip（函数体只支持带 RETURNING 的 DML） | 执行 6 条语句 | `RETURNS VOID` 的函数体允许普通 INSERT/UPDATE/DELETE |
+| `function_sql.sql_body_atomic` | skip（无 BEGIN ATOMIC 多语句体） | 执行 12 条语句 | `BEGIN ATOMIC ... END` 函数体 + 脚本切分器支持块内分号 |
+| `function_sql.sql_body_case` | skip（无 BEGIN ATOMIC 体） | 执行 5 条语句 | 同上，另验证块内 `CASE ... END` 不打乱切分 |
+| `procedure.atomic_body` | skip（过程体不支持 BEGIN ATOMIC） | 执行 5 条语句 | `BEGIN ATOMIC` 过程体 |
+| `procedure.empty_body` | skip（过程体不能为空） | 执行 3 条语句 | 空的 `BEGIN ATOMIC` 块 = 什么都不做的过程 |
+| `procedure.plpgsql_body`（新增） | - | 执行 12 条语句 | `CREATE PROCEDURE ... LANGUAGE plpgsql` + OUT/INOUT |
+
+脚本切分器（`PgRegressRunner`）之前按"行尾有分号"切语句，`BEGIN ATOMIC ...; ...; END;` 会被切断。
+现在 `runStatements()` 把当前行并入缓冲区后再判断，并用 `countOpenBlocks()` 统计
+`BEGIN ATOMIC ... END` / `CASE ... END` 的嵌套层数（字符串常量、`$$`字符串、双引号标识符、
+行注释和块注释里的关键字都不算），层数为 0 且行尾是分号才当成一条语句结束。
