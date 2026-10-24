@@ -1,0 +1,450 @@
+/*
+ * Copyright Lealone Database Group.
+ * Licensed under the Server Side Public License, v 1.
+ * Initial Developer: zhh
+ */
+package com.lealone.sql.plpgsql;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import com.lealone.common.exceptions.DbException;
+import com.lealone.db.api.ErrorCode;
+import com.lealone.db.result.Result;
+import com.lealone.db.session.ServerSession;
+import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueNull;
+import com.lealone.sql.LealoneSQLParser;
+import com.lealone.sql.PreparedSQLStatement;
+import com.lealone.sql.StatementBase;
+import com.lealone.sql.expression.Expression;
+import com.lealone.sql.expression.ValueExpression;
+
+/**
+ * 在PL/pgSQL解释器里执行内嵌SQL和表达式。
+ * 表达式中的PL/pgSQL变量在解析期被替换成常量表达式，
+ * 因此表名、SET的列名、INSERT的列名等位置不会被误当成变量。
+ */
+public class PlpgSqlSqlExecutor {
+
+    private final ServerSession session;
+    // 声明类型文本到Value类型常量的缓存
+    private final Map<String, Integer> typeCache = new HashMap<>();
+
+    public PlpgSqlSqlExecutor(ServerSession session) {
+        this.session = session;
+    }
+
+    /**
+     * 执行SELECT &lt;expression&gt;，返回第一行第一列，没有行时返回NULL。
+     */
+    public Value evalExpression(String expression, PlpgSqlVariableResolver resolver) {
+        if (expression == null || expression.trim().isEmpty())
+            return ValueNull.INSTANCE;
+        List<Value[]> rows = query("SELECT " + expression, resolver, 1);
+        if (rows.isEmpty())
+            return ValueNull.INSTANCE;
+        Value[] row = rows.get(0);
+        return row.length == 0 ? ValueNull.INSTANCE : row[0];
+    }
+
+    /**
+     * 执行查询，最多取maxRows行；maxRows小于等于0表示不限。
+     */
+    public List<Value[]> query(String sql, PlpgSqlVariableResolver resolver, int maxRows) {
+        PreparedSQLStatement statement = prepare(sql, resolver);
+        if (!statement.isQuery()) {
+            statement.close();
+            throw DbException.get(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY);
+        }
+        Result result = statement.query(0);
+        try {
+            ArrayList<Value[]> rows = new ArrayList<>();
+            if (result != null) {
+                while ((maxRows <= 0 || rows.size() < maxRows) && result.next()) {
+                    // currentRow返回的数组可能会被复用，必须复制一份
+                    rows.add(result.currentRow().clone());
+                }
+            }
+            return rows;
+        } finally {
+            if (result != null)
+                result.close();
+            statement.close();
+        }
+    }
+
+    /**
+     * 执行查询并丢弃结果，PERFORM语句使用。
+     */
+    public void executeQuery(String sql, PlpgSqlVariableResolver resolver) {
+        PreparedSQLStatement statement = prepare(sql, resolver);
+        if (!statement.isQuery()) {
+            statement.close();
+            throw DbException.get(ErrorCode.METHOD_ONLY_ALLOWED_FOR_QUERY);
+        }
+        Result result = statement.query(0);
+        try {
+            if (result != null) {
+                while (result.next()) {
+                    // 丢弃每一行
+                }
+            }
+        } finally {
+            if (result != null)
+                result.close();
+            statement.close();
+        }
+    }
+
+    /**
+     * 执行一条SQL语句，是查询就丢弃结果，否则执行更新。
+     */
+    public int execute(String sql, PlpgSqlVariableResolver resolver) {
+        PreparedSQLStatement statement = prepare(sql, resolver);
+        try {
+            if (statement.isQuery()) {
+                Result result = statement.query(0);
+                try {
+                    if (result != null) {
+                        while (result.next()) {
+                            // PL/pgSQL里直接写SELECT而不加INTO时结果被丢弃
+                        }
+                    }
+                } finally {
+                    if (result != null)
+                        result.close();
+                }
+                return 0;
+            }
+            return statement.update();
+        } finally {
+            statement.close();
+        }
+    }
+
+    /**
+     * 把声明类型解析成Value类型常量，支持tab.col%TYPE。
+     */
+    public int resolveType(String typeName) {
+        if (typeName == null)
+            return Value.UNKNOWN;
+        String type = typeName.trim();
+        if (type.isEmpty())
+            return Value.UNKNOWN;
+        Integer cached = typeCache.get(type);
+        if (cached != null)
+            return cached.intValue();
+
+        int valueType;
+        String compact = type.replaceAll("\\s+", "");
+        if (compact.toLowerCase().endsWith("%type")) {
+            // 去掉结尾的%TYPE，剩下tab.col
+            String prefix = compact.substring(0, compact.length() - 5);
+            int dot = prefix.lastIndexOf('.');
+            if (dot <= 0 || dot == prefix.length() - 1) {
+                throw DbException.getSyntaxError(typeName, 0, "invalid %TYPE declaration");
+            }
+            String table = prefix.substring(0, dot);
+            String column = prefix.substring(dot + 1);
+            valueType = queryColumnType("SELECT " + column + " FROM " + table + " WHERE 1=0");
+        } else {
+            // 借助SQL引擎自己的类型解析，用户定义类型也能处理
+            valueType = queryColumnType("SELECT CAST(NULL AS " + type + ")");
+        }
+        typeCache.put(type, Integer.valueOf(valueType));
+        return valueType;
+    }
+
+    private int queryColumnType(String sql) {
+        PreparedSQLStatement statement = prepare(sql, null);
+        try {
+            Result result = statement.query(0);
+            try {
+                if (result == null || result.getVisibleColumnCount() == 0) {
+                    throw DbException.getSyntaxError(sql, 0, "can not resolve type");
+                }
+                return result.getColumnType(0);
+            } finally {
+                if (result != null)
+                    result.close();
+            }
+        } finally {
+            statement.close();
+        }
+    }
+
+    private PreparedSQLStatement prepare(String sql, PlpgSqlVariableResolver resolver) {
+        StatementBase statement = new PlpgSqlSqlParser(session, resolver).parse(sql);
+        return statement.prepare();
+    }
+
+    /**
+     * 拆分SELECT ... INTO，不是SELECT ... INTO时返回null。
+     */
+    public static SelectInto splitSelectInto(String sql) {
+        if (sql == null)
+            return null;
+        int length = sql.length();
+        int start = skipWhitespaceAndComments(sql, 0);
+        if (!wordAt(sql, start, "SELECT"))
+            return null;
+        int afterSelect = start + 6;
+        if (afterSelect < length && isIdentifierPart(sql.charAt(afterSelect)))
+            return null;
+
+        int depth = 0;
+        int intoStart = -1;
+        int pos = afterSelect;
+        while (pos < length) {
+            char c = sql.charAt(pos);
+            if (c == '\'') {
+                pos = skipSingleQuoted(sql, pos);
+            } else if (c == '"') {
+                pos = skipDoubleQuoted(sql, pos);
+            } else if (c == '$') {
+                int next = skipDollarQuoted(sql, pos);
+                pos = next > pos ? next : pos + 1;
+            } else if (c == '-' && pos + 1 < length && sql.charAt(pos + 1) == '-') {
+                pos = skipLineComment(sql, pos);
+            } else if (c == '/' && pos + 1 < length && sql.charAt(pos + 1) == '*') {
+                pos = skipBlockComment(sql, pos);
+            } else if (c == '(') {
+                depth++;
+                pos++;
+            } else if (c == ')') {
+                depth--;
+                pos++;
+            } else {
+                if (depth == 0 && wordAt(sql, pos, "INTO")) {
+                    intoStart = pos;
+                    break;
+                }
+                pos++;
+            }
+        }
+        if (intoStart < 0)
+            return null;
+
+        int targetPos = skipWhitespaceAndComments(sql, intoStart + 4);
+        boolean strict = false;
+        if (wordAt(sql, targetPos, "STRICT")) {
+            strict = true;
+            targetPos = skipWhitespaceAndComments(sql, targetPos + 6);
+        }
+        ArrayList<String> targets = new ArrayList<>();
+        int targetEnd = targetPos;
+        while (true) {
+            targetPos = skipWhitespaceAndComments(sql, targetPos);
+            if (targetPos >= length)
+                break;
+            String name;
+            char c = sql.charAt(targetPos);
+            if (c == '"') {
+                int end = skipDoubleQuoted(sql, targetPos);
+                name = sql.substring(targetPos + 1, end - 1).replace("\"\"", "\"");
+                targetPos = end;
+            } else if (isIdentifierStart(c)) {
+                int end = targetPos + 1;
+                while (end < length && isIdentifierPart(sql.charAt(end)))
+                    end++;
+                name = sql.substring(targetPos, end);
+                targetPos = end;
+            } else {
+                break;
+            }
+            if (targetPos < length && sql.charAt(targetPos) == '.') {
+                throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                        "SELECT INTO record field: " + name);
+            }
+            targets.add(name);
+            targetEnd = targetPos;
+            int next = skipWhitespaceAndComments(sql, targetPos);
+            if (next < length && sql.charAt(next) == ',') {
+                targetPos = next + 1;
+            } else {
+                break;
+            }
+        }
+        if (targets.isEmpty())
+            throw DbException.getSyntaxError(sql, intoStart, "SELECT INTO without target");
+        // 把INTO以及目标列表从查询里去掉，保留前后的SQL文本
+        String query = (sql.substring(0, intoStart) + " " + sql.substring(targetEnd)).trim();
+        return new SelectInto(query, strict, targets.toArray(new String[0]));
+    }
+
+    public static class SelectInto {
+
+        public final String query;
+        public final boolean strict;
+        public final String[] targets;
+
+        SelectInto(String query, boolean strict, String[] targets) {
+            this.query = query;
+            this.strict = strict;
+            this.targets = targets;
+        }
+    }
+
+    // 只有表达式位置的标识符才替换成变量值，限定名/函数名/类型字面量前缀不替换
+    private static class PlpgSqlSqlParser extends LealoneSQLParser {
+
+        private final PlpgSqlVariableResolver resolver;
+
+        PlpgSqlSqlParser(ServerSession session, PlpgSqlVariableResolver resolver) {
+            super(session);
+            this.resolver = resolver;
+        }
+
+        @Override
+        protected Expression readTerm() {
+            if (currentTokenType == IDENTIFIER && resolver != null) {
+                PlpgSqlVariable variable = resolver.findVariable(currentToken, currentTokenQuoted);
+                if (variable != null && canSubstitute()) {
+                    read();
+                    return ValueExpression.get(variable.getValue());
+                }
+            }
+            return super.readTerm();
+        }
+
+        // 看当前token后面的第一个非空白字符，判断它是不是限定名、函数调用或字面量前缀
+        private boolean canSubstitute() {
+            int i = parseIndex;
+            char[] chars = sqlCommandChars;
+            while (i < chars.length && Character.isWhitespace(chars[i]))
+                i++;
+            if (i >= chars.length)
+                return true;
+            char c = chars[i];
+            if (c == 0)
+                return true;
+            return c != '.' && c != '(' && c != '\'' && c != '"';
+        }
+    }
+
+    private static boolean wordAt(String sql, int pos, String word) {
+        int length = sql.length();
+        if (pos < 0 || pos + word.length() > length)
+            return false;
+        if (!sql.regionMatches(true, pos, word, 0, word.length()))
+            return false;
+        if (pos > 0 && isIdentifierPart(sql.charAt(pos - 1)))
+            return false;
+        int end = pos + word.length();
+        if (end < length && isIdentifierPart(sql.charAt(end)))
+            return false;
+        return true;
+    }
+
+    private static int skipWhitespaceAndComments(String sql, int pos) {
+        int length = sql.length();
+        while (pos < length) {
+            char c = sql.charAt(pos);
+            if (Character.isWhitespace(c)) {
+                pos++;
+            } else if (c == '-' && pos + 1 < length && sql.charAt(pos + 1) == '-') {
+                pos = skipLineComment(sql, pos);
+            } else if (c == '/' && pos + 1 < length && sql.charAt(pos + 1) == '*') {
+                pos = skipBlockComment(sql, pos);
+            } else {
+                break;
+            }
+        }
+        return pos;
+    }
+
+    private static int skipLineComment(String sql, int pos) {
+        int length = sql.length();
+        pos += 2;
+        while (pos < length && sql.charAt(pos) != '\n')
+            pos++;
+        return pos;
+    }
+
+    private static int skipBlockComment(String sql, int pos) {
+        int length = sql.length();
+        pos += 2;
+        int level = 1;
+        while (pos < length) {
+            if (pos + 1 < length && sql.charAt(pos) == '/' && sql.charAt(pos + 1) == '*') {
+                level++;
+                pos += 2;
+            } else if (pos + 1 < length && sql.charAt(pos) == '*'
+                    && sql.charAt(pos + 1) == '/') {
+                level--;
+                pos += 2;
+                if (level == 0)
+                    return pos;
+            } else {
+                pos++;
+            }
+        }
+        return pos;
+    }
+
+    private static int skipSingleQuoted(String sql, int pos) {
+        int length = sql.length();
+        pos++;
+        while (pos < length) {
+            if (sql.charAt(pos) == '\'') {
+                if (pos + 1 < length && sql.charAt(pos + 1) == '\'') {
+                    pos += 2;
+                } else {
+                    return pos + 1;
+                }
+            } else {
+                pos++;
+            }
+        }
+        return pos;
+    }
+
+    private static int skipDoubleQuoted(String sql, int pos) {
+        int length = sql.length();
+        pos++;
+        while (pos < length) {
+            if (sql.charAt(pos) == '"') {
+                if (pos + 1 < length && sql.charAt(pos + 1) == '"') {
+                    pos += 2;
+                } else {
+                    return pos + 1;
+                }
+            } else {
+                pos++;
+            }
+        }
+        return pos;
+    }
+
+    // 返回美元引用字符串结束后的位置，不是合法美元引用时返回-1
+    private static int skipDollarQuoted(String sql, int pos) {
+        int length = sql.length();
+        int tagEnd = pos + 1;
+        while (tagEnd < length) {
+            char c = sql.charAt(tagEnd);
+            if (c == '$')
+                break;
+            boolean valid = tagEnd == pos + 1 ? Character.isJavaIdentifierStart(c) || c == '_'
+                    : Character.isJavaIdentifierPart(c);
+            if (!valid)
+                return -1;
+            tagEnd++;
+        }
+        if (tagEnd >= length || sql.charAt(tagEnd) != '$')
+            return -1;
+        String tag = sql.substring(pos, tagEnd + 1);
+        int contentEnd = sql.indexOf(tag, tagEnd + 1);
+        return contentEnd < 0 ? length : contentEnd + tag.length();
+    }
+
+    private static boolean isIdentifierStart(char c) {
+        return c == '_' || Character.isJavaIdentifierStart(c);
+    }
+
+    private static boolean isIdentifierPart(char c) {
+        return c == '$' || Character.isJavaIdentifierPart(c);
+    }
+}
