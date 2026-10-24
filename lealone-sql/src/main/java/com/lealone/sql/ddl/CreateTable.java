@@ -239,7 +239,11 @@ public class CreateTable extends SchemaStatement {
             }
         } catch (DbException e) {
             db.checkPowerOff();
-            // add时已经用lock注册过回滚handler，remove再用同一个lock会回滚两次，把上一条DDL创建的对象也回滚掉
+            // 这里必须做即时删除: 建表失败后如果不把表从schema里摘掉, 失败的语句会把表留在schema里。
+            // 传null(不注册回滚handler)是因为 schema.add 已经用同一个lock给这份快照注册过handler了,
+            // 再注册一次没有意义(同一快照会被处理两次, 虽然TransactionalDbObjects的commit/rollback
+            // 有幂等保护, 但没必要); 反过来用lock还会在"语句级回滚已先发生"的路径上
+            // 把handler注册到已经unlock过的锁上, 变成stale handler。
             schema.remove(session, table, null);
             throw e;
         }
