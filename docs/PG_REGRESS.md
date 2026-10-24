@@ -70,14 +70,14 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 ```
 [pgregress]   create_function_sql.sql  用例 40(执行 15, skip 25)  脚本语句  50(通过  50, 失败 0)  被skip用例占  90 条
 [pgregress]   create_procedure.sql     用例 22(执行  8, skip 14)  脚本语句  26(通过  26, 失败 0)  被skip用例占  61 条
-[pgregress]   plpgsql.sql              用例 23(执行 16, skip  7)  脚本语句  45(通过  45, 失败 0)  被skip用例占  17 条
-[pgregress]   rangefuncs.sql           用例  9(执行  6, skip  3)  脚本语句  21(通过  21, 失败 0)  被skip用例占   9 条
-[pgregress] 合计: 用例 94 (执行 45, skip 49), 脚本语句 142 (通过 142, 失败 0), 耗时 506ms
-[pgregress] skip 清单: 49 条用例, 点名跳过的 PG 语句 278 条
+[pgregress]   plpgsql.sql              用例 23(执行 17, skip  6)  脚本语句  49(通过  49, 失败 0)  被skip用例占  16 条
+[pgregress]   rangefuncs.sql           用例  9(执行  7, skip  2)  脚本语句  25(通过  25, 失败 0)  被skip用例占   5 条
+[pgregress] 合计: 用例 94 (执行 47, skip 47), 脚本语句 150 (通过 150, 失败 0), 耗时 475ms
+[pgregress] skip 清单: 47 条用例, 点名跳过的 PG 语句 268 条
 [pgregress]   create_function_sql.sql  PG 共  179 条语句, 其中 150 条在 skip 清单里
 [pgregress]   create_procedure.sql     PG 共  109 条语句, 其中  84 条在 skip 清单里
-[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 23 条)
-[pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 21 条)
+[pgregress]   plpgsql.sql              PG 共  935 条语句, 抽样转换(清单里点名跳过的代表性语句 21 条)
+[pgregress]   rangefuncs.sql           PG 共  428 条语句, 抽样转换(清单里点名跳过的代表性语句 13 条)
 ```
 
 口径说明：
@@ -88,7 +88,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
   （plpgsql/rangefuncs 这种上千行的长篇）只抽样转换，清单里点名的只是被 skip 的代表性用例；
   这也是为什么这两个文件的 PG 语句总数远大于"执行 + skip"。
 
-## 五、skip 清单摘要（按原因分组，共 49 条 / 278 条 PG 语句）
+## 五、skip 清单摘要（按原因分组，共 47 条 / 268 条 PG 语句）
 
 | 原因 | 条数 | PG语句 | 用例 id |
 | --- | --- | --- | --- |
@@ -108,7 +108,7 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 不支持按参数类型重载 | 2 | 15 | function_sql.overload, procedure.ambiguous_drop |
 | Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转 | 1 | 3 | function_sql.or_replace_window |
 | Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN | 1 | 10 | function_sql.setof_inline |
-| Lealone 函数体只允许单条查询(不支持 INSERT ... RETURNING) | 1 | 6 | function_sql.void_insert |
+| 函数体只支持带RETURNING的DML(voidtest3 是不带RETURNING的INSERT, 仍不支持) | 1 | 6 | function_sql.void_insert |
 | Lealone 函数体只允许单条查询(不支持 DDL) | 1 | 8 | function_sql.ddl_in_body |
 | Lealone 无 CREATE OPERATOR CLASS/分区操作符类 | 1 | 6 | function_sql.partition_ops |
 | Lealone 不支持 $1/$2 位置参数 | 1 | 1 | function_sql.bad_body_positional |
@@ -127,11 +127,9 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 | Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger) | 2 | 4 | plpgsql.trigger_room, plpgsql.trigger_raise |
 | Lealone 无 anyelement/anyarray 多态参数类型 | 1 | 1 | plpgsql.polymorphic |
 | PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100 | 1 | 6 | plpgsql.cursor |
-| DML 的 INSERT/UPDATE ... RETURNING ... INTO record 不支持(Lealone 引擎没有 DML RETURNING), record 变量本身可用 | 1 | 2 | plpgsql.record |
 | RETURNS RECORD 复合返回类型不支持, 且 leaker_1 用 (f(x)).field 取复合返回值的字段 | 1 | 6 | plpgsql.out_params_exception |
 | Lealone 无 SETOF <表行类型>, 也不支持 $1 位置参数 | 1 | 5 | rangefuncs.setof_composite |
 | WITH ORDINALITY 报 42000 语法错, 且没有 unnest()/generate_series() | 1 | 8 | rangefuncs.with_ordinality |
-| Lealone 函数体只允许单条查询, 不支持 INSERT ... RETURNING | 1 | 8 | rangefuncs.insert_returning |
 | RETURNS SETOF <表行类型> 不支持(只支持标量 setof 与 RETURNS TABLE) | 1 | 4 | plpgsql.setof_composite_record |
 
 ## 六、这一轮刷新：解锁了什么
@@ -140,6 +138,15 @@ mvn -B -o -pl lealone-test test -Dmaven.repo.local=/tmp/m2-pgregress \
 逐条核对后删掉 7 行 skip（`function_sql.setof`、`procedure.collation`、`plpgsql.found`、`plpgsql.perform`、
 `plpgsql.out_assign`、`plpgsql.multi_out`、`plpgsql.for_loop_setof`），新增 5 个用例（4 个执行 + 1 个 skip）：
 执行用例 34 → 45，脚本语句 112 → 142（+30），skip 清单 55 → 49 条。
+
+### 本轮（DML RETURNING）又解锁 2 个用例
+
+| 用例 | 之前 | 现在 | 靠什么能力 |
+| --- | --- | --- | --- |
+| `plpgsql.record` | skip（没有 DML RETURNING） | 执行 4 条语句 | `INSERT ... RETURNING * INTO record` |
+| `rangefuncs.insert_returning` | skip（函数体不支持 INSERT RETURNING） | 执行 4 条语句 | SQL 函数体支持带 RETURNING 的 DML |
+
+skip 清单 49 → 47 条，执行用例 45 → 47，脚本语句 142 → 150。
 
 | 用例 | 之前 | 现在 | 靠什么能力 |
 | --- | --- | --- | --- |
@@ -227,9 +234,9 @@ call pe();                                     -- 42000 Syntax error "BEGIN ATOM
 
 ### 仍然不支持的（清单里都有用例）
 
-* **DML 相关**：SQL 函数体只能是查询（`INSERT ... RETURNING`/DDL 都不行）；`INSERT ... RETURNING ... INTO record`
-  也不行（引擎没有 DML RETURNING）；过程体不能执行 DDL。用例 `function_sql.void_insert`、
-  `function_sql.ddl_in_body`、`plpgsql.record`、`rangefuncs.insert_returning`、`procedure.utility_body`。
+* **DML 相关**：SQL 函数体只支持查询和**带 RETURNING 的 DML**，不带 RETURNING 的 DML 与 DDL 仍不支持；
+  过程体不能执行 DDL。用例 `function_sql.void_insert`（`voidtest3` 部分）、`function_sql.ddl_in_body`、
+  `procedure.utility_body`。
 * **返回类型**：`RETURNS SETOF <表行类型>`、`RETURNS RECORD` 与 `(f(x)).field` 复合字段访问。
   用例 `plpgsql.setof_composite_record`、`plpgsql.out_params_exception`、`rangefuncs.setof_composite`。
 * **CREATE PROCEDURE 只收 IN 参数**：写 `OUT/INOUT` 报 42102（同名能力在 CREATE FUNCTION 里有）。
@@ -298,7 +305,7 @@ call pe();                                     -- 42000 Syntax error "BEGIN ATOM
    * N3 `least()/greatest()` → 等支持后把 `procedure.collation` 改回 PG 原样的 `least('a','b')`。
 3. **还能解锁的几格**（谁做完谁就能清空对应清单行）：
    * 触发器 → `plpgsql.trigger_*` 2 条；
-   * DML `RETURNING` → `plpgsql.record` 1 条（record 本身已可用）；
+   * ~~DML `RETURNING` → `plpgsql.record` 1 条~~（本轮已解锁）；
    * `RETURNS RECORD`/复合字段 → `plpgsql.out_params_exception` 1 条；
    * `RETURNS SETOF <表行类型>` → `plpgsql.setof_composite_record`、`rangefuncs.setof_composite` 2 条；
    * 过程级 OUT/INOUT → `procedure.inout_params`、`procedure.out_params` 2 条；

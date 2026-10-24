@@ -529,7 +529,8 @@ select voidtest2(11,22) r;
 
 -- @case function_sql.void_insert
 -- @pg create_function_sql.sql:392-402
--- 缺失: Lealone 函数体只允许一条 SELECT/VALUES/TABLE 查询, 不允许 INSERT ... RETURNING
+-- 缺失: voidtest3 的函数体是不带 RETURNING 的 INSERT(只支持带RETURNING的DML);
+--       voidtest4 带 RETURNING, 现在已经支持
 create temp table sometable(f1 int);
 create function voidtest3(a int) returns void language sql as
 $$ insert into sometable values(a + 1) $$;

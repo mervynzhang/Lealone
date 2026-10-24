@@ -40,7 +40,7 @@ function_sql.information_schema	create_function_sql.sql:256-323	19	Lealone 没�
 function_sql.overload	create_function_sql.sql:326-331	4	Lealone 不支持按参数类型重载
 function_sql.or_replace_window	create_function_sql.sql:337-339	3	Lealone 不支持 WINDOW 属性与 FUNCTION/PROCEDURE 互转
 function_sql.setof_inline	create_function_sql.sql:353-376	10	Lealone 无 BEGIN ATOMIC 函数体与 EXPLAIN
-function_sql.void_insert	create_function_sql.sql:392-402	6	Lealone 函数体只允许单条查询(不支持 INSERT ... RETURNING)
+function_sql.void_insert	create_function_sql.sql:392-402	6	函数体只支持带RETURNING的DML(voidtest3 是不带RETURNING的INSERT)
 function_sql.ddl_in_body	create_function_sql.sql:409-431	8	Lealone 函数体只允许单条查询(不支持 DDL)
 function_sql.anyarray_setof	create_function_sql.sql:434-447	2	Lealone 无 anyarray/anyelement 多态类型
 function_sql.partition_ops	create_function_sql.sql:449-461	6	Lealone 无 CREATE OPERATOR CLASS/分区操作符类
@@ -64,9 +64,7 @@ plpgsql.trigger_room	plpgsql.sql:130-140	2	Lealone 无 CREATE TRIGGER 与触发�
 plpgsql.trigger_raise	plpgsql.sql:162-172	2	Lealone 无 CREATE TRIGGER 与触发器函数(RETURNS trigger)
 plpgsql.polymorphic	plpgsql.sql:1565-1568	1	Lealone 无 anyelement/anyarray 多态参数类型
 plpgsql.cursor	plpgsql.sql:1859-1900	6	PL/pgSQL 游标(OPEN/FETCH/CLOSE)与 refcursor 类型不支持, DDL 阶段报 50100
-plpgsql.record	plpgsql.sql:2313-2321	2	DML 的 INSERT/UPDATE ... RETURNING ... INTO record 不支持(Lealone 引擎没有 DML RETURNING), record 变量本身可用
 plpgsql.out_params_exception	plpgsql.sql:3609-3638	6	RETURNS RECORD 复合返回类型不支持, 且 leaker_1 用 (f(x)).field 取复合返回值的字段
 rangefuncs.setof_composite	rangefuncs.sql:1-8	5	Lealone 无 SETOF <表行类型>, 也不支持 $1 位置参数
 rangefuncs.with_ordinality	rangefuncs.sql:9-17	8	WITH ORDINALITY 报 42000 语法错, 且没有 unnest()/generate_series()
-rangefuncs.insert_returning	rangefuncs.sql:456-476	8	Lealone 函数体只允许单条查询, 不支持 INSERT ... RETURNING
 plpgsql.setof_composite_record	plpgsql.sql:1487-1512	4	RETURNS SETOF <表行类型> 不支持(只支持标量 setof 与 RETURNS TABLE)
