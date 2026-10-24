@@ -16,6 +16,8 @@ public class SingleThreadAsyncCallback<T> extends AsyncCallback<T> {
     private AsyncHandler<T> successHandler;
     private AsyncHandler<Throwable> failureHandler;
     private volatile AsyncResult<T> asyncResult;
+    // 只有非调度线程真正在等的时候才需要加锁唤醒
+    private volatile Thread waitingThread;
 
     @Override
     protected T await(long timeoutMillis) {
@@ -31,21 +33,26 @@ public class SingleThreadAsyncCallback<T> extends AsyncCallback<T> {
         // 非调度线程(比如JDBC客户端线程)不能用调度器等待，直接阻塞等待结果。
         // 原来这里直接抛内部错误，服务端稍慢一点同步JDBC调用就会失败。
         synchronized (this) {
-            long deadline = timeoutMillis > 0 ? System.currentTimeMillis() + timeoutMillis : 0;
-            while (asyncResult == null) {
-                try {
-                    if (deadline == 0) {
-                        wait();
-                    } else {
-                        long remaining = deadline - System.currentTimeMillis();
-                        if (remaining <= 0)
-                            break;
-                        wait(remaining);
+            waitingThread = t;
+            try {
+                long deadline = timeoutMillis > 0 ? System.currentTimeMillis() + timeoutMillis : 0;
+                while (asyncResult == null) {
+                    try {
+                        if (deadline == 0) {
+                            wait();
+                        } else {
+                            long remaining = deadline - System.currentTimeMillis();
+                            if (remaining <= 0)
+                                break;
+                            wait(remaining);
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
                     }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
                 }
+            } finally {
+                waitingThread = null;
             }
         }
         return asyncResult != null ? getResult(asyncResult) : null;
@@ -90,9 +97,12 @@ public class SingleThreadAsyncCallback<T> extends AsyncCallback<T> {
 
     @Override
     public void setAsyncResult(AsyncResult<T> asyncResult) {
-        synchronized (this) {
-            this.asyncResult = asyncResult;
-            notifyAll();
+        // 常见情况没有线程在等，直接用volatile写，不进管程
+        this.asyncResult = asyncResult;
+        if (waitingThread != null) {
+            synchronized (this) {
+                notifyAll();
+            }
         }
         if (completeHandler != null)
             completeHandler.handle(asyncResult);
