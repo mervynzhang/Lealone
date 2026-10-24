@@ -43,6 +43,11 @@ public class PlpgSqlVariable {
     private HashMap<Integer, Value[]> recordArrayValues;
     // 复合类型参数，字段访问用CompositeType的列元数据
     private CompositeType compositeType;
+    // DECLARE c CURSOR声明的游标，状态放在cursorState里
+    private boolean cursor;
+    private PlpgSqlCursor cursorState;
+    // refcursor变量，值就是门户名
+    private boolean refcursor;
 
     public PlpgSqlVariable(String name, boolean nameQuoted, boolean constant, boolean notNull) {
         this.name = name;
@@ -61,6 +66,30 @@ public class PlpgSqlVariable {
 
     public boolean isConstant() {
         return constant;
+    }
+
+    public boolean isCursor() {
+        return cursor;
+    }
+
+    public void setCursor(boolean cursor) {
+        this.cursor = cursor;
+    }
+
+    public PlpgSqlCursor getCursorState() {
+        return cursorState;
+    }
+
+    public void setCursorState(PlpgSqlCursor cursorState) {
+        this.cursorState = cursorState;
+    }
+
+    public boolean isRefcursor() {
+        return refcursor;
+    }
+
+    public void setRefcursor(boolean refcursor) {
+        this.refcursor = refcursor;
     }
 
     public boolean isNotNull() {

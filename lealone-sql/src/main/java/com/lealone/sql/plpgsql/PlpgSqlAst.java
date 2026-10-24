@@ -67,6 +67,11 @@ public final class PlpgSqlAst {
         public String typeName;
         // 初始化表达式，没有初始化时为null
         public String defaultExpression;
+        // DECLARE c CURSOR [(params)] FOR <query>
+        public boolean cursor;
+        public final List<String> cursorParameterNames = new ArrayList<>();
+        public final List<String> cursorParameterTypes = new ArrayList<>();
+        public String cursorQuery;
 
         public Declaration(int position) {
             super(position);
@@ -186,7 +191,50 @@ public final class PlpgSqlAst {
         }
     }
 
-    /** FOR循环：整数范围(FOR i IN start..end)或者查询结果集(FOR rec IN <query>) */
+    /** OPEN c [FOR <query>] / OPEN c(args) */
+    public static class OpenCursor extends Node {
+
+        public String name;
+        public boolean nameQuoted;
+        // 命名实参时argumentNames里是对应的参数名，位置实参为null
+        public final List<String> argumentNames = new ArrayList<>();
+        public final List<String> argumentExpressions = new ArrayList<>();
+        // OPEN c FOR <query>里的查询，没有时为null
+        public String query;
+
+        public OpenCursor(int position) {
+            super(position);
+        }
+    }
+
+    /** FETCH [方向] c INTO target[, ...] */
+    public static class FetchCursor extends Node {
+
+        public String name;
+        public boolean nameQuoted;
+        // NEXT/PRIOR/FIRST/LAST/ABSOLUTE/RELATIVE/ALL/FORWARD/BACKWARD，默认NEXT
+        public String direction;
+        public String countExpression;
+        public final List<String> targets = new ArrayList<>();
+        public final List<Boolean> targetsQuoted = new ArrayList<>();
+
+        public FetchCursor(int position) {
+            super(position);
+        }
+    }
+
+    /** CLOSE c */
+    public static class CloseCursor extends Node {
+
+        public String name;
+        public boolean nameQuoted;
+
+        public CloseCursor(int position) {
+            super(position);
+        }
+    }
+
+    /** FOR循环：整数范围(FOR i IN start..end)、查询结果集(FOR rec IN <query>)或者游标(FOR rec IN c) */
     public static class For extends Node {
 
         public String label;
@@ -195,6 +243,9 @@ public final class PlpgSqlAst {
         public boolean reverse;
         // 查询循环的SQL，整数范围循环时为null
         public String query;
+        // 游标循环的游标名，不是游标循环时为null
+        public String cursorName;
+        public boolean cursorNameQuoted;
         public String startExpression;
         public String endExpression;
         // BY子句的步长表达式，没有BY子句时为null

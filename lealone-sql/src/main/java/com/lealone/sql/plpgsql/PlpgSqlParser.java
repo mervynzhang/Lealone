@@ -14,9 +14,11 @@ import com.lealone.db.api.ErrorCode;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Assignment;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Block;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Branch;
+import com.lealone.sql.plpgsql.PlpgSqlAst.CloseCursor;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Continue;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Declaration;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Exit;
+import com.lealone.sql.plpgsql.PlpgSqlAst.FetchCursor;
 import com.lealone.sql.plpgsql.PlpgSqlAst.For;
 import com.lealone.sql.plpgsql.PlpgSqlAst.GetDiagnostics;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Handler;
@@ -25,6 +27,7 @@ import com.lealone.sql.plpgsql.PlpgSqlAst.Loop;
 import com.lealone.sql.plpgsql.PlpgSqlAst.NestedBlock;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Node;
 import com.lealone.sql.plpgsql.PlpgSqlAst.NullStatement;
+import com.lealone.sql.plpgsql.PlpgSqlAst.OpenCursor;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Perform;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Raise;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Return;
@@ -40,8 +43,7 @@ import com.lealone.sql.plpgsql.PlpgSqlLexer.TokenType;
 public class PlpgSqlParser {
 
     private static final List<String> UNSUPPORTED_STATEMENTS = Arrays.asList("CASE", "EXECUTE",
-            "FOREACH", "ASSERT", "OPEN", "FETCH", "CLOSE", "COMMIT", "ROLLBACK",
-            "SAVEPOINT", "RELEASE", "START");
+            "FOREACH", "ASSERT", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE", "START");
 
     private final String source;
     private final ArrayList<Token> tokens;
@@ -120,6 +122,10 @@ public class PlpgSqlParser {
             declaration.constant = true;
             next();
         }
+        if (isKeyword("CURSOR")) {
+            parseCursorDeclaration(declaration);
+            return declaration;
+        }
         declaration.typeName = captureType();
         if (isKeyword("NOT")) {
             next();
@@ -138,6 +144,30 @@ public class PlpgSqlParser {
             expectOp(";");
         }
         return declaration;
+    }
+
+    // DECLARE c [CURSOR] [(p1 int, p2 int)] FOR <query>;
+    private void parseCursorDeclaration(Declaration declaration) {
+        declaration.cursor = true;
+        next();
+        if (isOp("(")) {
+            next();
+            while (true) {
+                Token parameter = expectIdentifier();
+                declaration.cursorParameterNames.add(parameter.value);
+                declaration.cursorParameterTypes
+                        .add(captureExpression(new String[0], new String[] { ",", ")" }));
+                if (isOp(",")) {
+                    next();
+                    continue;
+                }
+                expectOp(")");
+                break;
+            }
+        }
+        expectKeyword("FOR");
+        declaration.cursorQuery = captureExpression(new String[0], new String[] { ";" });
+        expectOp(";");
     }
 
     // 类型可能带精度、数组、%TYPE，甚至多个单词，因此切到声明结束符为止
@@ -244,6 +274,12 @@ public class PlpgSqlParser {
             return parsePerform();
         if (isKeyword("GET"))
             return parseGetDiagnostics();
+        if (isKeyword("OPEN"))
+            return parseOpen();
+        if (isKeyword("FETCH"))
+            return parseFetch();
+        if (isKeyword("CLOSE"))
+            return parseClose();
         if (isKeyword("NULL")) {
             next();
             expectOp(";");
@@ -382,6 +418,106 @@ public class PlpgSqlParser {
         return loop;
     }
 
+    // OPEN c [FOR <query>] / OPEN c([p :=] expr, ...)
+    private OpenCursor parseOpen() {
+        OpenCursor open = new OpenCursor(current().start);
+        expectKeyword("OPEN");
+        Token name = expectIdentifier();
+        open.name = name.value;
+        open.nameQuoted = name.quoted;
+        if (isKeyword("FOR")) {
+            next();
+            open.query = captureExpression(new String[0], new String[] { ";" });
+            expectOp(";");
+            return open;
+        }
+        if (isOp("(")) {
+            next();
+            while (true) {
+                String argumentName = null;
+                if (current().type == TokenType.IDENTIFIER && isOpAfterCurrent(":=")) {
+                    argumentName = current().value;
+                    next();
+                    next();
+                }
+                open.argumentNames.add(argumentName);
+                open.argumentExpressions
+                        .add(captureExpression(new String[0], new String[] { ",", ")" }));
+                if (isOp(",")) {
+                    next();
+                    continue;
+                }
+                expectOp(")");
+                break;
+            }
+        }
+        expectOp(";");
+        return open;
+    }
+
+    // FETCH [NEXT|PRIOR|FIRST|LAST|ABSOLUTE n|RELATIVE n|ALL|FORWARD [n]|BACKWARD [n]] [FROM|IN] c INTO target, ...
+    private FetchCursor parseFetch() {
+        FetchCursor fetch = new FetchCursor(current().start);
+        expectKeyword("FETCH");
+        if (isKeyword("NEXT") || isKeyword("PRIOR") || isKeyword("FIRST") || isKeyword("LAST")) {
+            fetch.direction = current().value.toUpperCase();
+            next();
+        } else if (isKeyword("ABSOLUTE") || isKeyword("RELATIVE")) {
+            fetch.direction = current().value.toUpperCase();
+            next();
+            fetch.countExpression = captureExpression(new String[] { "FROM", "IN" }, new String[0]);
+        } else if (isKeyword("ALL")) {
+            fetch.direction = "ALL";
+            next();
+        } else if (isKeyword("FORWARD") || isKeyword("BACKWARD")) {
+            fetch.direction = current().value.toUpperCase();
+            next();
+            if (isKeyword("ALL")) {
+                fetch.direction = fetch.direction + "_ALL";
+                next();
+            } else if (current().type == TokenType.NUMBER
+                    || current().type == TokenType.IDENTIFIER && !isKeyword("FROM")
+                            && !isKeyword("IN") && !isOpAfterCurrent(";")) {
+                fetch.countExpression = captureExpression(new String[] { "FROM", "IN" },
+                        new String[0]);
+            }
+        } else if (current().type == TokenType.NUMBER) {
+            fetch.direction = "FORWARD";
+            fetch.countExpression = captureExpression(new String[] { "FROM", "IN" }, new String[0]);
+        }
+        if (isKeyword("FROM") || isKeyword("IN"))
+            next();
+        Token name = expectIdentifier();
+        fetch.name = name.value;
+        fetch.nameQuoted = name.quoted;
+        if (isKeyword("INTO")) {
+            next();
+            while (true) {
+                Token target = expectIdentifier();
+                fetch.targets.add(target.value);
+                fetch.targetsQuoted.add(target.quoted);
+                if (isOp(",")) {
+                    next();
+                    continue;
+                }
+                break;
+            }
+        }
+        expectOp(";");
+        return fetch;
+    }
+
+    // CLOSE c
+    private CloseCursor parseClose() {
+        CloseCursor close = new CloseCursor(current().start);
+        expectKeyword("CLOSE");
+        Token name = expectIdentifier();
+        close.name = name.value;
+        close.nameQuoted = name.quoted;
+        expectOp(";");
+        return close;
+    }
+
     private For parseFor(String label) {
         For loop = new For(current().start);
         loop.label = label;
@@ -396,6 +532,20 @@ public class PlpgSqlParser {
         }
         if (isKeyword("EXECUTE"))
             throw unsupported("FOR ... IN EXECUTE");
+        // FOR rec IN c LOOP：目标是游标名时按游标循环处理
+        if (current().type == TokenType.IDENTIFIER && !isAnyKeyword("LOOP")
+                && isKeywordAfterCurrent("LOOP")) {
+            Token cursorName = current();
+            next();
+            loop.cursorName = cursorName.value;
+            loop.cursorNameQuoted = cursorName.quoted;
+            expectKeyword("LOOP");
+            parseStatements(loop.statements);
+            expectKeyword("END");
+            expectKeyword("LOOP");
+            parseLoopEndLabel(loop.label);
+            return loop;
+        }
         if (isKeyword("SELECT") || isKeyword("WITH") || isKeyword("VALUES") || isKeyword("TABLE")) {
             // FOR rec IN <query> LOOP：查询在LOOP之前结束，结果逐行赋给record/row变量
             loop.query = captureExpression(new String[] { "LOOP" }, new String[0]);
@@ -746,6 +896,22 @@ public class PlpgSqlParser {
         if (pos < tokens.size() - 1)
             pos++;
         return t;
+    }
+
+    // 当前token后面的token是不是指定操作符
+    private boolean isOpAfterCurrent(String value) {
+        if (pos + 1 >= tokens.size())
+            return false;
+        Token t = tokens.get(pos + 1);
+        return t.type == TokenType.OPERATOR && value.equals(t.text);
+    }
+
+    // 当前token后面的token是不是指定关键字
+    private boolean isKeywordAfterCurrent(String keyword) {
+        if (pos + 1 >= tokens.size())
+            return false;
+        Token t = tokens.get(pos + 1);
+        return t.type == TokenType.IDENTIFIER && !t.quoted && keyword.equalsIgnoreCase(t.text);
     }
 
     private boolean isKeyword(String keyword) {

@@ -258,6 +258,146 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals(15, getIntValue(1));
     }
 
+    // DECLARE CURSOR / OPEN / FETCH / CLOSE 和refcursor门户
+    @Test
+    public void testCursor() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_cur_t");
+        executeUpdate("CREATE TABLE plp_cur_t(a INT, b INT)");
+        executeUpdate("INSERT INTO plp_cur_t VALUES(5, 10)");
+        executeUpdate("INSERT INTO plp_cur_t VALUES(50, 100)");
+        executeUpdate("INSERT INTO plp_cur_t VALUES(500, 1000)");
+
+        // 基本用法：OPEN/FETCH NEXT/CLOSE，FETCH之后FOUND和ROW_COUNT
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_cur_basic() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE c CURSOR FOR SELECT a FROM plp_cur_t ORDER BY a; x INT; n INT;" //
+                + " BEGIN" //
+                + "   OPEN c;" //
+                + "   FETCH c INTO x;" //
+                + "   IF NOT FOUND THEN RETURN -1; END IF;" //
+                + "   n := x;" //
+                + "   FETCH NEXT FROM c INTO x;" //
+                + "   n := n + x;" //
+                + "   CLOSE c;" //
+                + "   RETURN n;" //
+                + " END; $$");
+        executeQuery("SELECT plp_cur_basic()");
+        assertEquals(55, getIntValue(1));
+
+        // 方向：LAST/FIRST/PRIOR/ABSOLUTE/ALL
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_cur_direction() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE c CURSOR FOR SELECT a FROM plp_cur_t ORDER BY a; x INT; s INT := 0;" //
+                + " BEGIN" //
+                + "   OPEN c;" //
+                + "   FETCH LAST FROM c INTO x; s := x;" //
+                + "   FETCH FIRST FROM c INTO x; s := s + x;" //
+                + "   FETCH ABSOLUTE 2 FROM c INTO x; s := s + x;" //
+                + "   FETCH PRIOR FROM c INTO x; s := s + x;" //
+                + "   CLOSE c;" //
+                + "   RETURN s;" //
+                + " END; $$");
+        executeQuery("SELECT plp_cur_direction()");
+        assertEquals(560, getIntValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_cur_all() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE c CURSOR FOR SELECT a FROM plp_cur_t ORDER BY a;" //
+                + "   x INT; n INT := 0;" //
+                + " BEGIN" //
+                + "   OPEN c;" //
+                + "   FETCH ALL FROM c INTO x;" //
+                + "   GET DIAGNOSTICS n = ROW_COUNT;" //
+                + "   CLOSE c;" //
+                + "   RETURN n;" //
+                + " END; $$");
+        executeQuery("SELECT plp_cur_all()");
+        assertEquals(3, getIntValue(1));
+
+        // 参数化游标 + 命名实参
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_cur_param(p1 INT, p2 INT) RETURNS BOOLEAN LANGUAGE plpgsql AS $$"
+                + " DECLARE c CURSOR (minA INT, minB INT) FOR SELECT * FROM plp_cur_t WHERE a > minA AND b > minB;" //
+                + "   r RECORD;" //
+                + " BEGIN" //
+                + "   OPEN c(p1, p2);" //
+                + "   FETCH c INTO r;" //
+                + "   CLOSE c;" //
+                + "   RETURN FOUND;" //
+                + " END; $$");
+        executeQuery("SELECT plp_cur_param(20000, 20000)");
+        assertFalse(getBooleanValue(1));
+        executeQuery("SELECT plp_cur_param(20, 20)");
+        assertTrue(getBooleanValue(1));
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_cur_named(p1 INT, p2 INT) RETURNS BOOLEAN LANGUAGE plpgsql AS $$"
+                + " DECLARE c CURSOR (minA INT, minB INT) FOR SELECT * FROM plp_cur_t WHERE a > minA AND b > minB;" //
+                + "   r RECORD;" //
+                + " BEGIN" //
+                + "   OPEN c(minB := p2, minA := p1);" //
+                + "   FETCH c INTO r;" //
+                + "   CLOSE c;" //
+                + "   RETURN FOUND;" //
+                + " END; $$");
+        executeQuery("SELECT plp_cur_named(20, 20)");
+        assertTrue(getBooleanValue(1));
+        executeQuery("SELECT plp_cur_named(20000, 20000)");
+        assertFalse(getBooleanValue(1));
+
+        // FOR rec IN c LOOP
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_cur_loop() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE c CURSOR FOR SELECT a, b FROM plp_cur_t ORDER BY a; r RECORD; s INT := 0;" //
+                + " BEGIN" //
+                + "   OPEN c;" //
+                + "   FOR r IN c LOOP" //
+                + "     s := s + r.a + r.b;" //
+                + "   END LOOP;" //
+                + "   CLOSE c;" //
+                + "   RETURN s;" //
+                + " END; $$");
+        executeQuery("SELECT plp_cur_loop()");
+        assertEquals(1665, getIntValue(1));
+
+        // refcursor：函数返回门户名，另一个函数按名字FETCH
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_refcursor_new() RETURNS refcursor LANGUAGE plpgsql AS $$"
+                + " DECLARE rc refcursor;" //
+                + " BEGIN" //
+                + "   OPEN rc FOR SELECT a FROM plp_cur_t ORDER BY a;" //
+                + "   RETURN rc;" //
+                + " END; $$");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_refcursor_use(rc refcursor) RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE x INT;" //
+                + " BEGIN" //
+                + "   FETCH NEXT FROM rc INTO x;" //
+                + "   RETURN x;" //
+                + " END; $$");
+        executeQuery("SELECT plp_refcursor_use(plp_refcursor_new())");
+        assertEquals(5, getIntValue(1));
+
+        // 指定名字的门户：传参进去，OPEN ... FOR，返回同一个名字
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_refcursor_named(rc refcursor) RETURNS refcursor LANGUAGE plpgsql AS $$"
+                + " BEGIN OPEN rc FOR SELECT a FROM plp_cur_t ORDER BY a; RETURN rc; END; $$");
+        executeQuery("SELECT plp_refcursor_named('plp_portal1')");
+        assertEquals("plp_portal1", getStringValue(1));
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_refcursor_fetch_named() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE rc refcursor; x INT;" //
+                + " BEGIN" //
+                + "   rc := plp_refcursor_named('plp_portal2');" //
+                + "   FETCH NEXT FROM rc INTO x;" //
+                + "   FETCH NEXT FROM rc INTO x;" //
+                + "   CLOSE rc;" //
+                + "   RETURN x;" //
+                + " END; $$");
+        executeQuery("SELECT plp_refcursor_fetch_named()");
+        assertEquals(50, getIntValue(1));
+
+        // 未打开就FETCH报34000，重复OPEN报55000
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_cur_notopen() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE c CURSOR FOR SELECT a FROM plp_cur_t; x INT;" //
+                + " BEGIN FETCH c INTO x; RETURN x; END; $$");
+        assertSqlState("34000", "SELECT plp_cur_notopen()");
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_cur_reopen() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " DECLARE c CURSOR FOR SELECT a FROM plp_cur_t; x INT;" //
+                + " BEGIN OPEN c; OPEN c; RETURN 0; END; $$");
+        assertSqlState("55000", "SELECT plp_cur_reopen()");
+    }
+
     // FOR rec IN <query> LOOP：查询结果逐行赋给record/row变量
     @Test
     public void testForInQuery() throws Exception {

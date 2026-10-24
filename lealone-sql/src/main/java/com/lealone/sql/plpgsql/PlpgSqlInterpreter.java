@@ -6,12 +6,14 @@
 package com.lealone.sql.plpgsql;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 import com.lealone.common.exceptions.DbException;
 import com.lealone.common.logging.Logger;
 import com.lealone.common.logging.LoggerFactory;
 import com.lealone.common.util.MathUtils;
+import com.lealone.db.api.CursorPortal;
 import com.lealone.db.api.ErrorCode;
 import com.lealone.db.result.SimpleResultSet;
 import com.lealone.db.schema.CompositeType;
@@ -24,6 +26,7 @@ import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueInt;
 import com.lealone.db.value.ValueLong;
+import com.lealone.db.value.ValueString;
 import com.lealone.db.value.ValueNull;
 import com.lealone.db.value.ValueResultSet;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Assignment;
@@ -32,7 +35,10 @@ import com.lealone.sql.plpgsql.PlpgSqlAst.Branch;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Continue;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Declaration;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Exit;
+import com.lealone.sql.plpgsql.PlpgSqlAst.CloseCursor;
+import com.lealone.sql.plpgsql.PlpgSqlAst.FetchCursor;
 import com.lealone.sql.plpgsql.PlpgSqlAst.For;
+import com.lealone.sql.plpgsql.PlpgSqlAst.OpenCursor;
 import com.lealone.sql.plpgsql.PlpgSqlAst.GetDiagnostics;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Handler;
 import com.lealone.sql.plpgsql.PlpgSqlAst.If;
@@ -45,6 +51,7 @@ import com.lealone.sql.plpgsql.PlpgSqlAst.Raise;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Return;
 import com.lealone.sql.plpgsql.PlpgSqlAst.SqlExec;
 import com.lealone.sql.plpgsql.PlpgSqlAst.While;
+import com.lealone.transaction.Transaction;
 import com.lealone.transaction.Transaction;
 
 /**
@@ -94,6 +101,8 @@ public class PlpgSqlInterpreter {
     }
 
     private final ServerSession session;
+    // refcursor用的匿名门户名字里的序号
+    private int unnamedPortals;
     private final Block body;
     private final PlpgSqlResultInfo resultInfo;
     private final int returnType;
@@ -284,6 +293,8 @@ public class PlpgSqlInterpreter {
                     ? parameterValues[i]
                     : ValueNull.INSTANCE;
             if (parameterTypes != null && i < parameterTypes.length) {
+                if (isRefcursorType(parameterTypes[i]))
+                    variable.setRefcursor(true);
                 int poly = Column.getPolymorphicType(parameterTypes[i]);
                 if (poly != Column.POLY_NONE) {
                     if (poly == Column.POLY_ANYARRAY)
@@ -373,6 +384,17 @@ public class PlpgSqlInterpreter {
                     variable.declareRecordFields(rowType.columnNames, rowType.columnTypes);
                     variable.markRecordAssigned();
                 }
+            } else if (declaration.cursor) {
+                variable.setCursor(true);
+                PlpgSqlCursor cursor = new PlpgSqlCursor(declaration.name);
+                cursor.setQuery(declaration.cursorQuery);
+                cursor.setParameters(declaration.cursorParameterNames,
+                        declaration.cursorParameterTypes);
+                variable.setCursorState(cursor);
+            } else if (isRefcursorType(typeName)) {
+                // refcursor变量的值就是门户名，真正的游标状态放在会话的门户注册表里
+                variable.setRefcursor(true);
+                variable.setType(Value.STRING);
             } else {
                 variable.setType(resolveType(typeName));
             }
@@ -508,6 +530,12 @@ public class PlpgSqlInterpreter {
             executeContinue((Continue) node);
         } else if (node instanceof Raise) {
             executeRaise((Raise) node);
+        } else if (node instanceof OpenCursor) {
+            executeOpenCursor((OpenCursor) node);
+        } else if (node instanceof FetchCursor) {
+            executeFetchCursor((FetchCursor) node);
+        } else if (node instanceof CloseCursor) {
+            executeCloseCursor((CloseCursor) node);
         } else if (node instanceof NullStatement) {
             // NULL语句什么也不做
         } else {
@@ -876,6 +904,10 @@ public class PlpgSqlInterpreter {
     }
 
     private void executeFor(For node) {
+        if (node.cursorName != null) {
+            executeForCursor(node);
+            return;
+        }
         if (node.query != null) {
             executeForQuery(node);
             return;
@@ -961,6 +993,251 @@ public class PlpgSqlInterpreter {
                 } catch (ExitSignal signal) {
                     if (matchesLoopLabel(node.label, signal.label)) {
                         // 和整数范围循环一样，循环结束时按是否迭代过设置FOUND
+                        setFound(iterated);
+                        return;
+                    }
+                    throw signal;
+                }
+            }
+            setFound(iterated);
+        } finally {
+            scope = oldScope;
+        }
+    }
+
+    private static boolean isRefcursorType(String typeName) {
+        return "refcursor".equalsIgnoreCase(PlpgSqlSqlExecutor.compactTypeName(typeName));
+    }
+
+    // refcursor的门户注册表挂在最外层会话上，函数内嵌会话也能看到同一个门户
+    private HashMap<String, CursorPortal> getPortalMap() {
+        ServerSession portalSession = session;
+        Transaction transaction = portalSession.getTransaction();
+        while (transaction != null && transaction.getParentTransaction() != null) {
+            Transaction parent = transaction.getParentTransaction();
+            if (!(parent.getSession() instanceof ServerSession))
+                break;
+            portalSession = (ServerSession) parent.getSession();
+            transaction = parent;
+        }
+        return portalSession.getCursorPortals();
+    }
+
+    private PlpgSqlCursor getCursorState(PlpgSqlVariable variable, String name) {
+        if (variable.isCursor())
+            return variable.getCursorState();
+        Value value = variable.getValue();
+        String portalName = value == null || value == ValueNull.INSTANCE ? null : value.getString();
+        if (portalName == null)
+            throw PlpgSqlException.raise("34000", "cursor " + name + " is not open");
+        PlpgSqlCursor cursor = (PlpgSqlCursor) getPortalMap().get(portalName);
+        if (cursor == null)
+            throw PlpgSqlException.raise("34000", "cursor " + portalName + " does not exist");
+        return cursor;
+    }
+
+    private PlpgSqlVariable findCursorVariable(String name, boolean quoted) {
+        PlpgSqlVariable variable = scope.findVariable(name, quoted);
+        if (variable == null || !variable.isCursor() && !variable.isRefcursor())
+            throw PlpgSqlException.raise("34000", "cursor " + name + " does not exist");
+        return variable;
+    }
+
+    // OPEN c / OPEN c FOR <query> / OPEN c(args)
+    private void executeOpenCursor(OpenCursor node) {
+        PlpgSqlVariable variable = findCursorVariable(node.name, node.nameQuoted);
+        if (variable.isCursor()) {
+            PlpgSqlCursor cursor = variable.getCursorState();
+            if (cursor.isOpen())
+                throw PlpgSqlException.raise("55000",
+                        "cursor " + variable.getName() + " already open");
+            String query = node.query == null ? cursor.getQuery() : node.query;
+            if (query == null)
+                throw PlpgSqlException.raise("55000",
+                        "cursor " + variable.getName() + " has no query");
+            PlpgSqlSqlExecutor.QueryRows rows = sqlExecutor.queryWithColumns(query,
+                    openCursorArguments(cursor, node), 0);
+            cursor.open(rows);
+            return;
+        }
+        if (node.query == null)
+            throw PlpgSqlException.raise("55000",
+                    "cursor " + variable.getName() + " can only be opened with a query");
+        String portalName = unnamedPortalName(variable);
+        PlpgSqlSqlExecutor.QueryRows rows = sqlExecutor.queryWithColumns(node.query, scope, 0);
+        PlpgSqlCursor cursor = new PlpgSqlCursor(portalName);
+        cursor.open(rows);
+        getPortalMap().put(portalName, cursor);
+        // constant refcursor可以带初始门户名, 打开时门户名没变就不算给常量赋值
+        if (!variable.isConstant() || !portalName.equals(variable.getValue().getString())) {
+            variable.checkCanAssign();
+            variable.setValue(ValueString.get(portalName));
+        }
+    }
+
+    // 参数化游标：实参先求值，再以游标参数名建立一层作用域给查询用
+    private PlpgSqlVariableResolver openCursorArguments(PlpgSqlCursor cursor, OpenCursor node) {
+        List<String> names = cursor.getParameterNames();
+        if (names == null || names.isEmpty()) {
+            if (!node.argumentExpressions.isEmpty())
+                throw PlpgSqlException.raise("42601",
+                        "cursor " + cursor.getName() + " has no parameters");
+            return scope;
+        }
+        if (node.argumentExpressions.size() > names.size())
+            throw PlpgSqlException.raise("42601",
+                    "too many arguments for cursor " + cursor.getName());
+        Value[] values = new Value[names.size()];
+        for (int i = 0; i < node.argumentExpressions.size(); i++) {
+            int index = i;
+            String argumentName = node.argumentNames.get(i);
+            if (argumentName != null) {
+                index = -1;
+                for (int j = 0; j < names.size(); j++) {
+                    if (names.get(j).equalsIgnoreCase(argumentName)) {
+                        index = j;
+                        break;
+                    }
+                }
+                if (index < 0)
+                    throw PlpgSqlException.raise("42601",
+                            "cursor " + cursor.getName() + " has no parameter " + argumentName);
+            }
+            values[index] = sqlExecutor.evalExpression(node.argumentExpressions.get(i), scope);
+        }
+        PlpgSqlScope argumentScope = new PlpgSqlScope(scope);
+        for (int i = 0; i < names.size(); i++) {
+            PlpgSqlVariable parameter = new PlpgSqlVariable(names.get(i), false, false, false);
+            parameter.setType(resolveType(cursor.getParameterTypes().get(i)));
+            argumentScope.declare(parameter);
+            parameter.setInitialValue(values[i] == null ? ValueNull.INSTANCE : values[i]);
+        }
+        return argumentScope;
+    }
+
+    private String unnamedPortalName(PlpgSqlVariable variable) {
+        Value value = variable.getValue();
+        if (value != null && value != ValueNull.INSTANCE) {
+            String name = value.getString();
+            if (name != null && !name.isEmpty())
+                return name;
+        }
+        unnamedPortals++;
+        return "<unnamed portal " + unnamedPortals + ">";
+    }
+
+    // FETCH [方向] c INTO target, ...
+    private void executeFetchCursor(FetchCursor node) {
+        PlpgSqlVariable variable = findCursorVariable(node.name, node.nameQuoted);
+        PlpgSqlCursor cursor = getCursorState(variable, node.name);
+        if (!cursor.isOpen())
+            throw PlpgSqlException.raise("34000", "cursor " + node.name + " is not open");
+        int count = 1;
+        if (node.countExpression != null)
+            count = sqlExecutor.evalExpression(node.countExpression, scope).getInt();
+        int moved = cursor.move(node.direction, count);
+        Value[] row = cursor.currentRow();
+        if (row != null && !node.targets.isEmpty())
+            assignFetchedRow(cursor, row, node);
+        String direction = node.direction == null ? "NEXT" : node.direction.toUpperCase();
+        if ("ALL".equals(direction) || "FORWARD_ALL".equals(direction)
+                || "BACKWARD_ALL".equals(direction)) {
+            lastRowCount = moved;
+        } else {
+            lastRowCount = row == null ? 0 : 1;
+        }
+        setFound(row != null);
+    }
+
+    private void assignFetchedRow(PlpgSqlCursor cursor, Value[] row, FetchCursor node) {
+        String[] columnNames = cursor.getColumnNames();
+        int[] columnTypes = cursor.getColumnTypes();
+        if (node.targets.size() == 1) {
+            PlpgSqlVariable target = findVariable(node.targets.get(0), node.targetsQuoted.get(0));
+            if (target.isRecord()) {
+                target.checkCanAssign();
+                target.assignRecord(columnNames, columnTypes, row);
+                return;
+            }
+            if (row.length != 1)
+                throw PlpgSqlException.raise("42601", "FETCH ... INTO " + target.getName() + " has "
+                        + row.length + " columns");
+            target.checkCanAssign();
+            target.setValue(convertFetchedValue(columnTypes, 0, row[0]));
+            return;
+        }
+        if (row.length != node.targets.size())
+            throw PlpgSqlException.raise("42601", "FETCH ... INTO has " + row.length
+                    + " columns but " + node.targets.size() + " variables");
+        for (int i = 0; i < row.length; i++) {
+            PlpgSqlVariable target = findVariable(node.targets.get(i), node.targetsQuoted.get(i));
+            target.checkCanAssign();
+            target.setValue(convertFetchedValue(columnTypes, i, row[i]));
+        }
+    }
+
+    private static Value convertFetchedValue(int[] columnTypes, int index, Value value) {
+        if (value == null)
+            return ValueNull.INSTANCE;
+        if (columnTypes != null && index < columnTypes.length && columnTypes[index] != Value.UNKNOWN
+                && columnTypes[index] != Value.NULL)
+            return value.convertTo(columnTypes[index]);
+        return value;
+    }
+
+    // CLOSE c
+    private void executeCloseCursor(CloseCursor node) {
+        PlpgSqlVariable variable = findCursorVariable(node.name, node.nameQuoted);
+        if (variable.isCursor()) {
+            variable.getCursorState().close();
+            return;
+        }
+        Value value = variable.getValue();
+        if (value != null && value != ValueNull.INSTANCE) {
+            String portalName = value.getString();
+            if (portalName != null)
+                getPortalMap().remove(portalName);
+        }
+    }
+
+    // FOR rec IN c LOOP：从游标当前位置开始逐行取，取完后游标停在最后一行之后
+    private void executeForCursor(For node) {
+        PlpgSqlVariable cursorVariable = findCursorVariable(node.cursorName,
+                node.cursorNameQuoted);
+        PlpgSqlCursor cursor = getCursorState(cursorVariable, node.cursorName);
+        if (!cursor.isOpen())
+            throw PlpgSqlException.raise("34000", "cursor " + node.cursorName + " is not open");
+        PlpgSqlScope loopScope = new PlpgSqlScope(scope);
+        loopScope.setLabel(node.label);
+        PlpgSqlScope oldScope = scope;
+        scope = loopScope;
+        try {
+            PlpgSqlVariable target = scope.findVariable(node.variable, node.variableQuoted);
+            if (target == null) {
+                target = new PlpgSqlVariable(node.variable, node.variableQuoted, false, false);
+                target.setRecord(true);
+                loopScope.declare(target);
+            } else if (!target.isRecord()) {
+                throw PlpgSqlException.raise("42804", "FOR loop target " + node.variable
+                        + " must be a record or row variable");
+            }
+            boolean iterated = false;
+            while (true) {
+                cursor.move("NEXT", 1);
+                Value[] row = cursor.currentRow();
+                if (row == null)
+                    break;
+                iterated = true;
+                target.checkCanAssign();
+                target.assignRecord(cursor.getColumnNames(), cursor.getColumnTypes(), row);
+                try {
+                    executeStatements(node.statements);
+                } catch (ContinueSignal signal) {
+                    if (matchesLoopLabel(node.label, signal.label))
+                        continue;
+                    throw signal;
+                } catch (ExitSignal signal) {
+                    if (matchesLoopLabel(node.label, signal.label)) {
                         setFound(iterated);
                         return;
                     }
