@@ -105,6 +105,8 @@ public class PlpgSqlInterpreter {
     private int unnamedPortals;
     // 本函数里声明的游标，函数返回或抛异常时要关掉(可能持有落盘结果的文件句柄)
     private List<PlpgSqlCursor> declaredCursors;
+    // 本函数打开过的refcursor门户，函数退出时如果还活着就先物化，别把整个引擎结果带到语句之外
+    private List<PlpgSqlCursor> openedPortals;
     private final Block body;
     private final PlpgSqlResultInfo resultInfo;
     private final int returnType;
@@ -175,9 +177,19 @@ public class PlpgSqlInterpreter {
                 throw PlpgSqlException.raise("42601", "CONTINUE cannot be used outside a loop");
             }
         } finally {
+            materializeOpenedPortals();
             closeDeclaredCursors();
             scope = null;
         }
+    }
+
+    // 门户要活到语句之外，函数退出前先把它物化，这样外层事务里游标的常驻堆不是整个结果集
+    private void materializeOpenedPortals() {
+        if (openedPortals == null)
+            return;
+        for (PlpgSqlCursor cursor : openedPortals)
+            cursor.materialize();
+        openedPortals = null;
     }
 
     // 声明游标不在门户注册表里，函数退出时由解释器自己关闭
@@ -1130,8 +1142,11 @@ public class PlpgSqlInterpreter {
         PlpgSqlSqlExecutor.CursorResult queryResult = sqlExecutor.queryForCursor(node.query, scope);
         PlpgSqlCursor cursor = new PlpgSqlCursor(portalName);
         cursor.open(session, queryResult.result, queryResult.columnNames,
-                    queryResult.columnTypes);
+                queryResult.columnTypes);
         getPortalMap().put(portalName, cursor);
+        if (openedPortals == null)
+            openedPortals = new ArrayList<>();
+        openedPortals.add(cursor);
         // constant refcursor可以带初始门户名, 打开时门户名没变就不算给常量赋值
         if (!variable.isConstant() || !portalName.equals(variable.getValue().getString())) {
             variable.checkCanAssign();

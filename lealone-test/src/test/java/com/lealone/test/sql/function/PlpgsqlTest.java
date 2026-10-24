@@ -318,6 +318,48 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals(1 + 100000 + 99999 + 99997 + 1 + 150000, getIntValue(1));
     }
 
+    // 门户要跨语句存活：函数退出时把结果物化，之后在同一个事务里还能继续FETCH
+    @Test
+    public void testCursorPortalAcrossStatements() throws Exception {
+        executeUpdate("DROP TABLE IF EXISTS plp_cur_portal");
+        executeUpdate("CREATE TABLE plp_cur_portal(a INT)");
+        executeUpdate("INSERT INTO plp_cur_portal SELECT X FROM SYSTEM_RANGE(1, 150000)");
+        executeUpdate(
+                "CREATE OR REPLACE FUNCTION plp_portal_open(n INT) RETURNS refcursor LANGUAGE plpgsql AS $$"
+                        + " DECLARE rc refcursor; r RECORD; i INT;" //
+                        + " BEGIN" //
+                        + "   OPEN rc FOR SELECT a FROM plp_cur_portal ORDER BY a;" //
+                        + "   FOR i IN 1 .. n LOOP FETCH rc INTO r; END LOOP;" //
+                        + "   RETURN rc;" //
+                        + " END; $$");
+        executeUpdate(
+                "CREATE OR REPLACE FUNCTION plp_portal_fetch(rc refcursor) RETURNS INT LANGUAGE plpgsql AS $$"
+                        + " DECLARE x INT; BEGIN FETCH NEXT FROM rc INTO x; RETURN x; END; $$");
+        conn.setAutoCommit(false);
+        try {
+            String portal;
+            try (Statement st = conn.createStatement()) {
+                ResultSet rs = st.executeQuery("SELECT plp_portal_open(10)");
+                rs.next();
+                portal = rs.getString(1);
+                rs.close();
+            }
+            assertNotNull(portal);
+            // 同一事务里的下一条语句继续读同一个门户
+            try (Statement st = conn.createStatement()) {
+                ResultSet rs = st.executeQuery("SELECT plp_portal_fetch('" + portal + "')");
+                rs.next();
+                assertEquals(11, rs.getInt(1));
+                rs.close();
+            }
+            conn.rollback();
+        } finally {
+            conn.setAutoCommit(true);
+        }
+        // 事务结束后门户被关闭
+        assertSqlState("34000", "SELECT plp_portal_fetch('" + "plp_gone" + "')");
+    }
+
     // DECLARE CURSOR / OPEN / FETCH / CLOSE 和refcursor门户
     @Test
     public void testCursor() throws Exception {

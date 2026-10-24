@@ -25,7 +25,7 @@ import com.lealone.storage.StorageMapCursor;
 public class PlpgSqlTuplestore {
 
     // 每写这么多行落盘一次，让B树缓存可以回收
-    private static final int SAVE_INTERVAL = 100000;
+    private static final int SAVE_INTERVAL = 200000;
 
     private final StorageMap<Value, ValueArray> storageMap;
     // 顺序读用的游标，cursorIndex是它下一次要返回的行号
