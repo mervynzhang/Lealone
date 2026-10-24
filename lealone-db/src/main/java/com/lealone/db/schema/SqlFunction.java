@@ -89,6 +89,8 @@ public class SqlFunction extends FunctionAlias {
     private boolean returnsTable;
     // RETURNS RECORD：返回行由OUT/INOUT参数定义
     private boolean returnsRecord;
+    // RETURNS TRIGGER：只作为触发器函数执行，不由普通SELECT调用
+    private boolean triggerReturn;
     // RETURNS SETOF <表名>时保存表名用于getCreateSQL
     private String setofTableName;
     // RETURNS comp / RETURNS SETOF comp声明的复合类型
@@ -368,6 +370,17 @@ public class SqlFunction extends FunctionAlias {
 
     public void setReturnsRecord(boolean returnsRecord) {
         this.returnsRecord = returnsRecord;
+    }
+
+    public void setTriggerReturnType() {
+        triggerReturn = true;
+        hasDeclaredReturnType = true;
+        returnType = Value.UNKNOWN;
+        returnTypeSql = "TRIGGER";
+    }
+
+    public boolean isTriggerReturn() {
+        return triggerReturn;
     }
 
     public void setSetofTableName(String setofTableName) {
@@ -1035,7 +1048,9 @@ public class SqlFunction extends FunctionAlias {
         buff.append(')');
         // 有OUT/INOUT参数时RETURNS可以省略，返回类型由参数推导；
         // RETURNS RECORD虽然由OUT参数定义形状，但要把RECORD关键字写回去才能回放
-        if (outputIndexes.length > 0 && returnsRecord) {
+        if (triggerReturn) {
+            buff.append(" RETURNS TRIGGER");
+        } else if (outputIndexes.length > 0 && returnsRecord) {
             buff.append(" RETURNS RECORD");
         } else if (outputIndexes.length == 0) {
             buff.append(" RETURNS ");
@@ -1145,6 +1160,15 @@ public class SqlFunction extends FunctionAlias {
     public void invalidate() {
         sqlJavaMethod = null;
         super.invalidate();
+    }
+
+    /**
+     * 触发器函数入口；普通SQL函数不支持，PL/pgSQL子类覆盖。
+     */
+    public Value executeTrigger(ServerSession session, String[] columnNames, int[] columnTypes,
+            Value[] oldRow, Value[] newRow) {
+        throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                "RETURNS TRIGGER requires LANGUAGE plpgsql");
     }
 
     private Value executeBody(ServerSession session, IExpression[] args, boolean columnList) {

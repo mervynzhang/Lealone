@@ -20,10 +20,13 @@ import com.lealone.db.api.Trigger;
 import com.lealone.db.lock.DbObjectLock;
 import com.lealone.db.row.Row;
 import com.lealone.db.session.ServerSession;
+import com.lealone.db.table.Column;
 import com.lealone.db.table.Table;
 import com.lealone.db.util.SourceCompiler;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueArray;
+import com.lealone.db.value.ValueNull;
 
 /**
  * A trigger is created using the statement
@@ -48,6 +51,8 @@ public class TriggerObject extends SchemaObjectBase {
     private int queueSize = DEFAULT_QUEUE_SIZE;
     private boolean noWait;
     private Table table;
+    // PostgreSQL的EXECUTE PROCEDURE函数触发器，和Java类触发器二选一
+    private String triggerFunctionName;
     private String triggerClassName;
     private String triggerSource;
     private Trigger triggerCallback;
@@ -72,6 +77,9 @@ public class TriggerObject extends SchemaObjectBase {
     }
 
     private synchronized void load() {
+        // 函数触发器由fireRow直接调用SqlFunction，不需要加载Java回调
+        if (triggerFunctionName != null)
+            return;
         if (triggerCallback != null) {
             return;
         }
@@ -161,6 +169,9 @@ public class TriggerObject extends SchemaObjectBase {
         if (rowBased || before != beforeAction || (typeMask & type) == 0) {
             return;
         }
+        // 函数触发器只支持FOR EACH ROW，语句级路径没有回调
+        if (triggerFunctionName != null)
+            return;
         load();
         Connection c2 = session.createNestedConnection(false);
         boolean old = false;
@@ -237,6 +248,8 @@ public class TriggerObject extends SchemaObjectBase {
         if (!fire) {
             return false;
         }
+        if (triggerFunctionName != null)
+            return fireFunctionRow(session, oldRow, newRow, beforeAction);
         oldList = convertToObjectList(oldRow);
         newList = convertToObjectList(newRow);
         Object[] newListBackup;
@@ -274,6 +287,72 @@ public class TriggerObject extends SchemaObjectBase {
             session.setAutoCommit(old);
         }
         return insteadOf;
+    }
+
+    private SqlFunction getTriggerFunction(ServerSession session) {
+        FunctionAlias function = getSchema().findFunction(session, triggerFunctionName);
+        if (!(function instanceof SqlFunction) || !((SqlFunction) function).isTriggerReturn()) {
+            throw DbException.get(ErrorCode.FUNCTION_ALIAS_NOT_FOUND_1,
+                    "trigger function " + triggerFunctionName);
+        }
+        return (SqlFunction) function;
+    }
+
+    private static Value[] convertToValueList(Row row) {
+        if (row == null)
+            return null;
+        Value[] values = new Value[row.getColumnCount()];
+        for (int i = 0; i < values.length; i++)
+            values[i] = row.getValue(i);
+        return values;
+    }
+
+    // 执行PL/pgSQL触发器函数；RETURN NULL取消BEFORE行操作，RETURN NEW/OLD写回新行
+    private boolean fireFunctionRow(ServerSession session, Row oldRow, Row newRow,
+            boolean beforeAction) {
+        SqlFunction function = getTriggerFunction(session);
+        Column[] columns = table.getColumns();
+        String[] names = new String[columns.length];
+        int[] types = new int[columns.length];
+        for (int i = 0; i < columns.length; i++) {
+            names[i] = columns[i].getName();
+            types[i] = columns[i].getType();
+        }
+        Value[] oldValues = convertToValueList(oldRow);
+        Value[] newValues = convertToValueList(newRow);
+        boolean oldAutoCommit = session.isAutoCommit();
+        boolean oldDisabled = session.setCommitOrRollbackDisabled(true);
+        long identity = session.getLastScopeIdentity();
+        boolean cancel = false;
+        try {
+            session.setAutoCommit(false);
+            Value result = function.executeTrigger(session, names, types, oldValues, newValues);
+            if (beforeAction && newRow != null) {
+                if (result == null || result == ValueNull.INSTANCE) {
+                    cancel = true;
+                } else if (result.getType() != Value.ARRAY) {
+                    throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1,
+                            "trigger function must return NEW, OLD or NULL");
+                } else {
+                    Value[] row = ((ValueArray) result).getList();
+                    if (row.length != newRow.getColumnCount()) {
+                        throw DbException.get(ErrorCode.DATA_CONVERSION_ERROR_1,
+                                "trigger function returns " + row.length + " columns, expected "
+                                        + newRow.getColumnCount());
+                    }
+                    for (int i = 0; i < row.length; i++)
+                        newRow.setValue(i, row[i]);
+                }
+            }
+        } catch (Exception e) {
+            if (!onRollback)
+                throw DbException.convert(e);
+        } finally {
+            session.setLastScopeIdentity(identity);
+            session.setCommitOrRollbackDisabled(oldDisabled);
+            session.setAutoCommit(oldAutoCommit);
+        }
+        return cancel;
     }
 
     /**
@@ -336,7 +415,9 @@ public class TriggerObject extends SchemaObjectBase {
 
     @Override
     public String getCreateSQL() {
-        StringBuilder buff = new StringBuilder("CREATE FORCE TRIGGER ");
+        boolean functionTrigger = triggerFunctionName != null;
+        StringBuilder buff = new StringBuilder(
+                functionTrigger ? "CREATE TRIGGER " : "CREATE FORCE TRIGGER ");
         buff.append(getSQL());
         if (insteadOf) {
             buff.append(" INSTEAD OF ");
@@ -350,15 +431,20 @@ public class TriggerObject extends SchemaObjectBase {
         if (rowBased) {
             buff.append(" FOR EACH ROW");
         }
-        if (noWait) {
-            buff.append(" NOWAIT");
+        if (functionTrigger) {
+            buff.append(" EXECUTE PROCEDURE ")
+                    .append(database.quoteIdentifier(triggerFunctionName)).append("()");
         } else {
-            buff.append(" QUEUE ").append(queueSize);
-        }
-        if (triggerClassName != null) {
-            buff.append(" CALL ").append(database.quoteIdentifier(triggerClassName));
-        } else {
-            buff.append(" AS ").append(StringUtils.quoteStringSQL(triggerSource));
+            if (noWait) {
+                buff.append(" NOWAIT");
+            } else {
+                buff.append(" QUEUE ").append(queueSize);
+            }
+            if (triggerClassName != null) {
+                buff.append(" CALL ").append(database.quoteIdentifier(triggerClassName));
+            } else {
+                buff.append(" AS ").append(StringUtils.quoteStringSQL(triggerSource));
+            }
         }
         return buff.toString();
     }
@@ -391,6 +477,14 @@ public class TriggerObject extends SchemaObjectBase {
      */
     public boolean isBefore() {
         return before;
+    }
+
+    public void setTriggerFunctionName(String triggerFunctionName) {
+        this.triggerFunctionName = triggerFunctionName;
+    }
+
+    public String getTriggerFunctionName() {
+        return triggerFunctionName;
     }
 
     /**
@@ -427,6 +521,7 @@ public class TriggerObject extends SchemaObjectBase {
     @Override
     public void invalidate() {
         table = null;
+        triggerFunctionName = null;
         triggerClassName = null;
         triggerSource = null;
         triggerCallback = null;
