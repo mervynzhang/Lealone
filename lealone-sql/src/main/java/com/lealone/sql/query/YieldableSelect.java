@@ -149,6 +149,9 @@ public class YieldableSelect extends YieldableQueryBase {
                     }
                 } else if (select.isDistinctQuery) {
                     queryOperator = new QDistinct(select);
+                } else if (select.hasSrfExpressions()) {
+                    // 目标列表里的setof函数要按行展开
+                    queryOperator = new QProjectSet(select);
                 } else {
                     queryOperator = new QFlat(select);
                 }

@@ -139,11 +139,11 @@ public class PgRangeFuncTest extends SqlTestBase {
         }
     }
 
-    // select列表里的setof函数要展开成多行，Lealone不支持，要明确报错而不是返回一个值
+    // select列表里的setof函数按PostgreSQL语义展开成多行(ProjectSet算子)
     @Test
-    public void testSetReturningInSelectListNotSupported() throws Exception {
-        executeQueryThanAssertErrorCode("SELECT unnest(array[1, 2, 3])",
-                ErrorCode.FEATURE_NOT_SUPPORTED_1);
+    public void testSetReturningInSelectList() throws Exception {
+        assertEquals("[1, 2, 3]", queryIntList("SELECT unnest(array[1, 2, 3])").toString());
+        assertEquals("[a, b]", queryStringList("SELECT unnest(array['a','b']) AS x").toString());
     }
 
     // 参数不是数组时报类型错误

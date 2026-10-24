@@ -23,6 +23,7 @@ public class BuiltInFunctionFactory implements FunctionFactory {
         SystemFunction.init();
         TableFunction.init();
         UnnestFunction.init();
+        SeriesFunction.init();
     }
 
     @Override
@@ -37,6 +38,8 @@ public class BuiltInFunctionFactory implements FunctionFactory {
             return new SystemFunction(database, info);
         if (info.type < UnnestFunction.UNNEST)
             return new TableFunction(database, info);
-        return new UnnestFunction(database, info);
+        if (info.type < SeriesFunction.GENERATE_SERIES)
+            return new UnnestFunction(database, info);
+        return new SeriesFunction(database, info);
     }
 }
