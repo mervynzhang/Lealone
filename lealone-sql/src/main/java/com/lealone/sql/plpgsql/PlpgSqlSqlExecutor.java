@@ -126,17 +126,20 @@ public class PlpgSqlSqlExecutor {
         try {
             if (statement.isQuery()) {
                 Result result = statement.query(0);
+                int count = 0;
                 try {
                     if (result != null) {
                         while (result.next()) {
                             // PL/pgSQL里直接写SELECT而不加INTO时结果被丢弃
+                            count++;
                         }
                     }
                 } finally {
                     if (result != null)
                         result.close();
                 }
-                return 0;
+                // DML ... RETURNING也走查询分支，返回行数供FOUND/ROW_COUNT使用
+                return count;
             }
             return statement.update();
         } finally {

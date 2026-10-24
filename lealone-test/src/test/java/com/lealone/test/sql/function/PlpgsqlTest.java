@@ -686,6 +686,18 @@ public class PlpgsqlTest extends SqlTestBase {
         assertEquals("[4:6]", queryRowList("SELECT j, k FROM plp_multi_out2(2)").toString());
     }
 
+    // 非SETOF函数用RETURN NEXT、SETOF函数用RETURN表达式都要报2F005
+    @Test
+    public void testInvalidReturnForms() throws Exception {
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_bad_next() RETURNS INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN NEXT 1; RETURN 1; END; $$");
+        assertSqlState("2F005", "SELECT plp_bad_next()");
+
+        executeUpdate("CREATE OR REPLACE FUNCTION plp_bad_setof_return() RETURNS SETOF INT LANGUAGE plpgsql AS $$"
+                + " BEGIN RETURN 1; END; $$");
+        assertSqlState("2F005", "SELECT * FROM plp_bad_setof_return()");
+    }
+
     // GET DIAGNOSTICS ... = ROW_COUNT
     @Test
     public void testGetDiagnosticsRowCount() throws Exception {
