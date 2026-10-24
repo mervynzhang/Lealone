@@ -57,12 +57,13 @@ CALL p2();  -- 返回一行 (30)
 - **OUT/INOUT**：有 `OUT`/`INOUT` 参数时，`CALL` 总是返回一行，列名就是参数名，
   列类型是参数的声明类型；值来自过程体**最后一条查询**的第一行（按列位置对应 `OUT`/`INOUT` 参数）。
   实参可以只给入参（`IN`/`INOUT`），也可以像 PostgreSQL 那样给 `OUT` 参数写 `NULL` 占位。
-- **过程体语言**：只支持 `LANGUAGE SQL`（默认值，写不写都一样）。
+- **过程体语言**：`LANGUAGE SQL`（默认值，写不写都一样）和 `LANGUAGE plpgsql` 都支持；
+  plpgsql 过程体里可以写 `DECLARE`/`BEGIN..END`/`IF`/`LOOP`/`EXCEPTION`/游标，还能按参数名引用参数。
 - **DEFAULT参数值**：入参可以写 `DEFAULT <常量表达式>`（和函数一样只支持常量），CALL 时省略的实参
   用默认值补齐；有默认值的入参必须集中在末尾。默认值写进 DDL，SCRIPT/重启能回放。
 - **命名实参**：`CALL p(b => 'Hello', a => 10)`，也接受 `:=`；位置实参必须写在命名实参前面。
-  命名实参按参数名重排后再走原来的"按位置绑定"。**命名 OUT 参数占位不支持**（`CALL p(a => null)` 里的 `a`
-  如果是 OUT 参数会报函数不存在），OUT 参数只能按位置写 `NULL` 占位。
+  命名实参按参数名重排后再走原来的"按位置绑定"。`OUT` 参数既可以按位置写 `NULL` 占位，也可以在命名实参里写
+  `a => null`（实测 `CALL p(a => null, b => 2)` 正常返回）。
 - **不是函数**：过程不能出现在表达式里，`SELECT sp_ins(1, 2)` 报 `FUNCTION_NOT_FOUND_1`。
 - **持久化**：过程体随 schema 元数据一起持久化，重开库后仍可用。
 
@@ -91,7 +92,7 @@ call p('x');            -- varchar 版本还在
 - 过程对象在 schema 里的 key 是 `名字(入参类型id...)`，`SCRIPT` 和重启回放走同一条
   `Schema.add`，所以所有重载都能保留；`getDropSQL()` 带完整签名和参数模式，脚本回放不会歧义。
 - 限制：数组参数只按 `ARRAY` 类型 id 匹配，不区分元素类型；`varchar(10)` 这类 typmod
-  不参与比较；不支持 `VARIADIC` 参数。
+  不参与比较；`VARIADIC` 参数已支持。
 
 ## 三、实测行为
 
@@ -117,9 +118,14 @@ call p('x');            -- varchar 版本还在
 | 有 `OUT` 参数但过程体最后一条不是查询 | 建过程时就抛 `FEATURE_NOT_SUPPORTED`，不会留到调用时才报错 |
 | `BEGIN ATOMIC` 多条语句 | 顺序执行，最后一条查询作为结果（`CALL` 返回 `(30)`，前面的插入都生效） |
 | 空的 `BEGIN ATOMIC` 块 | 建过程成功，`CALL` 什么都不做，更新数 0 |
-| `LANGUAGE plpgsql` 的过程体 | 建过程时就抛 `FEATURE_NOT_SUPPORTED`（见限制 8） |
+| `LANGUAGE plpgsql` 的过程体 | 支持：`CREATE PROCEDURE ... LANGUAGE plpgsql AS $$ BEGIN ... END; $$`，`CALL` 在异步链里执行函数体 |
 | `SCRIPT` / 关库重开 | `CREATE PROCEDURE`（含 `OUT/INOUT`、`BEGIN ATOMIC`）会出现在 `SCRIPT` 里并能回放 |
 | `DROP PROCEDURE` / `DROP PROCEDURE IF EXISTS` | 正常；删除后 `CALL` 抛 `PROCEDURE_NOT_FOUND_1` |
+| `CREATE OR REPLACE PROCEDURE` | 支持，同签名覆盖、`SCRIPT` 里只保留一份 |
+| `ALTER PROCEDURE p(签名) RENAME TO q` | 支持；`RENAME PROCEDURE p(签名) TO q` 这种语句形式**不支持**（见限制 5） |
+| `VARIADIC` 参数 | 支持：`CREATE PROCEDURE p(VARIADIC x INT[])` + `CALL p(1,2,3)` |
+| 命名实参里的 OUT 占位 | 支持：`CALL p(a => null, b => 2)` |
+| 过程体里做 DDL | 支持（`BEGIN ATOMIC` 体里可以 `CREATE/ALTER/DROP TABLE`，按顺序执行） |
 | 关闭重开库后 `CALL` 同一过程 | 仍可用 |
 | 手动事务里 `CALL`，提交前从调用方查询 | **看不到**过程写入（0 行）；提交后可见（1 行） |
 
@@ -140,31 +146,56 @@ call p('x');            -- varchar 版本还在
 
 ## 四、已知限制
 
-1. **不是完整的 PL**：没有 `BEGIN ... END` 块、变量声明、`IF`/`WHILE`、游标、异常处理。过程体只能是扁平的 SQL 语句串。
-2. **参数引用**：过程体里用 `?` 按位置引用参数（**不支持**按参数名引用，`select x` 里的 `x` 是列名不是参数），
-   `BEGIN ATOMIC` 的过程体也一样；这一点和 `CREATE FUNCTION` 不同（函数体里参数名会被替换成 `?`）。
-3. **手动事务中的可见性**：过程跑在嵌套 session 里，未提交前调用方 session 看不到过程的写入。
+1. **不是完整的 PL**：`LANGUAGE sql` 的过程体只能是扁平的 SQL 语句串（没有 `IF`/`LOOP`/变量）；
+   要过程式逻辑请用 `LANGUAGE plpgsql` 的过程体（已支持 `DECLARE`/`BEGIN..END`/`IF`/`LOOP`/`EXCEPTION`/游标等，
+   见 `docs/PG_REGRESS.md`）。`BEGIN ATOMIC` 体里只能写普通 SQL 语句，不能写 `IF`/`LOOP`/嵌套 `BEGIN ATOMIC`。
+2. **参数引用**：`LANGUAGE sql` 的过程体里用 `?` 按位置引用参数（**不支持**按参数名引用，`select x` 里的 `x` 是列名不是参数），
+   `BEGIN ATOMIC` 的过程体也一样；`LANGUAGE plpgsql` 的过程体可以用参数名。这一点和 `CREATE FUNCTION` 不同
+   （函数的 SQL 体里参数名会被替换成 `?`）。
+3. **手动事务中的可见性**：过程跑在嵌套 session 里，未提交前调用方 session 看不到过程的写入
+   （实测：手动事务里 `CALL` 之后调用方查是 0 行，`commit` 之后是 1 行）。
 4. **参数绑定按语句独立**：过程体里每条语句的第 i 个 `?` 对应第 i 个实参，多条语句不共享参数下标
    （嵌套 `CALL` 已支持，见第三节）。
-5. **不支持**：`RENAME PROCEDURE`、`INFORMATION_SCHEMA` 里的过程元数据视图、`VARIADIC` 参数、
-   命名 OUT 参数占位（`CALL p(a => null)`）、`CREATE OR REPLACE PROCEDURE`。
+5. **不支持**：`RENAME PROCEDURE name(签名) TO ...`（用 `ALTER PROCEDURE ... RENAME` 代替）、
+   `COMMENT ON PROCEDURE`（注释按过程名存，和函数共用一套 key）。
 6. **未验证**：集群 / 复制模式下过程的行为；`statement` 级复制的确定性校验。
 7. 过程体按字面切分后逐条 `prepareStatement`，每条语句都会走一次会话级语句缓存。
-8. **PL/pgSQL过程体不支持**：`CREATE PROCEDURE ... LANGUAGE plpgsql` 在**建过程时**就报
-   `FEATURE_NOT_SUPPORTED`。原因是过程走的是 `YieldableCallProcedure` 的异步链，
-   而 PL/pgSQL解释器目前只能同步执行（`PlpgSqlSqlExecutor` 内部用 `statement.query()`），
-   把它塞进 CALL 链会引入阻塞等待，所以这一轮明确拒绝而不是留下"建成功、调用才炸"的半成品。
-   `CREATE FUNCTION ... LANGUAGE plpgsql` 不受影响（函数本来就走同步执行路径）。
-9. **OUT/INOUT值的来源**：只认过程体最后一条查询的第一行；列数少于 `OUT/INOUT` 参数个数时报
+8. **OUT/INOUT值的来源**：只认过程体最后一条查询的第一行；列数少于 `OUT/INOUT` 参数个数时报
    `DATA_CONVERSION_ERROR_1`，多出来的列被忽略；查询返回 0 行时 `OUT/INOUT` 值全是 `NULL`。
-10. **`BEGIN ATOMIC` 里的语句**：只支持普通SQL语句（`SELECT/INSERT/UPDATE/DELETE/CALL/...`），
-   里面的语句在 `CREATE` 时就会被解析（`SELECT * FROM 不存在的表` 建过程时就报错）；
-    不支持 `IF`/`LOOP`/`CASE` 过程式语句，也不支持嵌套 `BEGIN ATOMIC`。
-11. **重载签名**：只看入参的 `Value` 类型 id，不区分数组元素类型和 `varchar(10)`/`numeric(10,2)`
+9. **重载签名**：只看入参的 `Value` 类型 id，不区分数组元素类型和 `varchar(10)`/`numeric(10,2)`
    这类 typmod；`DROP` 的完整参数列表匹配也不区分 `VARCHAR(10)` 和 `VARCHAR`，
    并且类型列表里**不能写参数名**（`DROP PROCEDURE p(IN a INT)` 会报语法错，写 `IN INT` 可以）。
+10. **带 OUT/INOUT 的过程体**最后一条语句必须是查询，且过程体里不能再嵌套 `CALL`（建过程时就校验，
+    报 `FEATURE_NOT_SUPPORTED`）。
 
-## 五、实现结构
+## 五、与 PG 的已知差异
+
+这些差异都是**有意为之**或**方言层面**的，不是 bug；`PgRegressTest` 里对应的 PG 用例按"为什么 skip"记在
+`docs/PG_REGRESS.md` 第五节。
+
+| 差异 | Lealone 的行为 | PG 的行为 | 影响 |
+| --- | --- | --- | --- |
+| 过程体里的参数引用 | `?` 按位置（SQL 体）；plpgsql 体可用参数名 | 都可以用参数名 | 转换 PG 脚本时要把 SQL 体里的参数名改成 `?` |
+| `DROP PROCEDURE` 的签名匹配 | 按**完整参数列表**（含 OUT/INOUT 位置、可写 `IN/OUT` 模式，不能写参数名） | 同样按完整参数列表，但可以写参数名 | 脚本里 `DROP PROCEDURE p(int, int)` 能匹配所有重载；`DROP PROCEDURE p` 在多重重载时报 90152 |
+| `SECURITY DEFINER` | 属性会记录（`SCRIPT` 里能回放），但**不改变 CALL 的执行身份**（过程走异步链，嵌套 session 用调用者身份） | 用属主身份执行 | 不能用它做权限隔离；函数侧 `SECURITY DEFINER` 生效（见 `docs/PG_FUNCTION.md`） |
+| `SET ROLE` 的作用范围 | 只影响函数/过程的 `EXECUTE` 权限检查 | 影响所有对象权限 | 表/序列/服务权限仍按当前用户算 |
+| 授权默认值 | 对象从未被 GRANT/REVOKE 过时人人可调用；一旦有记录就严格检查 | 建对象即自动 `GRANT EXECUTE TO PUBLIC` | `REVOKE EXECUTE ... FROM PUBLIC` 之后的行为和 PG 一致 |
+| `CALL` 的语义 | `CALL` 既能调过程也能调函数（JDBC `CallableStatement` 契约 `{call f(...)}`） | `CALL` 只调过程，调函数报 42809 | PG 的 `CALL version()`/`CALL sum(1)`/`CALL random()` 用例 skip（`procedure.call_function`、`procedure.call_random`） |
+| psql 元命令 | 没有 `\df`（`pg_get_functiondef()` 已支持） | `\df` 列例程 | `procedure.psql_meta` 用例 skip |
+| `BEGIN ATOMIC` 过程体 | 支持普通 SQL/DDL/`CALL` | PG 14+ 也支持 | 无 |
+| 无 `CREATE OR REPLACE` 时的权限检查 | 同 PG：保留授权记录 | 保留授权记录 | 无 |
+
+**三条和过程有关的 skip 用例**（和 `skip-list.txt` 逐字对应）：
+
+* `procedure.call_function` — `CALL在Lealone里也用于调用函数(JDBC CallableStatement契约{call f(...)}), 与PG的"CALL只调过程"冲突`
+* `procedure.call_random` — 同上；另外 `lealone-client` 的 `JdbcConnection` 用 `CALL READONLY()`/`CALL SCHEMA()`/
+  `CALL TRANSACTION_ISOLATION_LEVEL()` 实现 `isReadOnly()`/`getSchema()`/`getTransactionIsolation()`，改语义要同步改这些内部调用
+* `procedure.psql_meta` — `Lealone客户端没有psql元命令(\df); pg_get_functiondef()本身已支持`
+
+解锁条件：前两条需要产品侧决定 `CALL` 是否区分函数与过程（或在 JDBC 层把 `{call f(...)}` 转成 `SELECT f(...)`）；
+最后一条需要一个 psql 兼容客户端。
+
+## 六、实现结构
 
 新增 5 个文件、修改 8 个已有文件（共 4 个模块）：
 
@@ -205,13 +236,18 @@ call p('x');            -- varchar 版本还在
   这种 `TABLE_OR_VIEW_NOT_FOUND` 推迟到 `CALL` 时校验。过程体改成**按原文切分**（`splitStatementsRaw`），
   这样切语句时不会因为表还不存在而失败；DDL 在嵌套会话的同一个事务里执行。
 - **SCRIPT**：`GenScript` 之前没有遍历 `DbObjectType.PROCEDURE`，`SCRIPT`/备份会丢过程定义，已补上。
+- **PL/pgSQL 过程体**：`CallProcedure` 识别 `LANGUAGE plpgsql` 时直接复用 `PlpgSqlFunction` 的解释器
+  （`PlpgSqlInterpreter`）在嵌套 session 里同步执行，过程体写成一行（脚本按行末 `;` 切语句的限制见
+  `docs/PG_REGRESS.md` 第九节）；OUT/INOUT 的值仍按"最后一条查询的第一行"取，plpgsql 体里赋值 OUT 参数也支持。
+- **CREATE OR REPLACE / ALTER ... RENAME**：`CreateProcedure` 支持 `OR REPLACE`（同签名覆盖、保留授权），
+  `AlterProcedure` 支持 `RENAME TO`。
 - **按参数类型重载**：`Schema.getDbObjectKey()` 对 `SqlProcedure` 返回 `名字(入参类型id...)`，
   `Schema.findProcedures()` 按名字取候选集合；`CallProcedure` 在 `prepare()` 里用
   `SqlProcedure.getMatchScore()`（内部调用 `SqlFunction.getTypeMatch`）消解重载；
   `DropProcedure`/`SQLParserBase.parseDropProcedure()` 支持 `name(类型列表)` 和 `IN/OUT/INOUT`
   模式，按完整参数列表匹配；`SqlProcedure.getDropSQL()` 输出带签名的 DROP，保证 `SCRIPT` 回放不歧义。
 
-## 六、为什么用嵌套 session
+## 七、为什么用嵌套 session
 
 另一条更“干净”的路线是：不动 session，直接在调用者 session 上跑内层 yieldable，
 这样手动事务里的可见性问题（限制 3）会自然消失。但实测行不通：
@@ -223,10 +259,21 @@ call p('x');            -- varchar 版本还在
 嵌套 session 方案每级都注册成各自 session 的当前命令，被调度器公平对待，
 任何一条语句等锁或让出都不会阻塞调度线程。
 
-## 七、回归
+## 八、回归
 
 `StoredProcedureTest`、`ProcedureOutParamTest`（OUT/INOUT）、`ProcedureOverloadTest`（按参数类型重载）、
-`AtomicBodyTest`（BEGIN ATOMIC）、`ScriptRoundTripTest`、`PgRegressTest`、`PgFunction*Test`、
-`Plpgsql*Test` 等回归全绿，具体用例数见交付说明。
+`ProcedureNestedCallOutTest`、`ProcedureOutArgTest`、`AtomicBodyTest`（BEGIN ATOMIC）、
+`ProcedurePlpgsqlTest`（plpgsql 过程体）、`GrantProcedureTest`、`AlterProcedureTest`、
+`ScriptRoundTripTest`、`PgRegressTest`、`Plpgsql*Test` 等回归全绿；
+`PgRegressTest` 当前是 **98 用例（执行 93 / skip 5）、406 条语句全部通过**（见 `docs/PG_REGRESS.md` 第四节）。
 
 跑测试前记得 `rm -rf lealone-test/target/test-data`。
+
+## 九、当前完成度与剩余缺口
+
+过程线的整体完成度、PG 回归用例的覆盖情况、以及和函数/触发器/游标相关的能力全景，
+统一维护在 `docs/PG_REGRESS.md` 第十一节"当前完成度与剩余缺口"（一张表：能力 / 状态 / 还差什么）。
+和过程直接相关的剩余项只有三条 skip 用例：`procedure.call_function`、`procedure.call_random`（`CALL` 语义
+与 JDBC `CallableStatement` 契约冲突）和 `procedure.psql_meta`（没有 psql 元命令 `\df`），
+原因和解锁条件见本文第五节以及 `docs/PG_REGRESS.md` 第五节。
+
