@@ -8,6 +8,7 @@ package com.lealone.sql.expression.function;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.util.Arrays;
 
 import com.lealone.common.exceptions.DbException;
 import com.lealone.common.util.MathUtils;
@@ -24,6 +25,7 @@ import com.lealone.db.table.Table;
 import com.lealone.db.table.TableType;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueNull;
 import com.lealone.db.value.ValueResultSet;
 import com.lealone.sql.IExpression;
@@ -40,6 +42,7 @@ public class FunctionTable extends Table {
 
     private final Function function;
     private final Expression functionExpr;
+    private final boolean recordReturning;
     private LocalResult cachedResult;
     private Value cachedValue;
 
@@ -47,8 +50,9 @@ public class FunctionTable extends Table {
         super(schema, 0, function.getName(), false, true);
         this.function = function;
         functionExpr = function.optimize(session);
+        recordReturning = function.isRecordReturning();
         int type = function.getType();
-        if (type == Value.RESULT_SET) {
+        if (type == Value.RESULT_SET || recordReturning) {
             ValueResultSet template = function.getValueForColumnList(session, function.getArgs());
             if (template == null) {
                 throw DbException.get(ErrorCode.FUNCTION_MUST_RETURN_RESULT_SET_1,
@@ -171,6 +175,9 @@ public class FunctionTable extends Table {
      */
     public Result getResult(ServerSession session) {
         Value v = getFunctionValue(session);
+        if (recordReturning) {
+            return createRecordResult(session, v);
+        }
         if (v.getType() != Value.RESULT_SET) {
             return createScalarResult(session, v);
         }
@@ -200,12 +207,50 @@ public class FunctionTable extends Table {
         if (v.getType() == Value.RESULT_SET) {
             return ((ValueResultSet) v).getResultSet();
         }
+        if (recordReturning) {
+            return createRecordResultSet(v);
+        }
         return createScalarResultSet(v);
     }
 
     private Value getFunctionValue(ServerSession session) {
         Value v = functionExpr.getValue(session);
         return v == null ? ValueNull.INSTANCE : v;
+    }
+
+    // 多OUT函数: record是一行多列, 从ValueArray取值; 严格函数返回NULL时当成一行全NULL
+    private LocalResult createRecordResult(ServerSession session, Value v) {
+        Column[] cols = getColumns();
+        Value[] row;
+        if (v.getType() == Value.ARRAY) {
+            row = ((ValueArray) v).getList();
+        } else {
+            row = new Value[cols.length];
+            Arrays.fill(row, ValueNull.INSTANCE);
+        }
+        IExpression[] expressions = createExpressions();
+        LocalResult result = new LocalResult(session, expressions, expressions.length);
+        result.addRow(row);
+        result.done();
+        return result;
+    }
+
+    private ResultSet createRecordResultSet(Value v) {
+        Column[] cols = getColumns();
+        Value[] row;
+        if (v.getType() == Value.ARRAY) {
+            row = ((ValueArray) v).getList();
+        } else {
+            row = new Value[cols.length];
+            Arrays.fill(row, ValueNull.INSTANCE);
+        }
+        SimpleResultSet simple = createSimpleResultSet(cols);
+        Object[] objects = new Object[cols.length];
+        for (int i = 0; i < cols.length; i++) {
+            objects[i] = row[i].getString();
+        }
+        simple.addRow(objects);
+        return simple;
     }
 
     // 标量函数: 一行一列, 返回NULL时也是一行
@@ -218,12 +263,19 @@ public class FunctionTable extends Table {
     }
 
     private ResultSet createScalarResultSet(Value v) {
-        Column column = getColumns()[0];
+        SimpleResultSet simple = createSimpleResultSet(getColumns());
+        simple.addRow(v.getString());
+        return simple;
+    }
+
+    private static SimpleResultSet createSimpleResultSet(Column[] cols) {
         SimpleResultSet simple = new SimpleResultSet();
         simple.setAutoClose(false);
-        simple.addColumn(column.getName(), DataType.convertTypeToSQLType(column.getType()),
-                MathUtils.convertLongToInt(column.getPrecision()), column.getScale());
-        simple.addRow(v.getObject());
+        for (int i = 0; i < cols.length; i++) {
+            Column column = cols[i];
+            simple.addColumn(column.getName(), DataType.convertTypeToSQLType(column.getType()),
+                    MathUtils.convertLongToInt(column.getPrecision()), column.getScale());
+        }
         return simple;
     }
 

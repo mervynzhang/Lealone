@@ -238,4 +238,13 @@ public abstract class Function extends Expression {
      * @return true if it should be.
      */
     abstract boolean isBufferResultSetToLocalTemp();
+
+    /**
+     * 函数是否返回record(多个OUT/INOUT参数)。record在值上下文里用ValueArray表示。
+     *
+     * @return 默认不返回record
+     */
+    public boolean isRecordReturning() {
+        return false;
+    }
 }

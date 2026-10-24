@@ -16,6 +16,7 @@ import com.lealone.db.result.SimpleResultSet;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueInt;
 import com.lealone.db.value.ValueLong;
@@ -168,28 +169,16 @@ public class PlpgSqlInterpreter {
         return value;
     }
 
-    // 多个OUT/INOUT参数组成一行结果集，列名用参数名
+    // 多个OUT/INOUT参数组成一行record, 值用ValueArray表示(在FROM里展开成多列)
     private Value buildOutputResultSet() {
         int count = resultInfo.outputIndexes.length;
-        String[] names = new String[count];
-        int[] types = new int[count];
-        long[] precisions = new long[count];
-        int[] scales = new int[count];
         Value[] row = new Value[count];
         for (int i = 0; i < count; i++) {
             int index = resultInfo.outputIndexes[i];
-            names[i] = parameterNames[index];
             PlpgSqlVariable variable = parameterVariables[index];
             row[i] = variable == null ? ValueNull.INSTANCE : variable.getValue();
-            types[i] = variable == null ? Value.UNKNOWN : variable.getType();
-            if (types[i] == Value.UNKNOWN)
-                types[i] = Value.NULL;
-            precisions[i] = DataType.getDataType(types[i]).defaultPrecision;
-            scales[i] = DataType.getDataType(types[i]).defaultScale;
         }
-        ArrayList<Value[]> rows = new ArrayList<>();
-        rows.add(row);
-        return buildResultSet(rows, names, types, precisions, scales);
+        return ValueArray.get(row);
     }
 
     private Value buildSetResult() {
