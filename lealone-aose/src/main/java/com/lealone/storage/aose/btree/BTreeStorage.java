@@ -7,6 +7,8 @@ package com.lealone.storage.aose.btree;
 
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -360,7 +362,8 @@ public class BTreeStorage {
         chunkCompactor.clearUnusedChunkPages();
 
         c.setLastTransactionId(map.getLastTransactionId());
-        c.setLastRedoLogPos(lastRedoLogPos);
+        // append模式写的是lastChunk自己，没有上一个chunk的RedoLog尾部，记录自身大小会让恢复时读错chunk
+        c.setLastRedoLogPos(appendMode ? -1 : lastRedoLogPos);
         c.setLastUnusedChunk(lastUnusedChunk);
 
         c.write(chunkBody, chunkManager, appendMode);
@@ -390,7 +393,8 @@ public class BTreeStorage {
                 } else {
                     // 倒数第三个chunk的redo log可以删除了
                     Chunk thirdLastChunk = chunkManager.findThirdLastChunk();
-                    if (thirdLastChunk != null) {
+                    // chunk序号有空洞时可能返回上一个lastChunk，它的RedoLog尾部还被新的lastChunk引用
+                    if (thirdLastChunk != null && thirdLastChunk != lastChunk) {
                         thirdLastChunk.removeRedoLogAndRemovedPages(map);
                     }
                 }
@@ -439,12 +443,15 @@ public class BTreeStorage {
                     Chunk secondLastChunk = chunkManager.findChunk(seq - 1);
                     if (secondLastChunk != null) {
                         int size2 = (int) (secondLastChunk.size() - c.getLastRedoLogPos());
-                        int capacity = size1 + size2;
-                        buffer = ByteBuffer.allocate(capacity);
-                        buffer.limit(size2);
-                        secondLastChunk.fileStorage.readFully(c.getLastRedoLogPos(), size2, buffer);
-                        buffer.position(size2);
-                        buffer.limit(capacity);
+                        // 记录的偏移可能已越界(chunk被截断或文件重建)，此时没有可读的RedoLog尾部
+                        if (size2 > 0) {
+                            int capacity = size1 + size2;
+                            buffer = ByteBuffer.allocate(capacity);
+                            buffer.limit(size2);
+                            secondLastChunk.fileStorage.readFully(c.getLastRedoLogPos(), size2, buffer);
+                            buffer.position(size2);
+                            buffer.limit(capacity);
+                        }
                     }
                 }
                 if (size1 <= 0) {
@@ -459,6 +466,22 @@ public class BTreeStorage {
         } finally {
             redoLogLock.unlock();
         }
+    }
+
+    private Set<Long> readRedoLogTransactionIds() {
+        Set<Long> transactionIds = new HashSet<>();
+        ByteBuffer log = readRedoLog();
+        if (log == null)
+            return transactionIds;
+        while (log.hasRemaining()) {
+            int len = log.getInt();
+            int pos = log.position();
+            int type = log.get();
+            if (type > 1)
+                transactionIds.add(DataUtils.readVarLong(log));
+            log.position(pos + len);
+        }
+        return transactionIds;
     }
 
     void sync() {
@@ -477,27 +500,25 @@ public class BTreeStorage {
         }
     }
 
+    // 恢复时每个事务都要验证一次，原来每次都重新分配并扫描整个redo log，
+    // 一个几十MB的log配上十万级的事务就是TB级的分配，恢复要几分钟。
+    // 现在只解析一次，之后用集合判断。
+    private Set<Long> redoLogTransactionIds;
+    private Chunk redoLogTransactionIdsChunk;
+    private boolean redoLogTransactionIdsValid;
+
     boolean validateRedoLog(long lastTransactionId) {
         redoLogLock.lock();
         try {
             Chunk c = chunkManager.getLastChunk();
             if (c != null && c.getLastTransactionId() >= lastTransactionId)
                 return true;
-            ByteBuffer log = readRedoLog();
-            if (log == null)
-                return false;
-            while (log.hasRemaining()) {
-                int len = log.getInt();
-                int pos = log.position();
-                int type = log.get();
-                if (type > 1) {
-                    long transactionId = DataUtils.readVarLong(log);
-                    if (transactionId == lastTransactionId)
-                        return true;
-                }
-                log.position(pos + len);
+            if (!redoLogTransactionIdsValid || redoLogTransactionIdsChunk != c) {
+                redoLogTransactionIds = readRedoLogTransactionIds();
+                redoLogTransactionIdsChunk = c;
+                redoLogTransactionIdsValid = true;
             }
-            return false;
+            return redoLogTransactionIds.contains(lastTransactionId);
         } finally {
             redoLogLock.unlock();
         }
