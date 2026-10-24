@@ -404,13 +404,6 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
         }
     }
 
-    // 只交给这个索引自己的IndexOperator执行，不再广播给表上的其他索引
-    public static void addIndexOperation(ServerSession session, StandardTable table, Index index,
-            IndexOperation io) {
-        InternalScheduler target = getSchedulerByRowKey(session.getScheduler(), io.rowKey);
-        index.getIndexOperator().addIndexOperation(target, io);
-    }
-
     private static InternalScheduler getSchedulerByRowKey(InternalScheduler current, long rowKey) {
         SchedulerFactory factory = current.getSchedulerFactory();
         int count = factory.getSchedulerCount();
