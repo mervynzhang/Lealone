@@ -177,7 +177,7 @@ call p('x');            -- varchar 版本还在
 | --- | --- | --- | --- |
 | 过程体里的参数引用 | `?` 按位置（SQL 体）；plpgsql 体可用参数名 | 都可以用参数名 | 转换 PG 脚本时要把 SQL 体里的参数名改成 `?` |
 | `DROP PROCEDURE` 的签名匹配 | 按**完整参数列表**（含 OUT/INOUT 位置、可写 `IN/OUT` 模式，不能写参数名） | 同样按完整参数列表，但可以写参数名 | 脚本里 `DROP PROCEDURE p(int, int)` 能匹配所有重载；`DROP PROCEDURE p` 在多重重载时报 90152 |
-| `SECURITY DEFINER` | 属性会记录（`SCRIPT` 里能回放），但**不改变 CALL 的执行身份**（过程走异步链，嵌套 session 用调用者身份） | 用属主身份执行 | 不能用它做权限隔离；函数侧 `SECURITY DEFINER` 生效（见 `docs/PG_FUNCTION.md`） |
+| `SECURITY DEFINER` | 以**属主身份**在嵌套会话里执行过程体（属主默认是创建者，DDL 里持久化 `SECURITY DEFINER` + `OWNER TO`，重启后仍生效）；`INVOKER`（默认）按调用者身份 | 同样以属主身份执行 | 和 PG 一致，可以用来做权限隔离（`INFORMATION_SCHEMA.ROUTINES.SECURITY_TYPE` 如实报 `DEFINER`/`INVOKER`） |
 | `SET ROLE` 的作用范围 | 只影响函数/过程的 `EXECUTE` 权限检查 | 影响所有对象权限 | 表/序列/服务权限仍按当前用户算 |
 | 授权默认值 | 对象从未被 GRANT/REVOKE 过时人人可调用；一旦有记录就严格检查 | 建对象即自动 `GRANT EXECUTE TO PUBLIC` | `REVOKE EXECUTE ... FROM PUBLIC` 之后的行为和 PG 一致 |
 | `CALL` 的语义 | `CALL` 既能调过程也能调函数（JDBC `CallableStatement` 契约 `{call f(...)}`） | `CALL` 只调过程，调函数报 42809 | PG 的 `CALL version()`/`CALL sum(1)`/`CALL random()` 用例 skip（`procedure.call_function`、`procedure.call_random`） |

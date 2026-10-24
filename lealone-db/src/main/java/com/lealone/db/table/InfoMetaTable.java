@@ -1610,8 +1610,9 @@ public class InfoMetaTable extends MetaTable {
     }
 
     private void addProcedureRoutine(ArrayList<Row> rows, String catalog, SqlProcedure procedure) {
+        // SECURITY_TYPE要和实际执行行为一致, 过程也支持SECURITY DEFINER(以属主身份执行)
         addRoutine(rows, catalog, procedure, "PROCEDURE", null, procedure.getBody(), false,
-                "INVOKER", procedure.getLanguage());
+                procedure.isSecurityDefiner() ? "DEFINER" : "INVOKER", procedure.getLanguage());
     }
 
     private void addRoutine(ArrayList<Row> rows, String catalog, SchemaObject obj,

@@ -15,6 +15,7 @@ import com.lealone.db.api.ErrorCode;
 import com.lealone.db.async.AsyncResult;
 import com.lealone.db.async.AsyncResultHandler;
 import com.lealone.db.async.AsyncTask;
+import com.lealone.db.auth.User;
 import com.lealone.db.command.CommandParameter;
 import com.lealone.db.result.LocalResult;
 import com.lealone.db.result.Result;
@@ -78,7 +79,12 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         // 有授权记录时才检查EXECUTE权限，没有授权历史的对象保持"人人可调用"
         session.checkExecuteRight(procedure);
         evalArgs();
-        nestedSession = session.createNestedSession();
+        // SECURITY DEFINER的过程以属主身份在嵌套会话里执行(和definer函数一致)，属主默认是创建者
+        if (procedure.isSecurityDefiner()) {
+            nestedSession = session.createNestedSession(getOwnerUser());
+        } else {
+            nestedSession = session.createNestedSession();
+        }
         if (session.isAutoCommit())
             nestedSession.setAutoCommit(false);
         if (procedure.isPlpgSql()) {
@@ -89,6 +95,13 @@ public class YieldableCallProcedure<T> extends YieldableBase<T> {
         }
         statements = splitBody(procedure.getBody());
         createNextYieldable();
+    }
+
+    // SECURITY DEFINER过程的属主，属主默认是创建者
+    private User getOwnerUser() {
+        String owner = procedure.getOwnerName() != null ? procedure.getOwnerName()
+                : session.getUser().getName();
+        return session.getDatabase().getUser(session, owner);
     }
 
     // 在嵌套会话里解释执行PL/pgSQL过程体，返回OUT/INOUT参数组成的一行(没有OUT/INOUT时是NULL)

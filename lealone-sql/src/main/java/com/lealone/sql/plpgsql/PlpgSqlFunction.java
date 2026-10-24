@@ -71,15 +71,32 @@ public class PlpgSqlFunction extends SqlFunction {
     @Override
     public Value executeTrigger(ServerSession session, String[] columnNames, int[] columnTypes,
             Value[] oldRow, Value[] newRow) {
-        // 触发器函数必须和触发它的DML在同一个session/事务里执行，
-        // 这样函数里的DML对后续触发器可见，也能随外层事务一起回滚
-        PlpgSqlInterpreter interpreter = new PlpgSqlInterpreter(session, getCompiledBody(),
+        // 触发器函数必须和触发它的DML在同一个事务里执行，
+        // 这样函数里的DML对后续触发器可见，也能随外层事务一起回滚；
+        // SECURITY DEFINER时改用属主身份的嵌套会话(事务以触发它的语句的事务为父事务)
+        ServerSession execSession = session;
+        ServerSession nestedSession = null;
+        if (isSecurityDefiner()) {
+            nestedSession = createNestedSession(session);
+            nestedSession.setAutoCommit(false);
+            execSession = nestedSession;
+        }
+        PlpgSqlInterpreter interpreter = new PlpgSqlInterpreter(execSession, getCompiledBody(),
                 getResultInfo());
+        boolean success = false;
         try {
-            return interpreter.executeTrigger(columnNames, columnTypes, oldRow, newRow);
+            Value value = interpreter.executeTrigger(columnNames, columnTypes, oldRow, newRow);
+            if (nestedSession != null)
+                nestedSession.commit();
+            success = true;
+            return value;
         } catch (PlpgSqlException e) {
             throw DbException.convert(
                     new SQLException(e.getMessage(), e.getSqlState(), ErrorCode.GENERAL_ERROR_1));
+        } finally {
+            // 触发器函数失败时它自己的修改要回滚，外层的DML由调用方回滚
+            if (nestedSession != null && !success)
+                nestedSession.rollback();
         }
     }
 
