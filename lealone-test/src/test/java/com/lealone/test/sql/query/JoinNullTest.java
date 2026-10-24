@@ -133,9 +133,9 @@ public class JoinNullTest extends SqlAssertTestBase {
     // 以下为已确认缺陷（期望值按 SQL 标准与 H2 2.4.240 实测）
     // ------------------------------------------------------------------
 
-    // BUG: 不支持 FULL OUTER JOIN，解析阶段就报 42000 语法错误。
-    // 期望: 返回左右两边都保留、未匹配侧补 NULL 的结果（H2 支持 FULL OUTER JOIN）；实际: 语法错误。
-    @Ignore("BUG: FULL OUTER JOIN is a syntax error (42000)")
+    // FULL OUTER JOIN 是42000语法错误。H2 2.4.240 同样不支持(实测)，PostgreSQL支持，
+    // 这里记录的是对PostgreSQL/SQL标准的差距，不是对H2的差距。
+    @Ignore("GAP(vs PostgreSQL): FULL OUTER JOIN is a syntax error (42000); H2 2.4.240 rejects it too")
     @Test
     public void fullOuterJoin() {
         init();
