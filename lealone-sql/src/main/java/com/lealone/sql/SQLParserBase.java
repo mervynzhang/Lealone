@@ -167,6 +167,7 @@ import com.lealone.sql.expression.Parameter;
 import com.lealone.sql.expression.Rownum;
 import com.lealone.sql.expression.SelectOrderBy;
 import com.lealone.sql.expression.SequenceValue;
+import com.lealone.db.value.ValueArray;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.Variable;
 import com.lealone.sql.expression.Wildcard;
@@ -1884,14 +1885,21 @@ public class SQLParserBase implements SQLParser {
                     Expression min = readExpression();
                     read(",");
                     Expression max = readExpression();
+                    RangeTable rangeTable;
                     if (readIf(",")) {
                         Expression step = readExpression();
                         read(")");
-                        table = new RangeTable(mainSchema, min, max, step, false);
+                        rangeTable = new RangeTable(mainSchema, min, max, step, false);
                     } else {
                         read(")");
-                        table = new RangeTable(mainSchema, min, max, false);
+                        rangeTable = new RangeTable(mainSchema, min, max, false);
                     }
+                    // PostgreSQL的WITH ORDINALITY: 追加一列从1开始的行号
+                    if (readIf("WITH")) {
+                        read("ORDINALITY");
+                        rangeTable.setWithOrdinality();
+                    }
+                    table = rangeTable;
                 } else {
                     Expression expr = readFunction(schema, tableName);
                     if (!(expr instanceof Function)) {
@@ -2713,6 +2721,29 @@ public class SQLParserBase implements SQLParser {
         return function;
     }
 
+    // PostgreSQL的数组构造语法ARRAY[...]: 元素必须是常量(Lealone没有数组类型推导)
+    protected Expression readArrayLiteral() {
+        ArrayList<Value> values = Utils.newSmallArrayList();
+        if (!readIf("]")) {
+            do {
+                Expression e = readExpression();
+                // 常量表达式(比如 ARRAY[1.0::float8] 里的CAST)先折叠成常量
+                if (!(e instanceof ValueExpression)) {
+                    e = e.optimize(session);
+                }
+                if (!(e instanceof ValueExpression)) {
+                    throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                            "ARRAY[...] only supports constant elements");
+                }
+                values.add(((ValueExpression) e).getValue(session));
+            } while (readIf(","));
+            read("]");
+        }
+        Value[] list = new Value[values.size()];
+        values.toArray(list);
+        return ValueExpression.get(ValueArray.get(list));
+    }
+
     protected Expression readTermObjectDot(String objectName) {
         Expression expr = readWildcardOrSequenceValue(null, objectName);
         if (expr != null) {
@@ -2841,7 +2872,10 @@ public class SQLParserBase implements SQLParser {
                 }
             } else {
                 read();
-                if (readIf(".")) {
+                if (equalsToken("ARRAY", name) && readIf("[")) {
+                    // PostgreSQL的数组构造语法: ARRAY[1, 2, 3]
+                    r = readArrayLiteral();
+                } else if (readIf(".")) {
                     r = readTermObjectDot(name);
                 } else if (equalsToken("CASE", name)) {
                     // CASE must be processed before (,

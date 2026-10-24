@@ -12,6 +12,7 @@ import com.lealone.db.index.IndexColumn;
 import com.lealone.db.index.RangeIndex;
 import com.lealone.db.schema.Schema;
 import com.lealone.db.session.ServerSession;
+import com.lealone.db.value.DataType;
 import com.lealone.db.value.Value;
 import com.lealone.sql.IExpression;
 
@@ -33,6 +34,8 @@ public class RangeTable extends Table {
 
     private IExpression min, max, step;
     private boolean optimized;
+    // PostgreSQL的WITH ORDINALITY: 追加一列从1开始的行号
+    private boolean withOrdinality;
 
     /**
      * Create a new range with the given start and end expressions.
@@ -56,6 +59,27 @@ public class RangeTable extends Table {
         this.step = step;
     }
 
+    /**
+     * WITH ORDINALITY: 在X后面追加一列从1开始的行号(bigint)。
+     */
+    public void setWithOrdinality() {
+        if (withOrdinality) {
+            return;
+        }
+        withOrdinality = true;
+        Column[] oldColumns = getColumns();
+        Column[] newColumns = new Column[oldColumns.length + 1];
+        System.arraycopy(oldColumns, 0, newColumns, 0, oldColumns.length);
+        DataType dataType = DataType.getDataType(Value.LONG);
+        newColumns[oldColumns.length] = new Column("ORDINALITY", Value.LONG,
+                dataType.defaultPrecision, dataType.defaultScale, dataType.defaultDisplaySize);
+        setColumns(newColumns);
+    }
+
+    public boolean isWithOrdinality() {
+        return withOrdinality;
+    }
+
     @Override
     public String getCreateSQL() {
         return null;
@@ -67,7 +91,11 @@ public class RangeTable extends Table {
         if (step != null) {
             sql += ", " + step.getSQL();
         }
-        return sql + ")";
+        sql += ")";
+        if (withOrdinality) {
+            sql += " WITH ORDINALITY";
+        }
+        return sql;
     }
 
     @Override
