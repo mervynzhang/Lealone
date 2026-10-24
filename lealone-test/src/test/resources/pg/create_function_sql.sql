@@ -270,9 +270,7 @@ select proname, proleakproof from information_schema.pg_proc
 > rows: 2
 
 -- 非admin不能建LEAKPROOF函数(PG里报42501, Lealone整体要求admin, 报90040)
--- 适配: PG 的 setup 段建的 regress_unpriv_user 在 Lealone 里要带 PASSWORD
-create user regress_unpriv_user password 'p';
-> update count: 0
+-- 适配: regress_unpriv_user 由上面的 function_sql.setup 段创建(PG 也是setup段建的), 这里不再重复建
 
 set session authorization regress_unpriv_user;
 > update count: 0
@@ -284,8 +282,7 @@ create function functest_E_3(a int) returns boolean language 'sql'
 reset session authorization;
 > update count: 0
 
-drop user regress_unpriv_user;
-> update count: 0
+-- regress_unpriv_user 属于 setup 段, 这里不删(删了后面的用例就用不了)
 
 -- ---------------------------------------------------------------------------
 -- CALLED ON NULL INPUT | RETURNS NULL ON NULL INPUT | STRICT
