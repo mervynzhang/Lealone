@@ -143,6 +143,12 @@ public class NioEventLoop implements NetEventLoop {
             channel.setSelectionKey(key);
         } catch (ClosedChannelException e) {
             throw DbException.convert(e);
+        } catch (IllegalStateException e) {
+            // 连接已经被关闭/SelectionKey已经被cancel时, JDK会抛 CancelledKeyException 或
+            // IllegalStateException("key is cancelled")。原来只接 ClosedChannelException,
+            // 这两种会以裸运行时异常的身份逃出去, 调用方(客户端session)看不到任何上下文,
+            // 只会在日志里留下一条 "Failed to run async session task", 然后请求永远等不到响应。
+            throw DbException.convert(e);
         }
     }
 
