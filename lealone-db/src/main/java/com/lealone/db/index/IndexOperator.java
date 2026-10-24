@@ -130,13 +130,17 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
     }
 
     private void addIndexOperation(InternalScheduler currentScheduler, IndexOperation io) {
-        LinkableList<IndexOperation> pendingIos = pendingIosArray[currentScheduler.getId()];
-        if (pendingIos == null) {
-            pendingIos = new LinkableList<>();
-            pendingIosArray[currentScheduler.getId()] = pendingIos;
-            currentScheduler.addTaskManager(this);
+        // 加索引操作的线程(客户端线程或调度线程)可能跟gcCompletedTasks所在的调度线程不同，
+        // 不加锁时LinkableList会被并发修改，索引操作会丢失
+        synchronized (pendingIosArray) {
+            LinkableList<IndexOperation> pendingIos = pendingIosArray[currentScheduler.getId()];
+            if (pendingIos == null) {
+                pendingIos = new LinkableList<>();
+                pendingIosArray[currentScheduler.getId()] = pendingIos;
+                currentScheduler.addTaskManager(this);
+            }
+            pendingIos.add(io);
         }
-        pendingIos.add(io);
         indexOperationSize.incrementAndGet();
 
         // 调用wakeUp会降低一点点性能
@@ -146,25 +150,27 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
 
     @Override
     public boolean gcCompletedTasks(InternalScheduler scheduler) {
-        LinkableList<IndexOperation> pendingIos = pendingIosArray[scheduler.getId()];
-        if (pendingIos == null)
-            return true;
-        else if (pendingIos.isEmpty()) {
-            pendingIosArray[scheduler.getId()] = null;
-            return true;
+        synchronized (pendingIosArray) {
+            LinkableList<IndexOperation> pendingIos = pendingIosArray[scheduler.getId()];
+            if (pendingIos == null)
+                return true;
+            else if (pendingIos.isEmpty()) {
+                pendingIosArray[scheduler.getId()] = null;
+                return true;
+            }
+            IndexOperation io = pendingIos.getHead();
+            while (io != null && io.isCompleted()) {
+                io = io.getNext();
+                pendingIos.decrementSize();
+                pendingIos.setHead(io);
+            }
+            if (pendingIos.getHead() == null) {
+                pendingIos.setTail(null);
+                pendingIosArray[scheduler.getId()] = null;
+                return true;
+            }
+            return false;
         }
-        IndexOperation io = pendingIos.getHead();
-        while (io != null && io.isCompleted()) {
-            io = io.getNext();
-            pendingIos.decrementSize();
-            pendingIos.setHead(io);
-        }
-        if (pendingIos.getHead() == null) {
-            pendingIos.setTail(null);
-            pendingIosArray[scheduler.getId()] = null;
-            return true;
-        }
-        return false;
     }
 
     private void cancelTask() {
@@ -213,7 +219,7 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
                             io = io.getNext();
                             continue;
                         }
-                        int status = io.getStatus();
+                        int status = getStatus(io);
                         if (status == 0) {
                             // 如果当前事务未提交，可以在当前事务中直接执行索引操作
                             if (io.transaction == session.getTransaction()) {
@@ -227,6 +233,7 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
                             }
                         } else if (status < 0) {
                             io.setCompleted(true); // 已经回滚，直接废弃
+                            indexOperationSize.decrementAndGet();
                             continue;
                         }
                         ios[i] = io;
@@ -246,12 +253,13 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
                             break;
                         }
                         // 索引操作链表中的下一个索引操作对应的父事务若是没有提交就不能执行它了
-                        int status = io.getStatus();
+                        int status = getStatus(io);
                         if (status == 0) {
                             ios[i] = null; // 未提交，不能进行后续处理
                             break;
                         } else if (status < 0) {
                             io.setCompleted(true); // 已经回滚，直接废弃
+                            indexOperationSize.decrementAndGet();
                             continue;
                         } else {
                             ios[i] = io;
@@ -310,6 +318,14 @@ public class IndexOperator implements Runnable, SchedulerTaskManager {
             }
         }
         return minIo;
+    }
+
+    // getStatus读的maxCommittedLogId不是volatile的，并发时可能一直读到旧值，
+    // 导致已经提交的索引操作被当成未提交(一直不执行)或者当成已回滚(被丢弃)，所以先用commitTimestamp判断
+    private static int getStatus(IndexOperation io) {
+        if (io.getTransaction().getCommitTimestamp() > 0)
+            return 1;
+        return io.getStatus();
     }
 
     private void run(IndexOperation io) {
