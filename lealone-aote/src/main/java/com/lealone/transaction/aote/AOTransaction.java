@@ -395,11 +395,10 @@ public class AOTransaction implements Transaction {
 
     @Override
     public void rollbackToSavepoint(int savepointId) {
-        // 事务已经结束就没有可回滚的保存点了。
-        // 原来这里直接抛异常，而调用方是语句异常处理里的rollbackCurrentCommand，
-        // 异常会一路抛到调度线程的循环里，语句永远结束不了，客户端只能一直等。
-        if (isClosed())
-            return;
+        // 直接调用方(比如 Connection.rollback(savepoint))应该看到"事务已结束"这个编程错误。
+        // 语句异常处理路径上的容错放在 ServerSession.rollbackCurrentCommand 里做,
+        // 不能在这里静默返回把错误藏起来(与已回退的重复回滚守卫是同一类问题)。
+        checkNotClosed();
         rollbackTo(savepointId);
     }
 

@@ -16,6 +16,7 @@
 |---|---|---|---|---|
 | 1 | 关联子查询只在最内层与外层关联时，中间层子查询结果被跨外层行复用，返回上一行的过期值（静默错数据） | `CorrelatedVisitor` 展开嵌套子查询，并把嵌套查询自己的 `TableFilter` 并入"自己的列"集合 | 新增 `CorrelatedSubqueryTest` 4 例；回退本改动后正好两条嵌套用例变红（`expected:<2> but was:<1>`），两条对照仍绿 | 已修复 |
 | 2 | 异步提交回调在事务已结束时会丢失（语句挂死），重复提交时会重复执行（客户端收到两次响应） | `undoLog == null` 时补调 `asyncCommitComplete()`；`asyncCommitComplete()` 先取走 `asyncTask` 再置空，保证恰好一次 | 新增 `AsyncCommitCallbackTest` 2 例；去掉补调 → 30s 超时"没有回调"；去掉取走置空 → `expected:<1> but was:<2>` | 已修复 |
+| 17 | `AOTransaction.rollbackToSavepoint` 对"事务已结束"静默 return（与已回退的 `137de5658` 同型）：直接调用方（`Connection.rollback(savepoint)`）看不到这个编程错误 | 事务层恢复 `checkNotClosed()`；把容错移到真正的收尾点 `ServerSession.rollbackCurrentCommand`——捕获后打 warn 并**保证仍执行解锁**，语句不会挂死、锁也不会泄漏 | 新增 `SavepointRollbackAfterCloseTest` 3 例（提交后/回滚后回滚保存点要抛异常、引擎仍可用）；回退事务层改动后 3 例中 2 例红。另跑 9 个错误路径相关用例共 22 项全绿，无挂死 | 已修复 |
 | 16 | 单表查询去重表超过 10 万条后**静默**停止去重，之后若出现重复行完全无从判断原因 | 保留上限（防内存无界增长），超过时打一次 warn 说明"本语句后续不再去重" | 新增 `FlatQueryDedupeLimitTest`（10.01 万行，批量插入 1.15s）；服务端日志实测恰好出现 1 次该 warn，且超限后行数仍准确（100100 行、`a=3` 10010 行） | 已修复（改为可见） |
 | 15 | 加密文件/损坏文件的块长度越界时**静默**当 EOF，LOB 读损坏数据会被悄悄截断且事后无法排查 | 保留"按 EOF 处理"的契约（`ScriptBase.verifyMagic` 已有明确的加密错误），但补一条 warn 日志带上块长度/可用长度/文件名 | 新增 `FileStorageTest.testChunkLengthExceedsFileSize`（长度为正但超出文件范围，此前只覆盖 `Integer.MAX_VALUE` 极端值）；`FileStorageTest` 5/5 通过 | 已修复（改为可见） |
 | 14 | `SequenceLockedExceptionTest` 的 worker 抛异常后不 `countDown()`，主线程 `latch.await()` 永久挂死（surefire 也无超时），会把 CI 卡死 | worker 用 `finally { latch.countDown(); }` 并把异常存起来；主线程 `await(30s)` + 重新抛出；加 `@Test(timeout=60000)`；`lock_timeout` 从 1000000 降到 10000；补 conn/stmt 关闭 | 注入一个 worker 失败（改成查不存在的表）后：**0.2 秒内明确失败**（`worker 线程执行失败: Table "NOT_EXIST_TABLE" not found`）而不是挂死；正常路径连跑 2 次通过 | 已修复 |
@@ -42,7 +43,6 @@
 
 | # | 问题 | 位置 |
 |---|---|---|
-| 12 | `rollbackToSavepoint` 的 `isClosed() → return` 与被回退的 `137de5658` 同类；正解是在 `YieldableBase.handleException`/`Session.commit/rollback` 加 try/finally | `AOTransaction.java:393-399` |
 
 ### P2 热路径性能
 
