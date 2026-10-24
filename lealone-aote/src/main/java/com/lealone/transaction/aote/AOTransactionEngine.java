@@ -125,7 +125,11 @@ public class AOTransactionEngine extends TransactionEngineBase implements Storag
         // 事务引擎已经关闭了，此时忽略存储引擎的事件响应
         if (logSyncService == null)
             return;
-        checkpoint();
+        // 这里不能再发起异步checkpoint: StorageBase.close() 在beforeClose之后紧接着就会
+        // 同步保存这个storage的所有map, 异步任务反而会和下面"注销map"竞争 ——
+        // 等它真的跑起来时map已经从检查点服务里摘掉了, 或者storage已经关闭,
+        // 保存只会失败(日志里出现过 "Failed to execute save: Directory does not exist")。
+        // 需要落盘的数据由紧接着的 save() 负责。
         for (String mapName : storage.getMapNames()) {
             removeStorageMap(storage.getMap(mapName));
         }
