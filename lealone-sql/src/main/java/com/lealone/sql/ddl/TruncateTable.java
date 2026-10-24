@@ -40,6 +40,14 @@ public class TruncateTable extends SchemaStatement {
     @Override
     public int update() {
         session.getUser().checkRight(table, Right.DELETE);
+        // TRUNCATE 直接清空底层存储(不进undo log), 没法回滚。在未提交的事务里执行它会让会话进入
+        // 不一致状态: 实测 "TRUNCATE -> INSERT -> ROLLBACK" 之后, 后面的 INSERT 会被静默丢掉
+        // (数据在, 再插入的行不生效, 重开库也一样)。与其悄悄丢数据, 不如明确拒绝。
+        if (!session.isAutoCommit()) {
+            throw DbException.get(ErrorCode.COMMIT_ROLLBACK_NOT_ALLOWED,
+                    "TRUNCATE TABLE cannot run inside a transaction because it is not rollback-able;"
+                            + " commit or rollback first, or use DELETE FROM instead");
+        }
         if (!table.canTruncate()) {
             throw DbException.get(ErrorCode.CANNOT_TRUNCATE_1, table.getSQL());
         }
