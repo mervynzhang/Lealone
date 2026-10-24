@@ -114,8 +114,10 @@ public class PgRegressTest {
                         total.file, total.statements, skipList.getPgStatements(total.file)));
         }
         Map<String, Integer> byReason = new LinkedHashMap<>();
-        for (PgSkipList.Entry e : skipList.getEntries().values())
-            byReason.merge(e.reason, 1, Integer::sum);
+        for (PgSkipList.Entry e : skipList.getEntries().values()) {
+            Integer count = byReason.get(e.reason);
+            byReason.put(e.reason, count == null ? 1 : count.intValue() + 1);
+        }
         for (Map.Entry<String, Integer> e : byReason.entrySet())
             buff.append(String.format("[pgregress]   %2d 条  %s%n", e.getValue(), e.getKey()));
 
