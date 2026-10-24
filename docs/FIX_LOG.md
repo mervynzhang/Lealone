@@ -66,6 +66,7 @@
 | 22 | SLT 门禁**仍然可以被"同文件替换"绕过**：baseline 只比"每文件失败计数"，同一文件里"修好 A、坏掉 B"仍然 PASS | `SltBaseline.java:156-159` | 需把 baseline 从计数改为失败签名集合 |
 | 26 | ~~**重启后丢更新（潜伏，观测条件已消除）**~~ **已由第 27 项修复（真正根因是 `Database.close` 被内部 session 静默挡掉）**。以下为当时排除过程的记录：：全量套件里 `CheckpointDurabilityTest.testBackupThenUpdate` 期望 `2000,100` 实得 `2000,0`（行在、100 条更新没了）；日志抓到 `Failed to execute save: Directory does not exist: .../db_47/t_47_0`（某个已失效数据库在后台检查点里抛异常）。触发条件已定位为"同一 JVM 里前面有用例遗留了开着的库、而它的存储目录后来被删掉"；把那个用例（`SltGateStatementTest`）移出普通套件后，全量套件恢复确定性（360 项 × 2 轮全绿） | `CheckpointService.save`（已修"单 map 失败中止整轮"）、`Database.close`、后台检查点与关闭的竞争 | **已排除的假设**：① 多一个嵌入式库在场（8/8 正确，含显式 `close(false)`）；② CPU 高负载放大竞争窗口（单跑 6/6 绿）；③ `close(false)` 异步不刷盘（代码确认是同步 `table.close` + `Storage.close`）。**仍待查**：后台检查点与 `Database.close` 的竞争（需要"遗留库"这一前置条件） |
 | 25 | ~~SLT 门禁偶发、原始代码同样复现~~ **更正：这是本批两个修复叠加引入的回归，不是既有缺陷**（原结论基于未 install 的对照，见第 23 条方法论警示）。已作为第 22 条修复 | — | — |
+| 28 | `CheckpointDurabilityTest` 的重启校验会把**进程里一直在用的 `db_0`（lealone 元数据库）**复制到隔离目录，复制一个活跃库有竞态：子进程偶尔 `ExceptionInInitializerError`（实测全量套件 3 轮里 1 次），表现为该用例假红 | **未修**。试过的两条路都不行：① 子进程用自己的空 base dir 直接打开原库目录 → Lealone 把该目录当成新库（`Table "T" not found`），因为库名要靠 `db_0` 解析；② 只复制库目录不带 `db_0` → 同上。可行的后续方向：先让元数据库做一次 SYNC checkpooint 再复制，或让 `BackupRestoreCheck` 支持按存储路径构造库实例 | 已记录（不是引擎缺陷，属测试基建） |
 | 24 | 测试不 hermetic：不清理 `target/test-data` 再跑会有 131 errors；跑套件会改写被跟踪的 `orm/generated/*.java` | `TestBase.java:51`、`SqlTestBase` 默认库 |
 
 ## 二半、方法论警示（验证时踩过的坑，必须记住）
@@ -75,6 +76,7 @@
 | **兄弟模块从 `/root/.m2` 解析，不用工作树里的 `target/classes`**（第 23 条） | `mvn -o -pl lealone-test test` 只重编 lealone-test，`lealone-db`/`lealone-aote` 等**加载的是已 install 的 jar**。于是"回退源码但不 install"会让用例**假通过**（实测：回退 `StandardSecondaryIndex` 后不 install，`IndexBuildingScanTest` 依然绿；install 之后才 `expected:<60> but was:<1>`） | 做红/绿对照时**必须**先 `mvn -o -q -DskipTests install`（或加 `-am`），否则得出的"原始代码也复现/也通过"结论不可信 |
 | `SqlTestBase` 的 `executeQuery(String)` 已经调过一次 `rs.next()`（第 24 条） | 再调 `rs.next()` 会跳过第一行，表现为 `expected:<1> but was:<2>` 之类的诡异断言 | 直接用当前 `rs`，或 `closeResultSet()` 后自己重开 |
 | `mvn clean` 在离线环境不可用 | 残留 `target/classes` 造成假红/假绿 | `rm -rf lealone-*/target` 代替 |
+| **多个 agent 共享 `/root/.m2`** | 别人 `install` 后，你的 `mvn -pl lealone-test test` 用的是**别人那份引擎 jar**。实测：子代理把 `.m2` 还原成未修复版后，我的全量套件立刻出现 4 个"close 没真的关闭"的失败，看着像回归，其实是被换了 jar | 跑套件前先校验 jar 状态（例如 `javap -p -cp <jar> com.lealone.db.Database | grep getUserSessionCount`），或在自己的工作树里先 `mvn -o -q -DskipTests install` |
 | 共享 `target/test-data` 不清理 | 跨用例库污染，出现 `Wrong user name or password [28000-0]` 等 131 个错误 | 每次跑套件前 `rm -rf lealone-test/target/test-data` |
 | 循环重跑同一条 SQL 会命中会话级语句/结果缓存 | 探针测不到真正执行（以为"稳定正确"） | 先 `SET QUERY_CACHE_SIZE 0` |
 
