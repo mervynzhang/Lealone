@@ -15,8 +15,6 @@ import java.util.Map;
 
 import org.junit.After;
 import org.junit.AfterClass;
-import org.junit.Assume;
-import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -47,17 +45,9 @@ public class SltGateStatementTest extends TestBase {
                     new File(TEST_BASE_DIR).getAbsolutePath());
     }
 
-    // 这个用例要在进程内起一个嵌入式库并跑 SltRunner, 会改变同一 JVM 里嵌入式引擎的状态。
-    // 实测: 它加入普通套件后, 后面的 CheckpointDurabilityTest.testBackupThenUpdate 会偶发
-    // "重启后更新丢失"(约 2/3 概率), 那是既有缺陷(docs/FIX_LOG.md 第26项), 与本用例无关,
-    // 但会让普通套件变成偶发红。所以和 SltTest 一样只在 -Pslt/-Dslt.run=true 下运行;
-    // 那个 P0 修好之后应该把它移回普通套件。
-    @Before
-    public void requireSltProfile() {
-        Assume.assumeTrue("SLT gate test only runs with -Pslt / -Dslt.run=true",
-                Boolean.getBoolean("slt.run"));
-    }
-
+    // 这个用例要在进程内起一个嵌入式库并跑 SltRunner, 用完必须关掉并删目录(见 closeSltDatabase)。
+    // 它曾经把"Database.close 被内部session静默挡掉"这个P0触发成普通套件的偶发红(FIX_LOG 第27项),
+    // 那个缺陷修好之后本用例恢复在普通套件里运行。
     @AfterClass
     public static void restoreBaseDir() {
         if (savedBaseDir == null)
@@ -71,8 +61,6 @@ public class SltGateStatementTest extends TestBase {
     // 于是整轮检查点被日志刷屏(甚至影响同一 JVM 里其它库的落盘)。
     @AfterClass
     public static void closeSltDatabase() {
-        if (!Boolean.getBoolean("slt.run")) // 用例被跳过时什么都不该做
-            return;
         String dbName = SltRunner.dbNameFor("gate_statement.test").toUpperCase();
         Database db = LealoneDatabase.getInstance().findDatabase(dbName);
         if (db != null) {
