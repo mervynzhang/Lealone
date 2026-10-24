@@ -144,7 +144,7 @@ public abstract class YieldableBase<T> implements Yieldable<T> {
             throw e;
         }
         database.checkPowerOff();
-        if (!statement.isQuery()) {
+        if (!statement.isQuery() || statement.isDML()) {
             if (s.getErrorCode() == ErrorCode.DEADLOCK_1) {
                 session.rollback();
             } else {

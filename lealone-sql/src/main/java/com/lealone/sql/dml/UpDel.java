@@ -9,11 +9,13 @@ import com.lealone.common.util.StatementBuilder;
 import com.lealone.db.DataHandler;
 import com.lealone.db.async.AsyncResultHandler;
 import com.lealone.db.lock.DbObjectLock;
+import com.lealone.db.result.Result;
 import com.lealone.db.row.Row;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.table.Table;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueNull;
+import com.lealone.sql.executor.YieldableBase;
 import com.lealone.sql.executor.YieldableLoopUpdateBase;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.evaluator.AlwaysTrueEvaluator;
@@ -73,6 +75,18 @@ public abstract class UpDel extends ManipulationStatement {
         return syncExecute(createYieldableUpdate(null));
     }
 
+    // 带RETURNING时按查询语句执行；同步入口供PL/pgSQL等同步执行的场景使用
+    @Override
+    public Result query(int maxRows) {
+        return syncExecute(createYieldableQuery(maxRows, false, null));
+    }
+
+    @Override
+    public YieldableBase<Result> createYieldableQuery(int maxRows, boolean scrollable,
+            AsyncResultHandler<Result> asyncHandler) {
+        return new YieldableReturningQuery(this, maxRows, scrollable, asyncHandler);
+    }
+
     protected void appendPlanSQL(StatementBuilder buff) {
         buff.setEnclosed(false);
         if (condition != null) {
@@ -84,6 +98,7 @@ public abstract class UpDel extends ManipulationStatement {
             limitExpr.getSQL(buff);
         }
         buff.setEnclosed(true);
+        appendReturningSQL(buff);
     }
 
     protected static abstract class YieldableUpDel extends YieldableLoopUpdateBase {

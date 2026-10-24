@@ -120,6 +120,7 @@ public class Update extends UpDel {
         }
         tableFilter.createColumnIndexes(columnSet);
         tableFilter.preparePlan(session, 1);
+        prepareReturning();
 
         if (session.isReplicationMode())
             session.setDeterministic(isDeterministic());
@@ -179,8 +180,11 @@ public class Update extends UpDel {
                 Row oldRowSnapshot = fireRow ? copyRow(oldRow) : null;
                 onPendingOperationStart();
                 table.updateRow(session, oldRow, newRow, updateColumnIndexes, true, ar -> {
-                    if (fireRow && ar.isSucceeded()) {
-                        fireAfterRow(table, oldRowSnapshot, newRow);
+                    if (ar.isSucceeded()) {
+                        if (fireRow)
+                            fireAfterRow(table, oldRowSnapshot, newRow);
+                        // 写成功之后才有返回行，UPDATE返回的是新行
+                        addReturningRow(newRow);
                     }
                     onPendingOperationComplete(ar);
                 });
