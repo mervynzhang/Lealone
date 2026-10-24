@@ -16,6 +16,7 @@
 |---|---|---|---|---|
 | 1 | 关联子查询只在最内层与外层关联时，中间层子查询结果被跨外层行复用，返回上一行的过期值（静默错数据） | `CorrelatedVisitor` 展开嵌套子查询，并把嵌套查询自己的 `TableFilter` 并入"自己的列"集合 | 新增 `CorrelatedSubqueryTest` 4 例；回退本改动后正好两条嵌套用例变红（`expected:<2> but was:<1>`），两条对照仍绿 | 已修复 |
 | 2 | 异步提交回调在事务已结束时会丢失（语句挂死），重复提交时会重复执行（客户端收到两次响应） | `undoLog == null` 时补调 `asyncCommitComplete()`；`asyncCommitComplete()` 先取走 `asyncTask` 再置空，保证恰好一次 | 新增 `AsyncCommitCallbackTest` 2 例；去掉补调 → 30s 超时"没有回调"；去掉取走置空 → `expected:<1> but was:<2>` | 已修复 |
+| 12 | 死代码：`IndexOperator.addIndexOperation(...)` 5 参重载零调用者；`BTreeStorage` 里 `thirdLastChunk != lastChunk` 恒真（`findThirdLastChunk` 取 `maxSeq-2`，与 `lastChunk` 序号必然不同） | 删除这两处；`Chunk.getOffset()` 的 >2G 溢出检查**保留**（零成本安全网，删掉才是退步） | 无新增测试（纯减法），全量套件验证 | 已修复 |
 | 11 | `CreateTable` 失败路径用 `schema.remove(..., null)`，但注释写的理由（"remove 再用同一个 lock 会回滚两次，把上一条 DDL 创建的对象也回滚掉"）与事实不符：重复回滚已由 `TransactionalDbObjects` 的幂等守卫兜住 | 保留 `null`（改回 `lock` 会把 handler 注册到已 unlock 的锁上，变成 stale handler），把注释改成真实理由 | 新增 `CreateTableFailureTest` 2 例：建表失败不能回滚掉之前创建的表；显式事务内建表后回滚要消失、事务前的表要保留 | 已修复（注释+用例） |
 | 10 | 常量折叠处的 `catch (DbException) {}` 空捕获会吞掉**所有**异常（含内部编程错误），把真缺陷降级成"不折叠"；与已回退的 `137de5658` 同型 | 新增 `DbException.isDataException`（SQLSTATE 22xxx），两处只容忍数据类错误，其余重新抛出 | 新增 `DataExceptionTest` 2 例；探针确认 `CASE WHEN TRUE THEN 1 ELSE 1/0`、`COALESCE(1,1/0)` 仍正常折叠，而 `1/0`、`CAST('x' AS INT)` 仍在运行期报 22012/22018 | 已修复 |
 | 9 | 行值 IN 的显式列表不走三值逻辑：`(1,NULL) IN ((1,2),(3,4))` 得 FALSE，标准/PostgreSQL 要求 UNKNOWN（左侧单元素列表因为被改写成 `Comparison` 反而正确，路径不一致） | `ConditionIn` 对行值改用 `Comparison.compareRowValue` 的三值逻辑；`ConditionInConstantSet` 对行值不再走 `HashSet.contains`，改为逐项三值比较；把 `compareRowValue` 提成可按 `Database` 复用的静态方法 | 新增 `PredicateLogicTest.rowValueInUsesThreeValuedLogic`（8 条断言）；回退修复后该用例变红（`expected NULL ... but was:<false>`） | 已修复 |
@@ -41,7 +42,6 @@
 | 12 | `rollbackToSavepoint` 的 `isClosed() → return` 与被回退的 `137de5658` 同类；正解是在 `YieldableBase.handleException`/`Session.commit/rollback` 加 try/finally | `AOTransaction.java:393-399` |
 | 13 | 加密文件密码错误/损坏被静默当 EOF（LOB 流也走这里 → 数据被悄悄截断） | `FileStorageInputStream.java:142-146` |
 | 14 | 去重表超过 10 万条后静默停止去重 | `QFlat.java:41` |
-| 16 | 死代码：`IndexOperator.addIndexOperation(...)` 5 参重载零调用者；`Chunk.getOffset()` 的 >2G 抛异常不可达；`BTreeStorage:396` 的 `thirdLastChunk != lastChunk` 恒真 | `IndexOperator.java:408-412`、`Chunk.java:137-147`、`BTreeStorage.java:396` |
 
 ### P2 热路径性能
 
