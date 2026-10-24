@@ -508,6 +508,15 @@ public class PlpgSqlInterpreter {
             return row;
         }
         if (count == 1) {
+            PlpgSqlVariable record = scope.findVariable(expression.trim(), false);
+            if (record != null && record.isRecord()) {
+                if (record.getRecordFieldCount() != 1)
+                    throw PlpgSqlException.raise("42804",
+                            "RETURN NEXT record has " + record.getRecordFieldCount()
+                                    + " fields but 1 column expected");
+                row[0] = convertColumnValue(0, record.getRecordField(0));
+                return row;
+            }
             Value value = sqlExecutor.evalExpression(expression, scope);
             row[0] = convertColumnValue(0, value);
             return row;
