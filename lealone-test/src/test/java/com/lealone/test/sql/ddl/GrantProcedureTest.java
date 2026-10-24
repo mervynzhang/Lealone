@@ -58,7 +58,7 @@ public class GrantProcedureTest extends SqlTestBase {
 
         // 带OUT参数的过程，只写入参或写完整参数列表都能匹配
         executeUpdate("DROP PROCEDURE IF EXISTS gpr_out");
-        executeUpdate("CREATE PROCEDURE gpr_out(IN a INT, OUT b INT) AS 'SELECT a'");
+        executeUpdate("CREATE PROCEDURE gpr_out(IN a INT, OUT b INT) AS 'SELECT ?'");
         executeUpdate("GRANT EXECUTE ON PROCEDURE gpr_out(INT) TO gpr_u1");
         executeUpdate("REVOKE EXECUTE ON PROCEDURE gpr_out(IN INT, OUT INT) FROM gpr_u1");
         assertNull(getGrantSql("PROCEDURE PUBLIC.GPR_OUT(", "GPR_U1"));

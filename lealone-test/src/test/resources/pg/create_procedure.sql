@@ -357,15 +357,15 @@ call sum(1);
 --       函数共用同一套属性子句(ALTER PROCEDURE 本轮才支持), 所以前两条建过程和 ALTER PROCEDURE
 --       按 Lealone 的实际行为断言成功;
 --       最后的 DROP PROCEDURE ptest1 去掉了, 因为后面的清理用例还要用 ptest1
-create procedure ptestx() language sql window as $$ insert into cp_test values (1, 'a') $$;
+create procedure ptestx_attr() language sql window as $$ insert into cp_test values (1, 'a') $$;
 > update count: 0
 
 -- 同名同签名的过程只能有一个, 再建一次报 90150
-create procedure ptestx() language sql strict as $$ insert into cp_test values (1, 'a') $$;
+create procedure ptestx_attr() language sql strict as $$ insert into cp_test values (1, 'a') $$;
 > exception 90150
 
 -- Lealone 的过程不支持 VARIADIC 参数: VARIADIC写在参数名位置上会被当成类型名, 报42102
-create procedure ptestx(a variadic int[], b out int) language sql
+create procedure ptestx_attr(a variadic int[], b out int) language sql
   as $$ select a[1] $$;
 > exception 42102
 

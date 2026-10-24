@@ -121,7 +121,7 @@ public class AlterProcedureTest extends SqlTestBase {
 
         // 带OUT参数的过程: 只写入参和写完整参数列表都能匹配
         executeUpdate("DROP PROCEDURE IF EXISTS apr_out");
-        executeUpdate("CREATE PROCEDURE apr_out(IN a INT, OUT b INT) AS 'SELECT a'");
+        executeUpdate("CREATE PROCEDURE apr_out(IN a INT, OUT b INT) AS 'SELECT ?'");
         executeUpdate("ALTER PROCEDURE apr_out(INT) LEAKPROOF");
         executeUpdate("ALTER PROCEDURE apr_out(IN INT, OUT INT) COST 5");
         String ddl = getCreateSql("APR_OUT");
