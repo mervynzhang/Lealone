@@ -135,11 +135,15 @@ public class Chunk {
     }
 
     public int getOffset() {
-        int size = (int) size();
-        if (size <= 0)
+        long size = size();
+        if (size <= CHUNK_HEADER_SIZE)
             return 0;
-        else
-            return size - CHUNK_HEADER_SIZE;
+        long offset = size - CHUNK_HEADER_SIZE;
+        // chunk的文件长度还包括页面位置表等，可能超过2G，不能直接强转成int
+        if (offset > Integer.MAX_VALUE)
+            throw DataUtils.newIllegalStateException(DataUtils.ERROR_WRITING_FAILED,
+                    "Chunk too large, max size: {0}, current size: {1}", Integer.MAX_VALUE, size);
+        return (int) offset;
     }
 
     private void readPagePositions() {
@@ -309,11 +313,10 @@ public class Chunk {
         writePagePositions(body);
         writeRemovedPages(body, chunkManager);
 
-        // chunk header
-        writeHeader();
-        // chunk body
+        // 先写body，最后写chunk header，如果中间崩溃，header里也不会出现指向未写完内容的root page
         long bodyPos = appendMode ? size() : CHUNK_HEADER_SIZE;
         fileStorage.writeFully(bodyPos, body.getAndFlipBuffer());
+        writeHeader();
         fileStorage.sync();
     }
 
