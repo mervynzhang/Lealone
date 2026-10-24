@@ -48,7 +48,7 @@ public class FunctionAlias extends SchemaObjectBase {
     private boolean deterministic;
     private boolean bufferResultSetToLocalTemp = true;
 
-    private FunctionAlias(Schema schema, int id, String name) {
+    FunctionAlias(Schema schema, int id, String name) {
         super(schema, id, name);
     }
 

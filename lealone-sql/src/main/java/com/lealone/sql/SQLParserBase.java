@@ -100,6 +100,7 @@ import com.lealone.sql.ddl.CreateRole;
 import com.lealone.sql.ddl.CreateSchema;
 import com.lealone.sql.ddl.CreateSequence;
 import com.lealone.sql.ddl.CreateService;
+import com.lealone.sql.ddl.CreateSqlFunction;
 import com.lealone.sql.ddl.CreateTable;
 import com.lealone.sql.ddl.CreateTrigger;
 import com.lealone.sql.ddl.CreateUser;
@@ -1364,6 +1365,8 @@ public class SQLParserBase implements SQLParser {
             ifExists = readIfExists(ifExists);
             command.setIfExists(ifExists);
             return command;
+        } else if (readIf("FUNCTION")) {
+            return parseDropSqlFunction();
         } else if (readIf("SCHEMA")) {
             return parseDropSchema();
         } else if (readIf("DOMAIN")) {
@@ -4307,6 +4310,8 @@ public class SQLParserBase implements SQLParser {
             return parseCreateFunctionAlias(force);
         } else if (readIf("PROCEDURE")) {
             return parseCreateProcedure();
+        } else if (readIf("FUNCTION")) {
+            return parseCreateSqlFunction(orReplace);
         } else if (readIf("SEQUENCE")) {
             return parseCreateSequence();
         } else if (readIf("USER")) {
@@ -5104,6 +5109,108 @@ public class SQLParserBase implements SQLParser {
         } else {
             read("FOR");
             command.setJavaClassMethod(readStringOrIdentifier());
+        }
+        return command;
+    }
+
+    // PostgreSQL风格的CREATE FUNCTION，函数体是一条SQL查询语句
+    protected StatementBase parseCreateSqlFunction(boolean orReplace) {
+        boolean ifNotExists = readIfNotExists();
+        String functionName = readIdentifierWithSchema();
+        CreateSqlFunction command = new CreateSqlFunction(session, getSchema());
+        command.setFunctionName(functionName);
+        command.setIfNotExists(ifNotExists);
+        command.setOrReplace(orReplace);
+
+        read("(");
+        ArrayList<String> parameterNames = Utils.newSmallArrayList();
+        ArrayList<String> parameterTypes = Utils.newSmallArrayList();
+        if (!readIf(")")) {
+            do {
+                String parameterName = readColumnIdentifier();
+                if (isDuplicateParameter(parameterNames, parameterName)) {
+                    throw DbException.get(ErrorCode.SYNTAX_ERROR_1,
+                            "duplicate parameter name: " + parameterName);
+                }
+                Column column = parseColumnWithType(null);
+                parameterNames.add(parameterName);
+                parameterTypes.add(column.getOriginalSQL());
+            } while (readIf(","));
+            read(")");
+        }
+        int count = parameterNames.size();
+        String[] names = new String[count];
+        String[] types = new String[count];
+        parameterNames.toArray(names);
+        parameterTypes.toArray(types);
+        command.setParameters(names, types);
+
+        read("RETURNS");
+        if (readIf("SETOF")) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "RETURNS SETOF");
+        } else if (readIf("TABLE")) {
+            throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1, "RETURNS TABLE");
+        }
+        Column returnColumn = parseColumnWithType(null);
+        command.setReturnType(returnColumn.getOriginalSQL(), returnColumn.getType());
+
+        // LANGUAGE子句和易变性关键字都是可选的，且顺序任意
+        boolean deterministic = false;
+        while (true) {
+            if (readIf("LANGUAGE")) {
+                String language = readStringOrIdentifier();
+                if (!"SQL".equalsIgnoreCase(language)) {
+                    throw DbException.get(ErrorCode.FEATURE_NOT_SUPPORTED_1,
+                            "LANGUAGE " + language);
+                }
+            } else if (readIf("IMMUTABLE") || readIf("STABLE")) {
+                deterministic = true;
+            } else if (readIf("VOLATILE")) {
+                deterministic = false;
+            } else {
+                break;
+            }
+        }
+        read("AS");
+        String body = readString();
+        command.setDeterministic(deterministic);
+        ArrayList<Integer> bodyParameterIndexes = Utils.newSmallArrayList();
+        String bodySql = SqlFunctionBodyParser.parseBody(session, body, parameterNames,
+                bodyParameterIndexes);
+        int[] indexes = new int[bodyParameterIndexes.size()];
+        for (int i = 0; i < indexes.length; i++) {
+            indexes[i] = bodyParameterIndexes.get(i);
+        }
+        command.setBody(body, bodySql, indexes);
+        return command;
+    }
+
+    private static boolean isDuplicateParameter(ArrayList<String> parameterNames,
+            String parameterName) {
+        for (String name : parameterNames) {
+            if (name.equalsIgnoreCase(parameterName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    protected StatementBase parseDropSqlFunction() {
+        boolean ifExists = readIfExists(false);
+        String functionName = readIdentifierWithSchema();
+        DropFunctionAlias command = new DropFunctionAlias(session, getSchema());
+        command.setAliasName(functionName);
+        ifExists = readIfExists(ifExists);
+        command.setIfExists(ifExists);
+        // 不支持按参数类型重载，参数类型列表读出来直接忽略
+        if (readIf("(")) {
+            while (currentTokenType != CLOSE) {
+                if (currentTokenType == END) {
+                    throw getSyntaxError();
+                }
+                read();
+            }
+            read();
         }
         return command;
     }
