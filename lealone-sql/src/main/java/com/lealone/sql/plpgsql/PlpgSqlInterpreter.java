@@ -41,6 +41,7 @@ import com.lealone.sql.plpgsql.PlpgSqlAst.Raise;
 import com.lealone.sql.plpgsql.PlpgSqlAst.Return;
 import com.lealone.sql.plpgsql.PlpgSqlAst.SqlExec;
 import com.lealone.sql.plpgsql.PlpgSqlAst.While;
+import com.lealone.transaction.Transaction;
 
 /**
  * PL/pgSQL语法树的解释执行器。
@@ -280,6 +281,9 @@ public class PlpgSqlInterpreter {
         PlpgSqlScope blockScope = new PlpgSqlScope(scope);
         blockScope.setLabel(block.label);
         scope = blockScope;
+        // 带EXCEPTION段的块对应PostgreSQL的隐式子事务，进入块时记下事务的保存点，
+        // 没有EXCEPTION段的块不需要保存点，避免每个块都有额外开销
+        int savepointId = block.handlers.isEmpty() ? -1 : getSavepointId();
         try {
             declareVariables(block);
             try {
@@ -294,10 +298,10 @@ public class PlpgSqlInterpreter {
             } catch (ReturnSignal signal) {
                 throw signal;
             } catch (PlpgSqlException e) {
-                if (!handleException(block, e))
+                if (!handleException(block, savepointId, e))
                     throw e;
             } catch (DbException e) {
-                if (!handleException(block, e))
+                if (!handleException(block, savepointId, e))
                     throw e;
             }
         } finally {
@@ -356,13 +360,33 @@ public class PlpgSqlInterpreter {
         }
     }
 
-    // 注意：这里没有实现PostgreSQL的隐式子事务回滚，handler执行前不会撤销块的DML修改
-    private boolean handleException(Block block, RuntimeException e) {
+    // 事务当前的保存点id，没有事务时返回-1
+    private int getSavepointId() {
+        Transaction transaction = session.getTransaction();
+        if (transaction == null)
+            return -1;
+        return transaction.getSavepointId();
+    }
+
+    // 执行handler之前先回滚到块入口的保存点，撤销块内的DML修改，对应PostgreSQL的隐式子事务语义
+    private void rollbackToSavepoint(int savepointId) {
+        if (savepointId < 0)
+            return;
+        Transaction transaction = session.getTransaction();
+        // 保存点之后没有新的修改就不用回滚，同时也避免undoLog还没创建时的空指针
+        if (transaction == null || transaction.getSavepointId() <= savepointId)
+            return;
+        transaction.rollbackToSavepoint(savepointId);
+    }
+
+    private boolean handleException(Block block, int savepointId, RuntimeException e) {
         if (block.handlers.isEmpty())
             return false;
         String sqlState = PlpgSqlCondition.getSqlState(e);
         for (Handler handler : block.handlers) {
             if (PlpgSqlCondition.matches(handler.conditions, sqlState)) {
+                // handler捕获异常之前，块内的修改要全部回滚
+                rollbackToSavepoint(savepointId);
                 RuntimeException oldException = currentException;
                 currentException = e;
                 try {
