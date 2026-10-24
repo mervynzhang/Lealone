@@ -28,12 +28,12 @@ public class FunctionTableTest extends DbObjectTestBase {
         assertEquals(2, getInt(rs, 1));
         rs.close();
 
-        try {
-            executeQuery("select * from UPPER('abc')");
-            fail();
-        } catch (Exception e) {
-            assertException(e, ErrorCode.FUNCTION_MUST_RETURN_RESULT_SET_1);
-        }
+        // PostgreSQL里标量函数也能当表函数用，返回一行一列，列名是函数名
+        rs = executeQuery("select * from UPPER('abc')");
+        assertTrue(rs.next());
+        assertEquals("ABC", rs.currentRow()[0].getString());
+        assertTrue(!rs.next());
+        rs.close();
 
         rs = executeQuery("select * from TABLE(ID INT=(1, 2), NAME VARCHAR=(UPPER('Hello'), 'World'))");
         assertTrue(rs.next());
