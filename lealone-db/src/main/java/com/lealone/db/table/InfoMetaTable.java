@@ -7,6 +7,7 @@ package com.lealone.db.table;
 
 import java.io.Reader;
 import java.sql.DatabaseMetaData;
+import java.sql.Types;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.text.Collator;
@@ -891,7 +892,7 @@ public class InfoMetaTable extends MetaTable {
                             // JAVA_METHOD
                             alias.getJavaMethodName(),
                             // DATA_TYPE
-                            "" + DataType.convertTypeToSQLType(method.getDataType()),
+                            getMetaSqlType(method.getDataType()),
                             // TYPE_NAME
                             getMetaTypeName(method.getDataType()),
                             // COLUMN_COUNT INT
@@ -1550,6 +1551,13 @@ public class InfoMetaTable extends MetaTable {
         if (type == Value.UNKNOWN)
             return "UNKNOWN";
         return DataType.getDataType(type).name;
+    }
+
+    // DATA_TYPE列同理, 没有对应的SQL类型时按Types.OTHER输出
+    private static String getMetaSqlType(int type) {
+        if (type == Value.UNKNOWN)
+            return "" + Types.OTHER;
+        return "" + DataType.convertTypeToSQLType(type);
     }
 
     private void addFunctionParameters(ArrayList<Row> rows, String catalog, SqlFunction function) {
