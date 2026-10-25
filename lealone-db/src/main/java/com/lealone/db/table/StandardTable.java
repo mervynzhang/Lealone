@@ -515,10 +515,23 @@ public class StandardTable extends Table {
         AtomicInteger count = new AtomicInteger(size);
         AtomicBoolean isFailed = new AtomicBoolean();
         Value[] oldColumns = row.getColumns(); // 会改变，所以提前保留旧的
+        if (oldColumns == null) {
+            // 有的计划路径只带主键过来(行里的列值为null, 比如按主键删除时只读了主键)。
+            // 删除要按索引列算key来删二级索引项, 没有列值会直接空指针; 这里补读一次完整行。
+            Row fullRow = primaryIndex.getRow(session, row.getKey(), null);
+            if (fullRow == null) {
+                // 主表行已经不在了(重复删除, 或者已经被别的事务删掉): 没有旧列值就算不出索引key。
+                // 这时再往下走只会在异步索引操作里抛空指针, 直接结束; 残留的孤儿索引项
+                // 会被扫描时的"行是否还匹配这条索引项"校验过滤掉, 不影响查询结果。
+                return;
+            }
+            oldColumns = fullRow.getColumns();
+            row = fullRow;
+        }
 
         IndexOperation io = null;
-        if (!indexesAsync.isEmpty()) {
-            io = IndexOperator.createRIO(row.getKey(), row.getColumns());
+        if (!indexesAsync.isEmpty() && oldColumns != null) {
+            io = IndexOperator.createRIO(row.getKey(), oldColumns);
             io.setTransaction(session.getTransaction());
         }
 
