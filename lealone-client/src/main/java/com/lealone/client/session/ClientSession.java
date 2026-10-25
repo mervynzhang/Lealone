@@ -7,6 +7,7 @@ package com.lealone.client.session;
 
 import java.net.InetSocketAddress;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import com.lealone.client.ClientScheduler;
 import com.lealone.client.command.ClientPreparedSQLCommand;
@@ -229,6 +230,23 @@ public class ClientSession extends SessionBase implements LobLocalStorage.LobRea
         ac.get();
     }
 
+    // 等待调度器执行任务的超时。这里**必须有界**：实测偶发情况下客户端调度线程全都停在
+    // NioEventLoop.select 上、任务队列不推进，而无超时的 latch.await() 会让调用方永久阻塞 ——
+    // 关连接时就会把整个测试套件挂死(每次都要等满 300 秒超时才报错，且当时没有任何线程栈可看)。
+    private static final long SCHEDULER_TASK_TIMEOUT_MS = 10_000;
+
+    /**
+     * 等待调度器完成任务，超时抛明确异常。绝不允许无限等待：调用方(比如关连接)宁可失败，
+     * 也不能把线程永久挂住。
+     */
+    public static void awaitOrThrow(CountDownLatch latch, long timeoutMs, String operation)
+            throws InterruptedException {
+        if (latch.await(timeoutMs, TimeUnit.MILLISECONDS))
+            return;
+        throw DbException.get(ErrorCode.GENERAL_ERROR_1, "Timeout " + timeoutMs
+                + " ms waiting for session scheduler to run: " + operation);
+    }
+
     public Trace getTrace() {
         return trace;
     }
@@ -433,7 +451,7 @@ public class ClientSession extends SessionBase implements LobLocalStorage.LobRea
                             latch.countDown();
                         });
                         getScheduler().wakeUp();
-                        latch.await();
+                        awaitOrThrow(latch, SCHEDULER_TASK_TIMEOUT_MS, "switch connection to bio mode");
                     }
                     task.run();
                 }
