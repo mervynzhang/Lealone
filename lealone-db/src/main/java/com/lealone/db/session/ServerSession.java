@@ -757,6 +757,10 @@ public class ServerSession extends SessionBase implements InternalSession {
     public void rollback() {
         if (transaction == null)
             return;
+        // 事务里改过数据再回滚时, 会话的语句缓存里可能还留着回滚前的语句/游标状态:
+        // 实测回滚后"另一个会话"能看到数据已恢复, 而本会话复用的缓存语句仍然读到旧结果
+        // —— 静默错数据。有改动就清一次语句缓存; 没改动不清, 避免影响自动提交下的性能。
+        boolean hadChanges = transaction.getSavepointId() > 0;
         commitOrRollbackNestedConnections(false);
         checkCommitRollback();
         transaction.rollback();
@@ -783,6 +787,8 @@ public class ServerSession extends SessionBase implements InternalSession {
             db.copy();
             containsDDL = false;
         }
+        if (hadChanges)
+            clearQueryCache();
         clean();
         executingStatements = 0; // 回滚时置0，否则出现锁超时异常时会导致严重错误
         endYieldableCommand();
