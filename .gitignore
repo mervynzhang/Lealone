@@ -8,3 +8,7 @@ target
 .idea
 .dbeaver
 dependency-reduced-pom.xml
+
+# 测试/调试产生的运行时目录
+trace.db/
+lealone_data/
