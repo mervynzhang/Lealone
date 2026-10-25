@@ -69,3 +69,11 @@ file	random/expr/slt_good_31.test	0	0
 file	random/expr/slt_good_33.test	0	0
 file	random/expr/slt_good_35.test	0	0
 file	random/expr/slt_good_36.test	0	0
+file	random/aggregates/slt_good_12.test	0	0
+file	random/aggregates/slt_good_125.test	0	0
+file	random/aggregates/slt_good_126.test	0	0
+file	random/aggregates/slt_good_127.test	0	0
+file	random/aggregates/slt_good_128.test	0	0
+file	random/aggregates/slt_good_129.test	0	0
+file	random/expr/slt_good_39.test	0	0
+file	random/expr/slt_good_40.test	0	0
