@@ -55,6 +55,11 @@
                     <excludes>
                         <exclude>${slt.test.exclude}</exclude>
                     </excludes>
+                    <systemPropertyVariables>
+                        <!-- JDBC客户端的trace文件默认写到工作目录下的 trace.db/, 会把模块目录弄脏;
+                             指到 target/test-data 下(测试启动时会被自动清理), 保证源码树干净 -->
+                        <client.trace.directory>${project.build.directory}/test-data/trace.db</client.trace.directory>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>
