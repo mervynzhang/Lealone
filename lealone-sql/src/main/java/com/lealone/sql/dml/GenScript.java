@@ -56,6 +56,11 @@ import com.lealone.db.table.Column;
 import com.lealone.db.table.Table;
 import com.lealone.db.table.TableType;
 import com.lealone.db.value.Value;
+import com.lealone.common.logging.Logger;
+import com.lealone.common.logging.LoggerFactory;
+import com.lealone.db.value.ValueLob;
+import com.lealone.db.DataHandler;
+import com.lealone.db.table.Table;
 import com.lealone.db.value.ValueString;
 import com.lealone.sql.LealoneSQLParser;
 import com.lealone.sql.SQLStatement;
@@ -71,6 +76,8 @@ import com.lealone.sql.optimizer.PlanItem;
 // 此类用于生成SQL脚本，对应的SQL语句是SCRIPT，不是GEN SCRIPT
 // 类名叫GenScript只是为了对应RunScript
 public class GenScript extends ScriptBase {
+
+    private static final Logger logger = LoggerFactory.getLogger(GenScript.class);
 
     private Charset charset = Constants.UTF8;
     private Set<String> schemaNames;
@@ -425,6 +432,7 @@ public class GenScript extends ScriptBase {
                     buff.append(", ");
                 }
                 Value v = row.getValue(j);
+                ensureLobHandler(table, v, row.getKey());
                 if (v.getPrecision() > lobBlockSize) {
                     int id;
                     if (v.getType() == Value.CLOB) {
@@ -454,6 +462,25 @@ public class GenScript extends ScriptBase {
             add(buff.toString(), true);
         }
         return count;
+    }
+
+    /**
+     * 页面里反序列化出来的LOB(DataBuffer.readValue)默认不带data handler, 只有写入路径
+     * (StandardPrimaryIndex.onAddSucceeded)会把它补上; 扫描路径(这里走的是索引游标)没有补,
+     * 于是导出超过 IO_BUFFER_SIZE 的LOB时要读内容就会报 "LOB has no data handler"(以前是裸空指针)。
+     * 导出时按表/库的data handler补齐, 并把这件事记一条日志 —— 这只说明上游某条读路径漏了补,
+     * 记下来便于继续定位。
+     */
+    private void ensureLobHandler(Table table, Value v, long rowKey) {
+        if (!(v instanceof ValueLob))
+            return;
+        ValueLob lob = (ValueLob) v;
+        if (!lob.isStored() || lob.hasHandler())
+            return;
+        DataHandler dh = lob.isUseTableLobStorage() ? table.getDataHandler() : session.getDataHandler();
+        lob.setHandler(dh);
+        logger.info("LOB without data handler, patched while exporting: table=" + table.getName()
+                + " rowKey=" + rowKey + " lobId=" + lob.getLobId() + " tableId=" + table.getId());
     }
 
     private int writeLobStream(Value v) throws IOException {
