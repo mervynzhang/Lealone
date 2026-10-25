@@ -72,6 +72,7 @@ SLT 门禁 45 个文件 / 376,388 条查询 PASS。逐提交速查表见 [FIX_IN
 | 46 | `1da3d49db` | 客户端用例偶发挂死时只有超时提示没有线程栈无法定位的问题 | 新增 DiagnosticTimeoutTest —— 用1秒超时包住一个睡5秒的语句, 断言异常照常抛出且仍是 |
 | 47 | `c2ab81d45` | 关连接时等待调度器执行任务没有超时会永久阻塞的问题 | 新增 ClientSessionAwaitTest —— 已 countDown 的 latch 必须立刻返回; 永不 countDown 的 latch |
 | 48 | `135d93201` | 事务内查询之后ROLLBACK在本会话里看不到撤销结果的问题 | RollbackAfterQueryTest(去掉 @Ignore 后的原复现用例)在两个连接下断言"回滚后必须 2 行"。 |
+| 49 | —— | 把 SLT 门禁精选集从 45 个文件扩到 53 个文件 | 本批扫描 random/expr 51-60 与 random/aggregates 29-34 共 16 个语料文件, 其中 8 个实测 0 失败(aggregates 12/125-129、expr 39/40), 加入精选集后门禁覆盖 37.6 万 → 44.2 万条; 门禁 TOTAL 442461 / +0 PASS |
 
 ## 二、方法论警示（验证时踩过的坑，必须记住）
 

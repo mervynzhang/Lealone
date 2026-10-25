@@ -3,7 +3,7 @@
 # Paths are relative to -Dslt.dir (default /tmp/sqllogictest/test), i.e. the "test" directory of a
 # gregrahn/sqllogictest checkout. The suite itself is NOT committed to this repository.
 #
-# Size: 45 files, ~377k queries, roughly 18 s single threaded on a laptop-class machine.
+# Size: 53 files, ~440k queries, roughly 20 s single threaded on a laptop-class machine.
 # The full 137 file set (select1-5, evidence/*, random/expr/*) is documented in README.md; this
 # list is the subset that is fast enough and quiet enough to run on every change.
 #
@@ -73,3 +73,11 @@ random/expr/slt_good_31.test
 random/expr/slt_good_33.test
 random/expr/slt_good_35.test
 random/expr/slt_good_36.test
+random/aggregates/slt_good_12.test
+random/aggregates/slt_good_125.test
+random/aggregates/slt_good_126.test
+random/aggregates/slt_good_127.test
+random/aggregates/slt_good_128.test
+random/aggregates/slt_good_129.test
+random/expr/slt_good_39.test
+random/expr/slt_good_40.test
