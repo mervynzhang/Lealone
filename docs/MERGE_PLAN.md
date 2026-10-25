@@ -143,6 +143,27 @@ git revert --no-edit HEAD     # 恢复
 | 台账/汇总/手册这三份文档的提交 | 属于审阅材料，按需合 |
 | `f41a65626` + `a7a85a6af`（`rowsort` 改错与回退） | 净效果为零，两者都**不要合** |
 
+## 八点五、端到端验证（干净 clone，第 37 轮）
+
+上面的推荐做法在**干净 clone** 上完整跑通了一遍（不是在工作区里"看起来能跑"）：
+
+```bash
+git clone <repo> /tmp/e2e && cd /tmp/e2e
+git checkout -b e2e-merge <集成分支>          # 演练时用 review/mervyn-consolidated
+git merge --no-ff origin/review/fixes-1       # 或 merge review/fixes-1
+mvn -B -o -q -DskipTests install
+# 用这个 clone 的产物起测试服务(核对监听 9210 的 PID 指向该 clone), 然后:
+mvn -B -o -q -pl lealone-test test                                   # 381 项
+mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogictest/test
+```
+
+| 步骤 | 结果 |
+|---|---|
+| merge | **0 冲突** |
+| 构建 | 成功 |
+| 全量套件(连跑 2 轮) | **381 / 381 通过，0 失败，10 skipped**（两轮一致） |
+| SLT 门禁 | **376,388 条查询 / 14 失败(2 条 allowlist) / 12 已登记 / +0 → PASS** |
+
 ## 九、演练结果：为什么不做逐条 cherry-pick
 
 实测（在 `review/mervyn-consolidated` 上按严重度分组逐条 cherry-pick）：
