@@ -328,8 +328,14 @@ public class Column {
 
     private void updateSequenceIfRequired(ServerSession session, Value value) {
         if (sequence != null) {
-            if (sequence.isInvalid())
-                sequence = sequence.getNewSequence(session);
+            if (sequence.isInvalid()) {
+                // 同 SequenceValue.getValue: 序列已经不在 schema 里时要报"序列不存在",
+                // 不能把 null 赋回去再用它调用 tryLock —— 那会变成裸空指针。
+                Sequence newSequence = sequence.getNewSequence(session);
+                if (newSequence == null)
+                    throw DbException.get(ErrorCode.SEQUENCE_NOT_FOUND_1, sequence.getName());
+                sequence = newSequence;
+            }
             // 更新sequence前需要加锁，否则sequence的当前值有可能不是递增的
             sequence.tryLock(session);
             long current = sequence.getCurrentValue(session);
