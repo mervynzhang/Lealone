@@ -7,8 +7,8 @@
 | 项 | 值 |
 |---|---|
 | 分支 | `review/fixes-1`（基线 `review/mervyn-consolidated`） |
-| 提交 | **72 个**：48 个修复 + 24 个记录/回退/文档 |
-| 全量套件 | **381 项，连续多轮全绿**（10 skipped） |
+| 提交 | **81 个**：50 个修复 + 31 个记录/回退/文档 |
+| 全量套件 | **382 项，连续多轮全绿**（10 skipped） |
 | SLT 回归门禁 | **53 个文件 / 442,461 条查询 / 14 秒，PASS**（起点 27 文件 / 20.8 万条） |
 | 未修复缺陷 | **0 个**（"不改"的项见第六节，都有实测数据） |
 | master | **未改动** |
@@ -23,7 +23,7 @@
 4. 全量与门禁：
    ```bash
    mvn -B -o -q -DskipTests install
-   mvn -B -o -q -pl lealone-test test                                    # 381 项
+   mvn -B -o -q -pl lealone-test test                                    # 382 项
    mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest \
        -Dslt.dir=/tmp/sqllogictest/test                                  # 44.2 万条查询
    ```

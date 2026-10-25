@@ -1,17 +1,17 @@
 # 合入计划与验证手册
 
 > **结论先行**：请**整体合入 `review/fixes-1`**——一条命令、零冲突，且合并后实测全绿。
-> 下面的 4 个批次是**审阅分组**（决定先看什么、哪些必须一起看），不是逐批 cherry-pick 的配方；
+> 下面的 4 个批次（共 50 项，其中 1 项是"改错已回退"的对照）是**审阅分组**（决定先看什么、哪些必须一起看），不是逐批 cherry-pick 的配方；
 > 逐条 cherry-pick **不可行**，实测数据与原因见文末「演练结果」。
 
 ## 一、推荐合入方式（已实测）
 
 ```bash
 git checkout master                # 本仓库 master 我们一个字都没改
-git merge --no-ff review/fixes-1 -m "合入复审修复批次(48 个修复)"
+git merge --no-ff review/fixes-1 -m "合入复审修复批次(50 个修复)"
 mvn -B -o -q -DskipTests install
 # 起测试服务(9210, 服务端 CWD 在仓库外, classpath 带 lealone-test/target/test-classes), 核对监听 PID 后:
-mvn -B -o -q -pl lealone-test test                                                        # 381 项
+mvn -B -o -q -pl lealone-test test                                                        # 382 项
 mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogictest/test  # 44.2 万条
 ```
 
@@ -21,7 +21,7 @@ mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogict
 |---|---|
 | 合并冲突 | **0 个** |
 | 构建 | `mvn -DskipTests install` 成功 |
-| 全量套件 | **381 项 / 0 失败 / 10 skipped** |
+| 全量套件 | **382 项 / 0 失败 / 10 skipped** |
 | SLT 门禁 | **442,461 条查询 / 14 失败(2 条 allowlist) / 12 已登记 / +0 → PASS** |
 
 环境前提（测试代码写死的，不是本次改动引入的）：
@@ -32,7 +32,7 @@ mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogict
 * 反向验证：**去掉修复 → 对应用例变红**，这是每条修复的自证方式（命令见第五节）。
 
 
-## 二、B1、P0 静默错数据 / 打崩 / 丢数据（19 项）
+## 二、B1、P0 静默错数据 / 打崩 / 丢数据（20 项）
 
 | 提交 | 解决什么问题 |
 |---|---|
@@ -55,6 +55,7 @@ mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogict
 | `ffd80e6fd` | 修复OCTET_LENGTH/BIT_LENGTH对二进制类型算错字节数并物化整个LOB的问题 |
 | `26ade674d` | 修复事务里执行TRUNCATE会让会话进入不一致状态并静默丢数据的问题 |
 | `135d93201` | 修复事务内查询之后ROLLBACK在本会话里看不到撤销结果的问题 |
+| `9208ed953` | 修复序列失效且找不回来时抛裸空指针而不是"序列不存在"的问题 |
 
 ## 三、B2、P1 过度防御 / 静默吞错 / 健壮性（11 项）
 
@@ -79,7 +80,7 @@ mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogict
 | `d18c73dc3` | 修复全量备份把整个库读两遍的问题 |
 | `8135c4023` | 修复覆盖索引查询每返回一行读两次主表的问题 |
 
-## 四、B4、测试基建 / SLT 门禁（16 项）
+## 四、B4、测试基建 / SLT 门禁（16 项修复 + 1 组对照）
 
 | 提交 | 解决什么问题 |
 |---|---|
@@ -99,6 +100,8 @@ mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogict
 | `1da3d49db` | 修复客户端用例偶发挂死时只有超时提示没有线程栈无法定位的问题 |
 | `c2ab81d45` | 修复关连接时等待调度器执行任务没有超时会永久阻塞的问题 |
 | `071c1de76` | 补大表二级索引扫描的正确性护栏并记录一项未采纳的内存优化 |
+| `63c4c8eae` | 把SLT门禁精选集从45个文件扩到53个文件 |
+| `f41a65626`+`a7a85a6af` | （`rowsort` 改错与回退，净效果为零，**不要合**） |
 ## 五、各组的重点验证用例（对照跑，快）
 
 本分支新增 29 个用例，都是「带修复绿、去掉修复红」：
@@ -143,16 +146,17 @@ git revert --no-edit HEAD     # 恢复
 | 台账/汇总/手册这三份文档的提交 | 属于审阅材料，按需合 |
 | `f41a65626` + `a7a85a6af`（`rowsort` 改错与回退） | 净效果为零，两者都**不要合** |
 
-## 八点四、最终验证基线（第 38 轮）
+## 八点四、最终验证基线（第 40 轮，交付时口径）
 
 | 项 | 数值 |
 |---|---|
-| 分支 / HEAD | `review/fixes-1` @ `7d9d5d322`（本轮文档提交前） |
-| 提交数 | 76 个（48 修复 + 28 记录/文档） |
-| 全量套件 | **381 项 / 0 失败 / 10 skipped**（连续多轮一致） |
-| SLT 门禁 | **53 个文件 / 442,461 条查询 / 14 失败(2 条 allowlist) / 12 已登记 / +0 PASS** |
+| 分支 / HEAD | `review/fixes-1` @ `73acce0d0` |
+| 提交数 | **81 个**（50 修复 + 31 记录/文档） |
+| 全量套件 | **382 项 / 0 失败 / 10 skipped**（连续多轮一致） |
+| SLT 门禁 | **53 个文件 / 442,461 条查询 / 14 失败(2 条 allowlist) / 12 已登记 / +0 PASS**（14 秒） |
 | 未修复缺陷 | **0**（判定不改的 6 项有实测数据，见汇总第六节） |
-| 台账 | 48 行、编号 1..48 连续、每行带提交号（本轮重建） |
+| 台账 | 50 行、编号 1..50 连续、每行带提交号 |
+| 新增用例 | **30 个测试类**（其中 42 条修复带独立用例，其余 8 条靠已有用例/日志/门禁自证） |
 
 ## 八点五、端到端验证（干净 clone，第 37 轮）
 
@@ -164,7 +168,7 @@ git checkout -b e2e-merge <集成分支>          # 演练时用 review/mervyn-c
 git merge --no-ff origin/review/fixes-1       # 或 merge review/fixes-1
 mvn -B -o -q -DskipTests install
 # 用这个 clone 的产物起测试服务(核对监听 9210 的 PID 指向该 clone), 然后:
-mvn -B -o -q -pl lealone-test test                                   # 381 项
+mvn -B -o -q -pl lealone-test test                                   # 382 项
 mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogictest/test
 ```
 
@@ -184,7 +188,7 @@ mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogict
 | 只把 B1（19 个 P0 提交）cherry-pick 到基线上 | **2 成功 / 17 冲突** |
 | 先补台账骨架再 cherry-pick B4（16 个） | **0 成功 / 16 冲突** |
 | `git cherry-pick -n` 后丢弃文档改动 | 仍 **17 个冲突**（`-n` 在冲突时就不会继续） |
-| **整体 `git merge --no-ff`** | **0 冲突，构建通过，381 项全绿，门禁 PASS** |
+| **整体 `git merge --no-ff`** | **0 冲突，构建通过，382 项全绿，门禁 PASS** |
 
 冲突有两个结构性原因：
 
