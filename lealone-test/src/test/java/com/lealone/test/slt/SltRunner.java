@@ -88,6 +88,9 @@ public final class SltRunner {
         public String kind; // query | label | statement
         public String subtype; // exception | value | row_count | hash_mismatch | column_count | ...
         public String sql;
+        // 用于生成失败签名的完整SQL(不截断): 超长语句只截断前500字符时,
+        // 两条只有末尾不同的失败会算出同一个签名, 门禁就会把新增失败当成已登记而放行(假绿)
+        public String sqlFull;
         public String expected;
         public String actual;
         public String detail;
@@ -100,13 +103,35 @@ public final class SltRunner {
          */
         public boolean sqlHasAll;
 
+        /**
+         * 稳定的失败标识: 只由 subtype + SQL 决定, 不含 detail/行号。
+         * 用于把 baseline 从"每文件失败个数"升级成"失败集合", 这样同一文件里
+         * "修好一条、又坏掉另一条"也能被发现(只比计数时二者相抵, 门禁会假绿)。
+         */
+        public String key() {
+            String text = subtype + "\t" + (sqlFull != null ? sqlFull : sql);
+            try {
+                java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+                byte[] d = md.digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                StringBuilder sb = new StringBuilder(16);
+                for (int i = 0; i < 8; i++)
+                    sb.append(String.format("%02x", d[i]));
+                return sb.toString();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
         /** Text the allowlist regular expressions are matched against. */
         public String signature() {
             return subtype + "\t" + sql + "\t" + detail + (sqlHasAll ? "\tALL" : "");
         }
 
         public boolean gated() {
-            return !"statement".equals(kind);
+            // statement 失败必须同样计入回归门禁: 旧实现把 kind=="statement" 排除在外,
+            // 结果 SLT 脚本里的 DDL/DML(建索引、建表、插入)坏掉了门禁依然是 PASS,
+            // 只有 query 的失败才会计数 —— 这等于给"有第三方回归保护"一个假的保证。
+            return true;
         }
     }
 
@@ -121,6 +146,13 @@ public final class SltRunner {
         public long ms;
         public boolean timeout;
         public String setupError = "";
+        // baseline(签名集合)相关: 未允许失败的key集合, 以及相对baseline新增/消失的key
+        public final java.util.List<String> unexpectedKeys = new ArrayList<>();
+        public final java.util.Set<String> baselineKeys = new java.util.TreeSet<>();
+        public final java.util.Set<String> newKeys = new java.util.TreeSet<>();
+        public final java.util.Set<String> staleKeys = new java.util.TreeSet<>();
+        /** True when the baseline entry for this file only has a count (old format). */
+        public boolean baselineByCountOnly;
         public final Map<String, Integer> skippedBy = new TreeMap<>();
         public final List<Failure> failures = new ArrayList<>();
 
@@ -568,6 +600,7 @@ public final class SltRunner {
                             f.subtype = "expected_error_got_ok";
                             f.line = r.line;
                             f.sql = clip(r.sql, 500);
+                            f.sqlFull = r.sql;
                             f.expected = "error";
                             f.actual = "ok";
                             f.detail = "";
@@ -585,6 +618,7 @@ public final class SltRunner {
                             f.subtype = "stmt_error";
                             f.line = r.line;
                             f.sql = clip(r.sql, 500);
+                            f.sqlFull = r.sql;
                             f.expected = "ok";
                             f.actual = "error";
                             f.detail = clip(ex == null ? "" : ex.getClass().getSimpleName() + ": "
@@ -642,6 +676,7 @@ public final class SltRunner {
                                     lf.subtype = "label_mismatch";
                                     lf.line = r.line;
                                     lf.sql = clip(r.sql, 500);
+                                    lf.sqlFull = r.sql;
                                     lf.expected = "hash " + prev;
                                     lf.actual = "hash " + hash;
                                     lf.detail = "label " + r.label + " sees different results";
@@ -743,6 +778,7 @@ public final class SltRunner {
         f.subtype = subtype;
         f.line = r.line;
         f.sql = clip(r.sql, 500);
+                            f.sqlFull = r.sql;
         f.expected = expected;
         f.actual = actual;
         f.detail = detail;
@@ -953,7 +989,7 @@ public final class SltRunner {
                     + r.gatedFail + " fail, " + r.ms + "ms" + (r.timeout ? " TIMEOUT" : ""));
         }
         List<SltBaseline.Rule> rules = new ArrayList<>();
-        Map<String, Integer> baseline = new LinkedHashMap<>();
+        SltBaseline.Baseline baseline = new SltBaseline.Baseline();
         if (a.containsKey("allowlist") && Files.isRegularFile(Paths.get(a.get("allowlist"))))
             rules = SltBaseline.loadAllowlist(Paths.get(a.get("allowlist")));
         if (a.containsKey("baseline") && Files.isRegularFile(Paths.get(a.get("baseline"))))
