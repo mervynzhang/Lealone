@@ -73,7 +73,7 @@ SLT 门禁 53 个文件 / 442,461 条查询 PASS。逐提交速查表见 [FIX_IN
 | 47 | `c2ab81d45` | 关连接时等待调度器执行任务没有超时会永久阻塞的问题 | 新增 ClientSessionAwaitTest —— 已 countDown 的 latch 必须立刻返回; 永不 countDown 的 latch |
 | 48 | `135d93201` | 事务内查询之后ROLLBACK在本会话里看不到撤销结果的问题 | RollbackAfterQueryTest(去掉 @Ignore 后的原复现用例)在两个连接下断言"回滚后必须 2 行"。 |
 | 49 | `63c4c8eae` | 把 SLT 门禁精选集从 45 个文件扩到 53 个文件 | 本批扫描 random/expr 51-60 与 random/aggregates 29-34 共 16 个语料文件, 其中 8 个实测 0 失败(aggregates 12/125-129、expr 39/40), 加入精选集后门禁覆盖 44.2 万条; 门禁 TOTAL 442461 / +0 PASS |
-| 50 | —— | 序列被失效且按名字找不回来时, `SequenceValue.getValue` 把 null 赋回字段导致裸 NPE | Column.updateSequenceIfRequired 同样处理 | 新增 SequenceValueInvalidTest: 造出"旧序列对象 id=-1 + 已从 schema 删除"的状态, 断言抛 `SEQUENCE_NOT_FOUND_1` 而不是 NPE; 还原原始代码即报 `NullPointerException: Cannot invoke "Sequence.getNext(...)" because "this.sequence" is null`, 与全量套件里 SequenceLockedExceptionTest 偶发的错误完全一致 |
+| 50 | `9208ed953` | 序列被失效且按名字找不回来时, `SequenceValue.getValue` 把 null 赋回字段导致裸 NPE | Column.updateSequenceIfRequired 同样处理 | 新增 SequenceValueInvalidTest: 造出"旧序列对象 id=-1 + 已从 schema 删除"的状态, 断言抛 `SEQUENCE_NOT_FOUND_1` 而不是 NPE; 还原原始代码即报 `NullPointerException: Cannot invoke "Sequence.getNext(...)" because "this.sequence" is null`, 与全量套件里 SequenceLockedExceptionTest 偶发的错误完全一致 |
 
 ## 二、方法论警示（验证时踩过的坑，必须记住）
 
