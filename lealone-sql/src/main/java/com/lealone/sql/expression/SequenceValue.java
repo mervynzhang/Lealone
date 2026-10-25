@@ -5,7 +5,9 @@
  */
 package com.lealone.sql.expression;
 
+import com.lealone.common.exceptions.DbException;
 import com.lealone.common.util.StatementBuilder;
+import com.lealone.db.api.ErrorCode;
 import com.lealone.db.schema.Sequence;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
@@ -30,8 +32,15 @@ public class SequenceValue extends Expression {
 
     @Override
     public Value getValue(ServerSession session) {
-        if (sequence.isInvalid())
-            sequence = sequence.getNewSequence(session);
+        if (sequence.isInvalid()) {
+            // 序列被失效(比如并发 drop/alter 之后旧对象还挂在语句里)时, 重新按名字查一次;
+            // 如果查不到说明它确实已经不在了 —— 这时必须报"序列不存在", 不能把 null 赋回去
+            // 再用它调用 getNext, 那样用户看到的是裸空指针(实测在并发用例里偶发出现过)。
+            Sequence newSequence = sequence.getNewSequence(session);
+            if (newSequence == null)
+                throw DbException.get(ErrorCode.SEQUENCE_NOT_FOUND_1, sequence.getName());
+            sequence = newSequence;
+        }
         long value = sequence.getNext(session);
         session.setLastIdentity(value);
         return ValueLong.get(value);
