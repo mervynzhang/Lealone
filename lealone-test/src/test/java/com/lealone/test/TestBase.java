@@ -52,6 +52,27 @@ public class TestBase extends Assert {
             + "test-data";
     public static final String TEST_DIR = TEST_BASE_DIR + File.separatorChar + "test";
     public static final String TEST = "test";
+
+    static {
+        // 每次测试JVM启动时先清掉上一次运行留下的存储目录: 这些库是按名字建在 target/test-data 下的,
+        // 残留目录里带着上次的用户/密码和页状态, 直接再跑会出现成片的
+        // "Wrong user name or password [28000-0]"(实测全量套件第二轮 141 个错误),
+        // 以前只能靠每次手动 rm -rf 规避, 忘一次就白跑一轮。
+        cleanStaleTestData();
+    }
+
+    private static void cleanStaleTestData() {
+        File dir = new File(TEST_BASE_DIR);
+        if (!dir.exists())
+            return;
+        try {
+            FileUtils.deleteRecursive(dir.getAbsolutePath(), false);
+            System.out.println("[test] cleaned stale test data: " + dir.getAbsolutePath());
+        } catch (Exception e) {
+            // 删不掉不影响测试本身: 最坏情况就是退回"需要手工清理"的老行为
+            System.out.println("[test] WARN: cannot clean " + dir.getAbsolutePath() + ": " + e);
+        }
+    }
     public static final String LEALONE = "lealone";
     public static final String DEFAULT_DB_NAME = TEST;
     public static final String DEFAULT_USER = "root";
