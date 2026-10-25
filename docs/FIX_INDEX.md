@@ -59,6 +59,7 @@
 | `f41a65626` | 修复SLT门禁rowsort只排实际结果不排期望值导致误判的问题 | 2 | SltGateRowsortTest,SltRunner | 新增 SltGateRowsortTest —— 脚本里期望值故意写成 3/1/2(集合相同), rowsort 下必须 PASS。 |
 | `f5ce2d457` | 修复行值IN的显式列表不走三值逻辑的问题 | 4 | PredicateLogicTest | PredicateLogicTest.rowValueInUsesThreeValuedLogic 八条断言 —— (1,NULL) IN ((1,2),(3,4)) / (1,2) IN ((1,NULL),(3,4)) / (NULL,NULL) IN ((1,2)) / NOT IN 对应形式都是 UNKNOWN; (1,NULL) IN ((1,NULL)) 也是 UNKNOWN(行值相等 |
 | `ffd80e6fd` | 修复OCTET_LENGTH/BIT_LENGTH对二进制类型算错字节数并物化整个LOB的问题 | 2 | StringFunctionMatrixTest | StringFunctionMatrixTest.octetAndBitLengthOnBinary —— BINARY 1/8、BLOB 2/16、 '中文' 6/48 六条断言。回退修复后该用例变红(expected 1 but was 2), 其余 11 个用例保持绿。 |
+| `63c4c8eae` | 把SLT门禁精选集从45个文件扩到53个文件 | 3 | （门禁自身） | 跑 SLT 门禁应 `TOTAL 442461 / +0 PASS`；精选集 53 个文件（当前值） |
 
 ## 快速跑某一条用例
 
@@ -77,6 +78,6 @@ mvn -B -o -q -pl lealone-test test -Dtest=<该提交的用例>
 git revert --no-edit HEAD                              # 恢复
 ```
 
-统计：本分支共 **48 个修复**，其中 **41 个带独立用例**；另外 7 个是基础设施/门禁/清理类，
+统计：本分支共 **49 个修复**（含 1 个门禁扩容），其中 **41 个带独立用例**；另外 7 个是基础设施/门禁/清理类，
 上面已逐条写明"用什么用例或什么现象能观察到差异"——所以 **48 条都可以自证**，
 只是其中 7 条靠的是已有用例/日志/门禁输出，而不是新增用例。

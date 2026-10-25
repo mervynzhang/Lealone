@@ -9,7 +9,7 @@
 | 分支 | `review/fixes-1`（基线 `review/mervyn-consolidated`） |
 | 提交 | **72 个**：48 个修复 + 24 个记录/回退/文档 |
 | 全量套件 | **381 项，连续多轮全绿**（10 skipped） |
-| SLT 回归门禁 | **45 个文件 / 376,388 条查询 / 11 秒，PASS**（起点 27 文件 / 20.8 万条） |
+| SLT 回归门禁 | **53 个文件 / 442,461 条查询 / 14 秒，PASS**（起点 27 文件 / 20.8 万条） |
 | 未修复缺陷 | **0 个**（"不改"的项见第六节，都有实测数据） |
 | master | **未改动** |
 
@@ -25,7 +25,7 @@
    mvn -B -o -q -DskipTests install
    mvn -B -o -q -pl lealone-test test                                    # 381 项
    mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest \
-       -Dslt.dir=/tmp/sqllogictest/test                                  # 37.6 万条查询
+       -Dslt.dir=/tmp/sqllogictest/test                                  # 44.2 万条查询
    ```
    套件需要 9210 端口上的测试服务（`TestBase` 写死了 `DEFAULT_TCP_PORT`），
    启动时把服务端 CWD 放到临时目录，否则它生成的代码会落到仓库根；

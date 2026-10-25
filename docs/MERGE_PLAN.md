@@ -12,7 +12,7 @@ git merge --no-ff review/fixes-1 -m "合入复审修复批次(48 个修复)"
 mvn -B -o -q -DskipTests install
 # 起测试服务(9210, 服务端 CWD 在仓库外, classpath 带 lealone-test/target/test-classes), 核对监听 PID 后:
 mvn -B -o -q -pl lealone-test test                                                        # 381 项
-mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogictest/test  # 37.6 万条
+mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogictest/test  # 44.2 万条
 ```
 
 演练结果（第 35 轮：在 `review/mervyn-consolidated` 上新分支合并整个 `review/fixes-1` 并实跑）：
@@ -22,7 +22,7 @@ mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogict
 | 合并冲突 | **0 个** |
 | 构建 | `mvn -DskipTests install` 成功 |
 | 全量套件 | **381 项 / 0 失败 / 10 skipped** |
-| SLT 门禁 | **376,388 条查询 / 14 失败(2 条 allowlist) / 12 已登记 / +0 → PASS** |
+| SLT 门禁 | **442,461 条查询 / 14 失败(2 条 allowlist) / 12 已登记 / +0 → PASS** |
 
 环境前提（测试代码写死的，不是本次改动引入的）：
 
@@ -129,7 +129,7 @@ git revert --no-edit HEAD     # 恢复
 
 ## 七、合入时必须一起看的三件事
 
-1. **门禁基线**：B4 会把 SLT 精选集从 27 个文件扩到 45 个（20.8 万 → 37.6 万条），并重新生成
+1. **门禁基线**：B4 会把 SLT 精选集从 27 个文件扩到 45 个（20.8 万 → 44.2 万条），并重新生成
    `lealone-test/src/test/resources/slt/baseline.txt`；只合其中一部分会让基线与 `files.txt` 不一致。
 2. **生成代码幂等**（`a9b0716cb`）：跳过它，合入后第一次跑套件工作区就会变脏（9 个被跟踪的
    `orm/generated/*.java` 被重写）。
@@ -150,7 +150,7 @@ git revert --no-edit HEAD     # 恢复
 | 分支 / HEAD | `review/fixes-1` @ `7d9d5d322`（本轮文档提交前） |
 | 提交数 | 76 个（48 修复 + 28 记录/文档） |
 | 全量套件 | **381 项 / 0 失败 / 10 skipped**（连续多轮一致） |
-| SLT 门禁 | **45 个文件 / 376,388 条查询 / 14 失败(2 条 allowlist) / 12 已登记 / +0 PASS** |
+| SLT 门禁 | **53 个文件 / 442,461 条查询 / 14 失败(2 条 allowlist) / 12 已登记 / +0 PASS** |
 | 未修复缺陷 | **0**（判定不改的 6 项有实测数据，见汇总第六节） |
 | 台账 | 48 行、编号 1..48 连续、每行带提交号（本轮重建） |
 
@@ -173,7 +173,7 @@ mvn -B -o -q -pl lealone-test test -Pslt -Dtest=SltTest -Dslt.dir=/tmp/sqllogict
 | merge | **0 冲突** |
 | 构建 | 成功 |
 | 全量套件(连跑 2 轮) | **381 / 381 通过，0 失败，10 skipped**（两轮一致） |
-| SLT 门禁 | **376,388 条查询 / 14 失败(2 条 allowlist) / 12 已登记 / +0 → PASS** |
+| SLT 门禁 | **442,461 条查询 / 14 失败(2 条 allowlist) / 12 已登记 / +0 → PASS** |
 
 ## 九、演练结果：为什么不做逐条 cherry-pick
 
