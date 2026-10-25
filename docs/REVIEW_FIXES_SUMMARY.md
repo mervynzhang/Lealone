@@ -2,7 +2,7 @@
 
 给审阅者用：对 `review/mervyn-consolidated`（88 个合并后的提交）复审后**确认并修掉的缺陷**清单。
 每条都有独立用例与红/绿证据；逐条细节（问题 / 根因 / 改动 / 验证数值 / 状态）在 [FIX_LOG.md](FIX_LOG.md)，
-合入批次与回退验证脚本在 [MERGE_PLAN.md](MERGE_PLAN.md)。
+合入批次与回退验证脚本在 [MERGE_PLAN.md](MERGE_PLAN.md)，逐提交速查表（改动面/用例/自证方式）在 [FIX_INDEX.md](FIX_INDEX.md)。
 
 | 项 | 值 |
 |---|---|
@@ -17,7 +17,7 @@
 
 1. 逐提交看：`git log --oneline review/mervyn-consolidated..review/fixes-1`，
    每个提交信息是「问题 / 根因 / 改动 / 测试」四段，可单独判断。
-2. 逐条细节在 [FIX_LOG.md](FIX_LOG.md)；合入批次与回退验证命令在 [MERGE_PLAN.md](MERGE_PLAN.md)。
+2. 逐条细节在 [FIX_LOG.md](FIX_LOG.md)；**逐提交速查表**（改了几个文件 / 自带哪个用例 / 怎么自证）在 [FIX_INDEX.md](FIX_INDEX.md)；合入方式在 [MERGE_PLAN.md](MERGE_PLAN.md)。
 3. **回退前必须 `mvn -o -q -DskipTests install`**，否则 `mvn -pl lealone-test test` 用的是
    `~/.m2` 里的旧 jar，会得到假结论（这个坑我们踩过，见台账「方法论警示」）。
 4. 全量与门禁：
