@@ -17,6 +17,112 @@ SLT 门禁 45 个文件 / 376,388 条查询 PASS。逐提交速查表见 [FIX_IN
 3. 每个修复提交同时在本表追加一行，因此本表的顺序与提交顺序一致；
 4. 回退某个修复时，在"状态"列标注，不要删行。
 
+## 一、修复台账（48 条，按提交时间排序，编号连续）
+
+每行对应一个提交（代码与其测试在同一个提交里）。"自证方式"摘自该提交信息里的测试说明；
+更详细的根因与验证数值见文末**附录：原始逐条记录**。
+
+| # | 提交 | 问题 | 自证方式 |
+|---|---|---|---|
+| 1 | `a82f740c1` | 关联子查询只在最内层与外层关联时返回上一行过期值的问题 | CorrelatedSubqueryTest 四个用例(两条嵌套关联 + 单层对照 + 非关联对照)。回退本改动后 |
+| 2 | `07b3ec55b` | 异步提交回调在事务已结束或重复提交时会丢失或重复执行的问题 | AsyncCommitCallbackTest 两个用例。去掉补调 → "没有回调, 语句会挂死"(30s 超时); |
+| 3 | `8135c4023` | 覆盖索引查询每返回一行读两次主表的问题 | CoveredIndexScanTest 两例 —— 覆盖索引扫描结果与主表扫描逐行一致且不重复; |
+| 4 | `dbfeb9886` | ROUND按负精度舍入后输出科学计数法且标度为负的问题 | ValueSemanticsTest.testRoundNegativeScale —— ROUND(123.456,-1)=120、科学计数法消失、 |
+| 5 | `eafbc5d96` | checkpoint前置处理器失败被当成"没有待处理事务"导致redo log被提前截断的问题 | CheckpointHandlerFailureTest 两例。 |
+| 6 | `eed40f4cd` | 回滚本事务插入的索引项时未判空页监听器的问题 | IndexInsertDeleteSameTransactionTest 两例 —— 同事务插入又删除(带唯一索引 + 二级索引)100 轮后 |
+| 7 | `cd7d304ad` | 服务返回Map/Array时JSON输出错误的问题 | ValueJsonTest 四例 —— 嵌套 Map 输出成 JSON 对象、List 输出成 JSON 数组、控制字符被转义、 |
+| 8 | `ffd80e6fd` | OCTET_LENGTH/BIT_LENGTH对二进制类型算错字节数并物化整个LOB的问题 | StringFunctionMatrixTest.octetAndBitLengthOnBinary —— BINARY 1/8、BLOB 2/16、 |
+| 9 | `f5ce2d457` | 行值IN的显式列表不走三值逻辑的问题 | PredicateLogicTest.rowValueInUsesThreeValuedLogic 八条断言 —— |
+| 10 | `3f8363ba9` | 常量折叠处空catch吞掉所有异常的问题 | DataExceptionTest 两例 —— 四个数据类错误码被识别; 参数未设置/语法错误/普通运行时异常不被当成数据类错误。 |
+| 11 | `549aa6998` | 修正建表失败路径清理逻辑的过时注释并补行为用例 | 新增 CreateTableFailureTest 两例 —— |
+| 12 | `89b5abc7e` | 删除复审确认的两处死代码 | 纯代码删除, 无新增用例, 由全量套件验证。 |
+| 13 | `66e11a4c3` | 列存表整行读取全为null导致SCRIPT导出空指针的问题 | 新增 ColumnStorageFullRowTest 三例(整行读、SCRIPT 导出、CHECKPOINT SYNC 后 SUM 校验), 连跑三轮稳定; |
+| 14 | `eeb79a7e6` | SequenceLockedExceptionTest在worker线程失败时会永久挂死的问题 | （无新增用例，见附录原始记录） |
+| 15 | `7dbf3c1e0` | 块长度越界时静默当文件结束导致损坏数据被无声截断的问题 | 新增 FileStorageTest.testChunkLengthExceedsFileSize —— 块长度为正但远超文件剩余空间(不是 |
+| 16 | `9241f581d` | 单表查询去重表超过上限后静默放弃去重的问题 | 新增 FlatQueryDedupeLimitTest —— 10.01 万行(批量插入, 1.15 秒), 验证超过上限后 |
+| 17 | `504db65a0` | 回滚保存点对已结束事务静默返回的问题 | 新增 SavepointRollbackAfterCloseTest 三例(提交后回滚保存点要抛异常、回滚后要抛异常、 |
+| 18 | `d18c73dc3` | 全量备份把整个库读两遍的问题 | 新增 BackupManifestCrcTest —— 备份后直接读 zip 里的 BACKUP.MANIFEST, 断言每个数据条目 |
+| 19 | `5577a117d` | SLT回归门禁不计statement失败导致脚本里的DDL/DML坏掉仍然PASS的问题 | 新增 SltGateStatementTest —— 临时写一个 .test 脚本, 里面放一条必然失败的 statement ok |
+| 20 | `06e2bbd39` | 单个StorageMap保存失败会中止整轮检查点的问题 | 由全量套件驱动(SltGateStatementTest 提供额外的嵌入式库, 使该路径稳定复现)。 |
+| 21 | `121aa2e39` | 索引异步构建期查询静默漏行的问题 | 新增 IndexBuildingScanTest(embedded, 6 万行, CREATE INDEX 后连续查 1500 次, 先 SET QUERY_CACHE_SIZE 0), |
+| 22 | `0459f3347` | CheckpointDurabilityTest失败时遗留库和目录污染后续用例的问题 | 正常路径 4/4 通过, 结束后 ckptdur 残留 0 项; 把期望值临时改成 999 制造失败后, |
+| 23 | `7dc2fca53` | Database.close被引擎内部session静默挡掉导致重启丢更新的问题 | 回退 Database.java 并 install 后, 5 条用例里 4 条变红(含"无备份"那条, 说明关闭当时经常是空操作); |
+| 24 | `ee68d2079` | 重启校验复制活跃元数据库导致的偶发假红 | 全量套件连跑 5 轮, 4 轮全绿(剩下的 1 轮是另一个并发扫描的 NPE, 已单独记账, 与本改动无关); |
+| 25 | `3e7dc2f3a` | SLT门禁baseline只比失败个数导致同文件内替换失败仍然PASS的问题 | （无新增用例，见附录原始记录） |
+| 26 | `2d71694f8` | 只带主键的行删除时静默失败的问题 | 新增 IndexRemoveKeyOnlyRowTest(embedded): 直接构造 new Row(key, null) 交给 removeRow, |
+| 27 | `071c1de76` | 补大表二级索引扫描的正确性护栏并记录一项未采纳的内存优化 | （无新增用例，见附录原始记录） |
+| 28 | `9a0e5953f` | 关闭存储时发起多余异步检查点的问题 | 关闭/持久化相关的 11 个用例(CheckpointDurabilityTest 5 例、BackupTest、IncrementalBackupTest、 |
+| 29 | `a9b0716cb` | 跑套件会改写被跟踪的生成代码导致工作区变脏的问题 | 新增 GeneratedCodeIdempotentTest —— 断言生成文件里没有 \r, 并且再生成一次时 |
+| 30 | `0d3a77c9c` | 测试数据目录残留导致第二轮套件大批报错的问题 | 修复前连跑两轮(中间不清理)第二轮 141 errors; 修复后连跑三轮、中间都不清理, |
+| 31 | `39dac48f6` | JDBC客户端trace文件写进模块目录留下未跟踪残留的问题 | 修复前跑 TraceTest 后在 lealone-test/trace.db/ 留下 TraceTestDB.*.trace.db; |
+| 32 | `70a7746ce` | 主表行已不存在时删除仍然空指针导致并发扫描偶发失败的问题 | ScanDuplicateTest + 删除/更新相关共 5 个用例连跑 3 轮全绿; |
+| 33 | `6e28f1993` | 已存储LOB缺少data handler时只报裸空指针无法定位的问题 | 新增 LobWithoutHandlerTest —— 用反射把 handler 置空, 断言错误信息里带 lobId 和 tableId, |
+| 34 | `08a0f53d9` | 引擎内部session让数据库永远无法自动关闭的问题 | 新增 DatabaseCloseIfNeededTest —— SET DB_CLOSE_DELAY 0 后创建一个内部session, |
+| 35 | `dc779ffd5` | SCRIPT导出超长LOB时因缺少data handler而失败的问题 | 修复后全量套件连跑 3 轮: 2 轮 371 项全绿, 第 2 轮卡在 JdbcConnectionTest(客户端NIO挂死, |
+| 36 | `e215f042a` | 客户端事件循环注册失败时挂死整个套件的问题 | 护栏有效性用探针验证 —— 临时把超时改成 1 秒, 加一个 sleep 3 秒的客户端用例, |
+| 37 | `7e965564c` | 最后一个用户连接断开时内部session挡住数据库自动关闭的问题 | DatabaseCloseIfNeededTest 增加 testLastUserSessionDisconnectClosesDatabase —— |
+| 38 | `700b236cf` | 没有data handler的已存储LOB在unlink时空指针的问题 | 新增 LobUnlinkWithoutHandlerTest —— 无 handler 的已存储LOB调 unlink(null) 不能崩、 |
+| 39 | `161c87676` | 没有data handler的已存储LOB在link时空指针的问题 | 新增 LobLinkWithoutHandlerTest —— link(null, 9) 必须原样返回、表id保持原值, |
+| 40 | `06893e57b` | GROUP BY里的输入列被输出别名顶掉导致静默少分组的问题 | ① 新增 GroupByAliasShadowTest: 输入列优先、非遮蔽、纯别名分组、无别名分组四种写法都必须 3 组; |
+| 41 | `f41a65626` | SLT门禁rowsort只排实际结果不排期望值导致误判的问题 | 新增 SltGateRowsortTest —— 脚本里期望值故意写成 3/1/2(集合相同), rowsort 下必须 PASS。 |
+| 42 | `ec89521d9` | SLT门禁失败签名用截断SQL生成导致新增失败被当成已登记的问题 | 新增 SltFailureKeyTest —— 两条只有末尾不同的 600+ 字符 SQL 必须算出不同签名, |
+| 43 | `d86a347f6` | 把SLT门禁精选集从27个文件扩到39个文件以覆盖多表复杂查询 | 门禁 TOTAL 316388 条 / 316374 通过 / 14 失败(其中 2 条在 allowlist) / |
+| 44 | `a1f4d1e5c` | 把SLT门禁精选集从39个文件扩到45个文件以覆盖更多表达式用例 | 门禁 TOTAL 376388 条 / 376374 通过 / 14 失败(2 条 allowlist) / 12 条已登记 0 新增 -> PASS。 |
+| 45 | `26ade674d` | 事务里执行TRUNCATE会让会话进入不一致状态并静默丢数据的问题 | 新增 TruncateNotRollbackableTest —— 事务内执行 TRUNCATE 必须报错、报错后数据完好、 |
+| 46 | `1da3d49db` | 客户端用例偶发挂死时只有超时提示没有线程栈无法定位的问题 | 新增 DiagnosticTimeoutTest —— 用1秒超时包住一个睡5秒的语句, 断言异常照常抛出且仍是 |
+| 47 | `c2ab81d45` | 关连接时等待调度器执行任务没有超时会永久阻塞的问题 | 新增 ClientSessionAwaitTest —— 已 countDown 的 latch 必须立刻返回; 永不 countDown 的 latch |
+| 48 | `135d93201` | 事务内查询之后ROLLBACK在本会话里看不到撤销结果的问题 | RollbackAfterQueryTest(去掉 @Ignore 后的原复现用例)在两个连接下断言"回滚后必须 2 行"。 |
+
+## 二、方法论警示（验证时踩过的坑，必须记住）
+
+| 坑 | 现象 | 正确做法 |
+|---|---|---|
+| **兄弟模块从 `/root/.m2` 解析，不用工作树里的 `target/classes`**（第 23 条） | `mvn -o -pl lealone-test test` 只重编 lealone-test，`lealone-db`/`lealone-aote` 等**加载的是已 install 的 jar**。于是"回退源码但不 install"会让用例**假通过**（实测：回退 `StandardSecondaryIndex` 后不 install，`IndexBuildingScanTest` 依然绿；install 之后才 `expected:<60> but was:<1>`） | 做红/绿对照时**必须**先 `mvn -o -q -DskipTests install`（或加 `-am`），否则得出的"原始代码也复现/也通过"结论不可信 |
+| `SqlTestBase` 的 `executeQuery(String)` 已经调过一次 `rs.next()`（第 24 条） | 再调 `rs.next()` 会跳过第一行，表现为 `expected:<1> but was:<2>` 之类的诡异断言 | 直接用当前 `rs`，或 `closeResultSet()` 后自己重开 |
+| `mvn clean` 在离线环境不可用 | 残留 `target/classes` 造成假红/假绿 | `rm -rf lealone-*/target` 代替 |
+| **多个 agent 共享 `/root/.m2`** | 别人 `install` 后，你的 `mvn -pl lealone-test test` 用的是**别人那份引擎 jar**。实测：子代理把 `.m2` 还原成未修复版后，我的全量套件立刻出现 4 个"close 没真的关闭"的失败，看着像回归，其实是被换了 jar | 跑套件前先校验 jar 状态（例如 `javap -p -cp <jar> com.lealone.db.Database | grep getUserSessionCount`），或在自己的工作树里先 `mvn -o -q -DskipTests install` |
+| 共享 `target/test-data` 不清理 | 跨用例库污染，出现 `Wrong user name or password [28000-0]` 等 131 个错误 | 每次跑套件前 `rm -rf lealone-test/target/test-data` |
+| 循环重跑同一条 SQL 会命中会话级语句/结果缓存 | 探针测不到真正执行（以为"稳定正确"） | 先 `SET QUERY_CACHE_SIZE 0` |
+
+## 三、仍未完全消除的偶发（记录以防被当成"已修"）
+
+| 项 | 观察 |
+|---|---|
+| `JdbcConnectionTest` / `JdbcPreparedStatementTest` 偶发挂死（**根因已抓到并已修，见提交 `c2ab81d45`**） | 已修过一次（`e215f042a`：客户端事件循环注册失败时挂死整个套件），并在 `ClientTestBase` 加了 `@Rule Timeout(300s)`，让它变成失败而不是永久挂住。本轮全量两连跑里**又出现 1 次**（第 1 次 378 项中 `run(JdbcConnectionTest)` 超时 300 秒，第 2 次全绿），说明**还有第二条挂死路径**没被覆盖。目前没有线程栈；下一步应在超时时打印所有线程栈（`Thread.getAllStackTraces()`）定位，而不是靠猜 |
+
+**根因（第30轮用新的 `DiagnosticTimeout` 抓到线程栈）**：挂死不在用例主体，而在 `tearDown`：
+`SqlTestBase.tearDownAfter` → `JdbcUtils.closeSilently` → `JdbcConnection.close()` →
+`ClientSession.close()` → `ClientSession.execute(...)` 里 **`latch.await()`（无超时）** 等调度器执行关闭任务，
+而线程栈显示当时所有 `CScheduleService-*` 客户端调度线程都停在 `NioEventLoop.select`（空闲），
+任务队列没被处理，于是这个 latch 永远等不到 —— 测试的 `NETWORK_TIMEOUT` 又是 `Integer.MAX_VALUE`，
+没有任何兜底。修复方向：关闭连接必须**有界等待**（超时后强制关闭 socket 并记录告警），或在
+`execute` 的 latch 等待上给出超时 + 兜底执行，不能永久阻塞。→ **已按第二种修掉，见 #54**（`ClientSession.awaitOrThrow`，10 秒上限）。
+注意：这只消除了"永久挂死"，任务队列不推进这个**诱因本身**还没解决；下次如果再挂，`DiagnosticTimeout` 会直接给出线程栈。
+
+## 四、判定为"问题不成立或收益未证实"（不动）
+
+| 项 | 复审建议 | 实测结论 |
+|---|---|---|
+| SLT 门禁的 `rowsort` 只排实际结果、不排期望值（怀疑会误判） | 比较前把期望值也排序 | **未采纳（改错已回退，`a7a85a6af`）**：语料里的期望值本来就是按 SLT 约定排好序的；我把期望值当成"扁平值列表"再排序，多列结果会被打散、和实际结果的行对齐破坏 —— 门禁失败数从 14 暴涨到 13656。回退后门禁恢复 PASS。原始行为符合 SLT 规范，不是缺陷。 |
+| `RowStorageLeafPage` 页面写时的"提交重试"：并发提交时整页重新序列化（复审怀疑是每条更新多一次整页行拷贝） | 去掉重试，或改成更轻的脏页跟踪 | **未采纳**：插桩实测重试率 **0.35%（单线程）/ 0.18%（4 线程）**（2 万行表 + 4 线程更新 + 同时 `CHECKPOINT SYNC` 强制刷页，页写 571/2218 次，重试 2/4 次）。它是一次廉价的正确性措施（避免写出半新半旧的页），开销可以忽略，改它没有意义。 |
+| 二级索引游标的 `rowSnapshots`（每个扫描到的 rowKey 一条，无上界） | 加个 10 万条上限（对齐 QFlat 的去重上限），超限打 warn | **未证实，未采纳**。理由是实测无法隔离出收益：400k 行扫描在 `-Xmx200m` 下正常（476ms/146MB），降到 `-Xmx120m` 时**插入阶段就 OOM**；改成"预建 100 万行库 + 纯扫描"后，`-Xmx96m` 下扫描也跑不完——瓶颈是页缓存而不是快照表。同时加限会**牺牲去重正确性**（超过上限的行可能重复返回），拿正确性换一个测不出来的收益不划算。已改为补一个 12 万行索引扫描的护栏用例（不丢行、不重复）。 |
+| `AOTransactionMap` 每条 UPDATE/DELETE 多一次 `map.put`（建议改成按 key 标脏叶子页） | 用 `StorageMap.markDirty` 替代 `map.put` | **未证实，未采纳**：2 万行 × 3 轮（4 个二级索引）更新基准，基线 `202/102/112 ms`、变体 `181/103/101 ms`、`186/109/92 ms` —— 稳态差异在噪声内。原因：`put` 命中已存在的 key 与 `gotoLeafPage` 标脏做的是同一次 B 树搜索，省不掉；反而 `markDirty` 少了 `PageListener` 重绑，动了脏页跟踪的正确性风险。 |
+| `StatementBase.syncExecute` 等待循环"100 次全调度 pump/ms 白烧一个核" | 改成 1 次 pump + 1ms | **未证实，未采纳**。两个场景实测（4 线程争抢同一行的 1200 次更新；以及"持锁者闲置 2 秒"的纯等待场景）：等待期间进程 CPU 都是 ~150 ms / 2 秒（约占单核 7%），改与不改的 CPU 与墙钟差异都在噪声内（墙钟甚至偶有变差）。原因是每次 pump 在无活可干时开销很小，且当前等待主要走 `scheduler.await()` 而不是这个自旋循环。**结论：这不是热路径瓶颈，改它属于无收益改动。**
+
+| 提交 | 结论 |
+|---|---|
+| `0f8cc70e6` IN 列表重复返回 | 两种数据形态下均未复现，tip 与回退该提交结果一致 |
+| `3fec8493d` 列存新增列 NPE | `columnPages` 只有整体填充路径，判空不可达；删掉后跨重启用例仍绿 |
+| `d0007915d` 可重复读读到更旧版本 | 语义分析成立（旧代码差一个版本），但现有 RR 用例去掉修复也全绿，无法复现 |
+| `50b4e84a2` 同步 JDBC 偶发 InternalError | 调用路径真实（红栈里有 JDBC 线程进 `await`），但无法稳定复现 |
+| `b2e217f7d` "备份文件被写坏" | 证据缺口维持原状：NPE 部分真实，备份坏包未实测到 |
+
+## 附录：原始逐条记录（保留排查过程与验证数值）
+
+> 编号体系与第一节不同（历史原因），**以第一节的连续编号为准**；保留原始文字用于追溯排查过程。
+> 本附录里出现的"第 N 条 / 第 N 项"指的都是**附录自身的旧编号**，需要定位提交时请用第一节的表
+> （或 `git log --grep=<关键词>`）。
+
 ## 一、已修复
 
 | # | 问题 | 修复要点 | 验证 | 状态 |
@@ -112,46 +218,3 @@ SLT 门禁 45 个文件 / 376,388 条查询 PASS。逐提交速查表见 [FIX_IN
 | 28 | `CheckpointDurabilityTest` 的重启校验会把**进程里一直在用的 `db_0`（lealone 元数据库）**复制到隔离目录，复制一个活跃库有竞态：子进程偶尔 `ExceptionInInitializerError`（实测全量套件 3 轮里 1 次），表现为该用例假红 | **未修**。试过的两条路都不行：① 子进程用自己的空 base dir 直接打开原库目录 → Lealone 把该目录当成新库（`Table "T" not found`），因为库名要靠 `db_0` 解析；② 只复制库目录不带 `db_0` → 同上。可行的后续方向：先让元数据库做一次 SYNC checkpooint 再复制，或让 `BackupRestoreCheck` 支持按存储路径构造库实例 | 已记录（不是引擎缺陷，属测试基建） |
 | 24 | 测试不 hermetic：不清理 `target/test-data` 再跑会有 131 errors；跑套件会改写被跟踪的 `orm/generated/*.java` | `TestBase.java:51`、`SqlTestBase` 默认库 |
 
-## 二点六、仍未完全消除的偶发（记录以防被当成"已修"）
-
-| 项 | 观察 |
-|---|---|
-| `JdbcConnectionTest` / `JdbcPreparedStatementTest` 偶发挂死（**根因已抓到并已修，见 #54**） | 已修过一次（`e215f042a`：客户端事件循环注册失败时挂死整个套件），并在 `ClientTestBase` 加了 `@Rule Timeout(300s)`，让它变成失败而不是永久挂住。本轮全量两连跑里**又出现 1 次**（第 1 次 378 项中 `run(JdbcConnectionTest)` 超时 300 秒，第 2 次全绿），说明**还有第二条挂死路径**没被覆盖。目前没有线程栈；下一步应在超时时打印所有线程栈（`Thread.getAllStackTraces()`）定位，而不是靠猜 |
-
-**根因（第30轮用新的 `DiagnosticTimeout` 抓到线程栈）**：挂死不在用例主体，而在 `tearDown`：
-`SqlTestBase.tearDownAfter` → `JdbcUtils.closeSilently` → `JdbcConnection.close()` →
-`ClientSession.close()` → `ClientSession.execute(...)` 里 **`latch.await()`（无超时）** 等调度器执行关闭任务，
-而线程栈显示当时所有 `CScheduleService-*` 客户端调度线程都停在 `NioEventLoop.select`（空闲），
-任务队列没被处理，于是这个 latch 永远等不到 —— 测试的 `NETWORK_TIMEOUT` 又是 `Integer.MAX_VALUE`，
-没有任何兜底。修复方向：关闭连接必须**有界等待**（超时后强制关闭 socket 并记录告警），或在
-`execute` 的 latch 等待上给出超时 + 兜底执行，不能永久阻塞。→ **已按第二种修掉，见 #54**（`ClientSession.awaitOrThrow`，10 秒上限）。
-注意：这只消除了"永久挂死"，任务队列不推进这个**诱因本身**还没解决；下次如果再挂，`DiagnosticTimeout` 会直接给出线程栈。
-
-## 二半、方法论警示（验证时踩过的坑，必须记住）
-
-| 坑 | 现象 | 正确做法 |
-|---|---|---|
-| **兄弟模块从 `/root/.m2` 解析，不用工作树里的 `target/classes`**（第 23 条） | `mvn -o -pl lealone-test test` 只重编 lealone-test，`lealone-db`/`lealone-aote` 等**加载的是已 install 的 jar**。于是"回退源码但不 install"会让用例**假通过**（实测：回退 `StandardSecondaryIndex` 后不 install，`IndexBuildingScanTest` 依然绿；install 之后才 `expected:<60> but was:<1>`） | 做红/绿对照时**必须**先 `mvn -o -q -DskipTests install`（或加 `-am`），否则得出的"原始代码也复现/也通过"结论不可信 |
-| `SqlTestBase` 的 `executeQuery(String)` 已经调过一次 `rs.next()`（第 24 条） | 再调 `rs.next()` 会跳过第一行，表现为 `expected:<1> but was:<2>` 之类的诡异断言 | 直接用当前 `rs`，或 `closeResultSet()` 后自己重开 |
-| `mvn clean` 在离线环境不可用 | 残留 `target/classes` 造成假红/假绿 | `rm -rf lealone-*/target` 代替 |
-| **多个 agent 共享 `/root/.m2`** | 别人 `install` 后，你的 `mvn -pl lealone-test test` 用的是**别人那份引擎 jar**。实测：子代理把 `.m2` 还原成未修复版后，我的全量套件立刻出现 4 个"close 没真的关闭"的失败，看着像回归，其实是被换了 jar | 跑套件前先校验 jar 状态（例如 `javap -p -cp <jar> com.lealone.db.Database | grep getUserSessionCount`），或在自己的工作树里先 `mvn -o -q -DskipTests install` |
-| 共享 `target/test-data` 不清理 | 跨用例库污染，出现 `Wrong user name or password [28000-0]` 等 131 个错误 | 每次跑套件前 `rm -rf lealone-test/target/test-data` |
-| 循环重跑同一条 SQL 会命中会话级语句/结果缓存 | 探针测不到真正执行（以为"稳定正确"） | 先 `SET QUERY_CACHE_SIZE 0` |
-
-## 三、判定为"问题不成立或收益未证实"（不动）
-
-| 项 | 复审建议 | 实测结论 |
-|---|---|---|
-| SLT 门禁的 `rowsort` 只排实际结果、不排期望值（怀疑会误判） | 比较前把期望值也排序 | **未采纳（改错已回退，`a7a85a6af`）**：语料里的期望值本来就是按 SLT 约定排好序的；我把期望值当成"扁平值列表"再排序，多列结果会被打散、和实际结果的行对齐破坏 —— 门禁失败数从 14 暴涨到 13656。回退后门禁恢复 PASS。原始行为符合 SLT 规范，不是缺陷。 |
-| `RowStorageLeafPage` 页面写时的"提交重试"：并发提交时整页重新序列化（复审怀疑是每条更新多一次整页行拷贝） | 去掉重试，或改成更轻的脏页跟踪 | **未采纳**：插桩实测重试率 **0.35%（单线程）/ 0.18%（4 线程）**（2 万行表 + 4 线程更新 + 同时 `CHECKPOINT SYNC` 强制刷页，页写 571/2218 次，重试 2/4 次）。它是一次廉价的正确性措施（避免写出半新半旧的页），开销可以忽略，改它没有意义。 |
-| 二级索引游标的 `rowSnapshots`（每个扫描到的 rowKey 一条，无上界） | 加个 10 万条上限（对齐 QFlat 的去重上限），超限打 warn | **未证实，未采纳**。理由是实测无法隔离出收益：400k 行扫描在 `-Xmx200m` 下正常（476ms/146MB），降到 `-Xmx120m` 时**插入阶段就 OOM**；改成"预建 100 万行库 + 纯扫描"后，`-Xmx96m` 下扫描也跑不完——瓶颈是页缓存而不是快照表。同时加限会**牺牲去重正确性**（超过上限的行可能重复返回），拿正确性换一个测不出来的收益不划算。已改为补一个 12 万行索引扫描的护栏用例（不丢行、不重复）。 |
-| `AOTransactionMap` 每条 UPDATE/DELETE 多一次 `map.put`（建议改成按 key 标脏叶子页） | 用 `StorageMap.markDirty` 替代 `map.put` | **未证实，未采纳**：2 万行 × 3 轮（4 个二级索引）更新基准，基线 `202/102/112 ms`、变体 `181/103/101 ms`、`186/109/92 ms` —— 稳态差异在噪声内。原因：`put` 命中已存在的 key 与 `gotoLeafPage` 标脏做的是同一次 B 树搜索，省不掉；反而 `markDirty` 少了 `PageListener` 重绑，动了脏页跟踪的正确性风险。 |
-| `StatementBase.syncExecute` 等待循环"100 次全调度 pump/ms 白烧一个核" | 改成 1 次 pump + 1ms | **未证实，未采纳**。两个场景实测（4 线程争抢同一行的 1200 次更新；以及"持锁者闲置 2 秒"的纯等待场景）：等待期间进程 CPU 都是 ~150 ms / 2 秒（约占单核 7%），改与不改的 CPU 与墙钟差异都在噪声内（墙钟甚至偶有变差）。原因是每次 pump 在无活可干时开销很小，且当前等待主要走 `scheduler.await()` 而不是这个自旋循环。**结论：这不是热路径瓶颈，改它属于无收益改动。**
-
-| 提交 | 结论 |
-|---|---|
-| `0f8cc70e6` IN 列表重复返回 | 两种数据形态下均未复现，tip 与回退该提交结果一致 |
-| `3fec8493d` 列存新增列 NPE | `columnPages` 只有整体填充路径，判空不可达；删掉后跨重启用例仍绿 |
-| `d0007915d` 可重复读读到更旧版本 | 语义分析成立（旧代码差一个版本），但现有 RR 用例去掉修复也全绿，无法复现 |
-| `50b4e84a2` 同步 JDBC 偶发 InternalError | 调用路径真实（红栈里有 JDBC 线程进 `await`），但无法稳定复现 |
-| `b2e217f7d` "备份文件被写坏" | 证据缺口维持原状：NPE 部分真实，备份坏包未实测到 |
