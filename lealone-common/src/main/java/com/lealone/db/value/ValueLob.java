@@ -184,6 +184,10 @@ public class ValueLob extends Value {
         return useTableLobStorage;
     }
 
+    public boolean hasHandler() {
+        return handler != null;
+    }
+
     public void setUseTableLobStorage(boolean useTableLobStorage) {
         this.useTableLobStorage = useTableLobStorage;
     }
@@ -309,6 +313,11 @@ public class ValueLob extends Value {
      */
     public void unlink(DataHandler dh) {
         if (small == null && tableId != LobStorage.TABLE_ID_SESSION_VARIABLE) {
+            // 调用方通常传 v.getHandler(), 但"已存储的LOB没有handler"这个状态确实存在
+            // (DataBuffer.readValue 反序列化出来就是null), 这时没有LOB存储可操作,
+            // 硬用会空指针; 保持"还挂在原表上"不做改动, 比抛空指针安全
+            if (dh == null)
+                return;
             dh.getLobStorage().setTable(this, LobStorage.TABLE_ID_SESSION_VARIABLE);
             tableId = LobStorage.TABLE_ID_SESSION_VARIABLE;
         }
@@ -321,6 +330,11 @@ public class ValueLob extends Value {
      * @return the new value or itself
      */
     public ValueLob link(DataHandler dh, int tabId) {
+        if (dh == null) {
+            // 和 unlink 一样: "已存储LOB没有handler"这个状态确实存在(反序列化出来就是null),
+            // 没有LOB存储可操作时保持原状, 不做改动, 而不是空指针
+            return this;
+        }
         if (small == null) {
             if (tableId == LobStorage.TABLE_TEMP) {
                 dh.getLobStorage().setTable(this, tabId);
@@ -446,6 +460,13 @@ public class ValueLob extends Value {
                     Constants.IO_BUFFER_SIZE);
         }
         long byteCount = (type == Value.BLOB) ? precision : -1;
+        if (handler == null) {
+            // 既是"已存储的LOB"(不在内存、也不是临时文件)又没有data handler, 这是不该出现的状态:
+            // 直接用NPE报出来只能看到 "this.handler is null", 定位不到是哪张表哪个LOB,
+            // 这里换成带 lobId/tableId 的内部错误, 便于定位产生这种值的地方。
+            throw DbException.getInternalError(
+                    "LOB has no data handler, lobId: " + lobId + ", tableId: " + tableId);
+        }
         try {
             return handler.getLobStorage().getInputStream(this, hmac, byteCount);
         } catch (IOException e) {

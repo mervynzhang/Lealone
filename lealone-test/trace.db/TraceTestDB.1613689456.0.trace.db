@@ -1,0 +1,27 @@
+2026-10-25 05:13:39 jdbc: SESSION_INIT 2
+2026-10-25 05:13:39 jdbc: 
+/**/Connection conn11 = DriverManager.getConnection("jdbc:lealone:tcp://localhost:9210/TraceTestDB", "ROOT", "");
+2026-10-25 05:13:39 jdbc: 
+/**/Statement stat398 = conn11.createStatement();
+2026-10-25 05:13:39 jdbc: 
+/**/stat398.executeUpdate("DROP TABLE IF EXISTS TraceTest");
+2026-10-25 05:13:39 jdbc: STATEMENT_UPDATE 3
+2026-10-25 05:13:39 jdbc: 
+/**/stat398.executeUpdate("CREATE TABLE IF NOT EXISTS TraceTest (f1 int, f2 long)");
+2026-10-25 05:13:39 jdbc: STATEMENT_UPDATE 4
+2026-10-25 05:13:39 jdbc: 
+/**/stat398.executeUpdate("INSERT INTO TraceTest(f1, f2) VALUES(1, 1)");
+2026-10-25 05:13:39 jdbc: STATEMENT_UPDATE 5
+2026-10-25 05:13:39 jdbc: 
+/**/ResultSet rs1366046 = stat398.executeQuery("SELECT * FROM TraceTest");
+2026-10-25 05:13:39 jdbc: STATEMENT_QUERY 7
+2026-10-25 05:13:39 jdbc: RESULT_CLOSE 8
+2026-10-25 05:13:39 jdbc: 
+/**/stat398.getConnection();
+2026-10-25 05:13:39 jdbc: 
+/**/rs1366046.close();
+2026-10-25 05:13:39 jdbc: 
+/**/stat398.close();
+2026-10-25 05:13:39 jdbc: 
+/**/conn11.close();
+2026-10-25 05:13:39 jdbc: SESSION_CLOSE 9
