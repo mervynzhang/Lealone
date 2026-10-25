@@ -49,6 +49,29 @@ public class DatabaseCloseIfNeededTest extends SqlTestBase {
         }
     }
 
+    // 最后一个用户连接断开时(removeSession 路径), 内部session不能挡住自动关闭
+    @Test
+    public void testLastUserSessionDisconnectClosesDatabase() throws Exception {
+        executeUpdate("SET DB_CLOSE_DELAY 0");
+        executeUpdate("DROP TABLE IF EXISTS cin_t2");
+        executeUpdate("CREATE TABLE cin_t2(id int primary key)");
+        executeUpdate("INSERT INTO cin_t2 VALUES(1)");
+
+        Database db = findDatabase();
+        assertNotNull(db);
+        ServerSession internal = db.createSession(db.getSystemUser());
+        try {
+            conn.close();
+            assertFalse("最后一个用户连接断开后, 库应该自动关闭", db.isOpened());
+        } finally {
+            try {
+                internal.close();
+            } catch (Exception e) {
+                // 库已经关了, 忽略
+            }
+        }
+    }
+
     private Database findDatabase() {
         for (Database d : LealoneDatabase.getInstance().getDatabases()) {
             if (d.getShortName().equalsIgnoreCase(DB))
