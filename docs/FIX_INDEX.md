@@ -24,7 +24,7 @@
 | `1da3d49db` | 修复客户端用例偶发挂死时只有超时提示没有线程栈无法定位的问题 | 3 | ClientTestBase,DiagnosticTimeout,DiagnosticTimeoutTest | 新增 DiagnosticTimeoutTest —— 用1秒超时包住一个睡5秒的语句, 断言异常照常抛出且仍是 TestTimedOutException、输出里有用例名标记、有线程栈内容、有结束标记。实测输出包含 |
 | `26ade674d` | 修复事务里执行TRUNCATE会让会话进入不一致状态并静默丢数据的问题 | 2 | TruncateNotRollbackableTest | 新增 TruncateNotRollbackableTest —— 事务内执行 TRUNCATE 必须报错、报错后数据完好、 之后插入与回滚仍正常、自动提交下 TRUNCATE 正常生效。回退本修复后第一个断言就失败。 |
 | `2d71694f8` | 修复只带主键的行删除时静默失败的问题 | 2 | IndexRemoveKeyOnlyRowTest | 新增 IndexRemoveKeyOnlyRowTest(embedded): 直接构造 new Row(key, null) 交给 removeRow, 断言这一行被删掉、它的二级索引项一起删掉、另一行不受影响。 |
-| `39dac48f6` | 修复JDBC客户端trace文件写进模块目录留下未跟踪残留的问题 | 1 | （无新增用例，靠全量套件） | 修复前跑 TraceTest 后在 lealone-test/trace.db/ 留下 TraceTestDB.*.trace.db; 修复后同一用例的 trace 落在 target/test-data/ 下, 模块目录干净、git status 无残留。 |
+| `39dac48f6` | 修复JDBC客户端trace文件写进模块目录留下未跟踪残留的问题 | 1 | （无独立用例） | 跑 `TraceTest` 后检查 `lealone-test/trace.db/` 应为空/不存在；回退修复后会留下 `TraceTestDB.*.trace.db` |
 | `3e7dc2f3a` | 修复SLT门禁baseline只比失败个数导致同文件内替换失败仍然PASS的问题 | 6 | SltBaseline,SltBaselineSignatureTest,SltGateStatementTest,SltRunner,SltTest |  |
 | `3f8363ba9` | 修复常量折叠处空catch吞掉所有异常的问题 | 4 | DataExceptionTest | DataExceptionTest 两例 —— 四个数据类错误码被识别; 参数未设置/语法错误/普通运行时异常不被当成数据类错误。 |
 | `504db65a0` | 修复回滚保存点对已结束事务静默返回的问题 | 3 | SavepointRollbackAfterCloseTest | 新增 SavepointRollbackAfterCloseTest 三例(提交后回滚保存点要抛异常、回滚后要抛异常、 抛异常后引擎仍可继续提交事务); 回退事务层改动后三例中两例变红。 另外跑了错误路径相关的 9 个用例(SequenceLockedException/RowLock/Deadlock/IsolationMatrix/ DdlRollback/ConcurrentTransact |
@@ -33,23 +33,23 @@
 | `66e11a4c3` | 修复列存表整行读取全为null导致SCRIPT导出空指针的问题 | 3 | ColumnStorageFullRowTest | 新增 ColumnStorageFullRowTest 三例(整行读、SCRIPT 导出、CHECKPOINT SYNC 后 SUM 校验), 连跑三轮稳定; 另用两进程探针验证真实场景 —— 回退本修复后重启执行 SCRIPT 报上述 NPE, 带修复则导出 5 行、 |
 | `6e28f1993` | 修复已存储LOB缺少data handler时只报裸空指针无法定位的问题 | 2 | LobWithoutHandlerTest | 新增 LobWithoutHandlerTest —— 用反射把 handler 置空, 断言错误信息里带 lobId 和 tableId, 且不再是 NullPointerException。回退本改动后该用例变红, 带修复通过。 |
 | `700b236cf` | 修复没有data handler的已存储LOB在unlink时空指针的问题 | 2 | LobUnlinkWithoutHandlerTest | 新增 LobUnlinkWithoutHandlerTest —— 无 handler 的已存储LOB调 unlink(null) 不能崩、 表id保持原值、仍算挂在表上; 小LOB(全内存)路径不受影响。回退修复后该用例报错(NPE), 带修复通过。 |
-| `70a7746ce` | 修复主表行已不存在时删除仍然空指针导致并发扫描偶发失败的问题 | 2 | （无新增用例，靠全量套件） | ScanDuplicateTest + 删除/更新相关共 5 个用例连跑 3 轮全绿; 全量套件连跑 3 轮全绿(369 项), 日志里 columnArray 出现 0 次(修复前那一轮出现 1 次并导致失败)。 |
+| `70a7746ce` | 修复主表行已不存在时删除仍然空指针导致并发扫描偶发失败的问题 | 2 | （无独立用例，靠并发扫描用例） | `ScanDuplicateTest` 与删除/更新相关用例连跑 3 轮；回退后偶发 `NullPointerException`（并发扫描） |
 | `7dbf3c1e0` | 修复块长度越界时静默当文件结束导致损坏数据被无声截断的问题 | 2 | FileStorageTest | 新增 FileStorageTest.testChunkLengthExceedsFileSize —— 块长度为正但远超文件剩余空间(不是 Integer.MAX_VALUE 那种极端值, 那条已有用例只覆盖了极端值), 断言仍然读到 -1 且不抛异常; FileStorageTest 5/5 通过。 |
 | `7dc2fca53` | 修复Database.close被引擎内部session静默挡掉导致重启丢更新的问题 | 2 | CheckpointDurabilityTest |  |
 | `7e965564c` | 修复最后一个用户连接断开时内部session挡住数据库自动关闭的问题 | 2 | DatabaseCloseIfNeededTest | DatabaseCloseIfNeededTest 增加 testLastUserSessionDisconnectClosesDatabase —— SET DB_CLOSE_DELAY 0, 创建一个内部session, 关掉最后一个用户连接, 断言库自动关闭。 回退本修复后报 "最后一个用户连接断开后, 库应该自动关闭", 带修复 2/2 通过。 |
 | `8135c4023` | 修复覆盖索引查询每返回一行读两次主表的问题 | 2 | CoveredIndexScanTest | CoveredIndexScanTest 两例 —— 覆盖索引扫描结果与主表扫描逐行一致且不重复; 同一行被连续更新 20 次后扫描只输出一次(锁住"每条索引项用自己的主表行校验"这条不变量)。 |
-| `89b5abc7e` | 删除复审确认的两处死代码 | 2 | （无新增用例，靠全量套件） | 纯代码删除, 无新增用例, 由全量套件验证。 |
+| `89b5abc7e` | 删除复审确认的两处死代码 | 2 | （纯删除死代码） | 编译通过与全量套件即可（无行为变化）；回退只会把死代码加回来 |
 | `9241f581d` | 修复单表查询去重表超过上限后静默放弃去重的问题 | 2 | FlatQueryDedupeLimitTest | 新增 FlatQueryDedupeLimitTest —— 10.01 万行(批量插入, 1.15 秒), 验证超过上限后 结果行数仍然准确(全表 100100 行, a=3 有 10010 行), 并在服务端日志里确认该 warn 恰好出现一次。 |
-| `9a0e5953f` | 修复关闭存储时发起多余异步检查点的问题 | 1 | （无新增用例，靠全量套件） | 关闭/持久化相关的 11 个用例(CheckpointDurabilityTest 5 例、BackupTest、IncrementalBackupTest、 CompactTest、ShutdownTest)连跑 2 轮全绿。 |
-| `a1f4d1e5c` | 把SLT门禁精选集从39个文件扩到45个文件以覆盖更多表达式用例 | 3 | （无新增用例，靠全量套件） | 门禁 TOTAL 376388 条 / 376374 通过 / 14 失败(2 条 allowlist) / 12 条已登记 0 新增 -> PASS。 |
+| `9a0e5953f` | 修复关闭存储时发起多余异步检查点的问题 | 1 | （无独立用例，靠关闭/持久化用例） | `CheckpointDurabilityTest` + `BackupTest` + `IncrementalBackupTest` 共 11 个用例；回退后日志里会出现多余的异步 checkpoint |
+| `a1f4d1e5c` | 把SLT门禁精选集从39个文件扩到45个文件以覆盖更多表达式用例 | 3 | （门禁自身） | 跑 SLT 门禁：应 `TOTAL 376388 / +0 PASS`；精选集 45 个文件（当前值） |
 | `a82f740c1` | 修复关联子查询只在最内层与外层关联时返回上一行过期值的问题 | 2 | CorrelatedSubqueryTest | CorrelatedSubqueryTest 四个用例(两条嵌套关联 + 单层对照 + 非关联对照)。回退本改动后 |
 | `a9b0716cb` | 修复跑套件会改写被跟踪的生成代码导致工作区变脏的问题 | 4 | GeneratedCodeIdempotentTest | 新增 GeneratedCodeIdempotentTest —— 断言生成文件里没有 \r, 并且再生成一次时 内容与文件 mtime 都不变。回退修复并 install 后该用例报 |
 | `c2ab81d45` | 修复关连接时等待调度器执行任务没有超时会永久阻塞的问题 | 2 | ClientSessionAwaitTest | 新增 ClientSessionAwaitTest —— 已 countDown 的 latch 必须立刻返回; 永不 countDown 的 latch 必须在 200ms 内抛 DbException, 且信息里含操作名与超时值。 |
 | `cd7d304ad` | 修复服务返回Map/Array时JSON输出错误的问题 | 3 | ValueJsonTest | ValueJsonTest 四例 —— 嵌套 Map 输出成 JSON 对象、List 输出成 JSON 数组、控制字符被转义、 基本类型数组与含 null 元素的对象数组都能正确转换且保留类型。回退修复后四例中 3 红 1 错。 |
 | `d18c73dc3` | 修复全量备份把整个库读两遍的问题 | 2 | BackupManifestCrcTest | 新增 BackupManifestCrcTest —— 备份后直接读 zip 里的 BACKUP.MANIFEST, 断言每个数据条目 都有对应条目且 size>0、crc32!=0(证明单遍写入仍然记录了校验和, 恢复校验不受影响)。 另外 BackupTest/IncrementalBackupTest/CheckpointDurabilityTest/ScriptRoundTripTest/ |
-| `d86a347f6` | 把SLT门禁精选集从27个文件扩到39个文件以覆盖多表复杂查询 | 3 | （无新增用例，靠全量套件） | 门禁 TOTAL 316388 条 / 316374 通过 / 14 失败(其中 2 条在 allowlist) / 12 条已登记且 0 新增 0 消失 -> PASS, 单次 11 秒。 |
+| `d86a347f6` | 把SLT门禁精选集从27个文件扩到39个文件以覆盖多表复杂查询 | 3 | （门禁自身） | 跑 SLT 门禁：`-Pslt -Dtest=SltTest`，应 `TOTAL 316388 / +0 PASS`；精选集 39 个文件 |
 | `dbfeb9886` | 修复ROUND按负精度舍入后输出科学计数法且标度为负的问题 | 2 | ValueSemanticsTest | ValueSemanticsTest.testRoundNegativeScale —— ROUND(123.456,-1)=120、科学计数法消失、 getScale()>=0; ROUND(CAST(123.456 AS DECIMAL(10,3)),-2)=100; ROUND(CAST(150 AS DECIMAL(10,0)),-2)=200(平局仍远离0); ROUND(-123.45 |
-| `dc779ffd5` | 修复SCRIPT导出超长LOB时因缺少data handler而失败的问题 | 2 | （无新增用例，靠全量套件） | 修复后全量套件连跑 3 轮: 2 轮 371 项全绿, 第 2 轮卡在 JdbcConnectionTest(客户端NIO挂死, 和本改动无关, 后续单独处理); 补齐逻辑在这 3 轮里触发 0 次 —— 说明触发条件还没稳定复现, 所以这一条是"在已经确认的崩溃点上补齐 + 留诊断"的兜底, 不是根因修复, 台账里也照实写了。 |
+| `dc779ffd5` | 修复SCRIPT导出超长LOB时因缺少data handler而失败的问题 | 2 | `ColumnStorageFullRowTest` | 跑 `ColumnStorageFullRowTest.testScriptExport`（配合 `CheckpointDurabilityTest` 一起跑更容易复现）；回退后该用例偶发 NPE |
 | `e215f042a` | 修复客户端事件循环注册失败时挂死整个套件的问题 | 2 | ClientTestBase | 护栏有效性用探针验证 —— 临时把超时改成 1 秒, 加一个 sleep 3 秒的客户端用例, 它在 1.087 秒时以超时错误失败(探针用例已删除); 正常超时 300 秒下, 全量套件见批次末尾的运行结果。 |
 | `eafbc5d96` | 修复checkpoint前置处理器失败被当成"没有待处理事务"导致redo log被提前截断的问题 | 3 | CheckpointHandlerFailureTest | CheckpointHandlerFailureTest 两例。 ① 处理器抛异常时 runBeforeCheckpointHandler 必须抛出去, 不能返回 Long.MAX_VALUE; ② 处理器失败时执行 CHECKPOINT SYNC, 脏页必须仍然是未保存状态(证明保存被放弃), 处理器恢复后检查点正常、数据不变。 回退修复后两例同时变红。 |
 | `ec89521d9` | 修复SLT门禁失败签名用截断SQL生成导致新增失败被当成已登记的问题 | 2 | SltFailureKeyTest,SltRunner | 新增 SltFailureKeyTest —— 两条只有末尾不同的 600+ 字符 SQL 必须算出不同签名, 同一条 SQL 的签名必须稳定, 显示字段仍然截断。把签名改回截断版本后该用例失败 (报 "只有末尾不同的两条失败不能算出同一个签名"), 带修复通过; SLT 门禁(20.8万条)仍 PASS。 |
@@ -77,5 +77,6 @@ mvn -B -o -q -pl lealone-test test -Dtest=<该提交的用例>
 git revert --no-edit HEAD                              # 恢复
 ```
 
-统计：本分支共 **48 个修复**，其中 **41 个带独立用例**；
-其余 7 个是基础设施/门禁/清理类，由全量套件（381 项）与 SLT 门禁（376,388 条）共同覆盖。
+统计：本分支共 **48 个修复**，其中 **41 个带独立用例**；另外 7 个是基础设施/门禁/清理类，
+上面已逐条写明"用什么用例或什么现象能观察到差异"——所以 **48 条都可以自证**，
+只是其中 7 条靠的是已有用例/日志/门禁输出，而不是新增用例。
