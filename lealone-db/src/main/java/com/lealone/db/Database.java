@@ -1133,7 +1133,9 @@ public class Database extends DbObjectBase implements DataHandler {
             }
         }
 
-        if (userSessions.isEmpty() && session != systemSession) {
+        // 和 closeIfNeeded() 一样, 只数真正的用户连接: 引擎内部session(表分析、异步索引)
+        // 还挂在这个库上时, 最后一个用户连接断开也必须能触发自动关闭, 否则库永远不关
+        if (getUserSessionCount() == 0 && session != systemSession) {
             if (closeDelay == 0) {
                 close(false);
             } else if (closeDelay < 0) {
