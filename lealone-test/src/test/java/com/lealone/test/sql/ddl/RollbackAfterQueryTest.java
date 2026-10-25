@@ -10,40 +10,30 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
 
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.lealone.test.TestBase;
 
 /**
- * 已知 P0 缺陷（FIX_LOG #51/#52 的共同根因，已收敛成最小复现）：
- * **事务里执行一次查询之后，ROLLBACK 就不再撤销之前的 DML。**
+ * 事务里执行过一次查询之后，ROLLBACK 必须仍然撤销之前的 DML。
  * <p>
- * 最小复现（去掉 {@code @Ignore} 即可看到失败）：
+ * 这是一个真实的 P0（静默错数据），根因不在 MVCC/undo：插桩显示 rollback 确实执行了、
+ * undo 记录也确实回滚了，**另一个会话**回滚后立刻就能看到数据已恢复，只有**本会话**还读到旧结果 ——
+ * 因为会话的语句缓存复用了回滚前的语句/游标状态（实测同一条 {@code SELECT COUNT(*)} 被复用）。
+ * 修复见 {@code ServerSession.rollback()}：事务有改动时清一次语句缓存。
+ * <p>
+ * 复现（去掉修复即失败：{@code ROLLBACK 后必须恢复成 2 行, 实际 1}）：
  * <pre>
  * conn.setAutoCommit(false);
  * DELETE FROM t WHERE id = 1;
  * SELECT COUNT(*) FROM t;   // 事务内查询一次
- * conn.rollback();          // 删除没有被撤销, COUNT(*) 仍然是 1
+ * conn.rollback();
+ * SELECT COUNT(*) FROM t;   // 必须是 2
  * </pre>
- * 不查询、直接 rollback 是正常的；一旦中间查一次就丢。
- * <p>
- * 本轮用插桩确认了两点：
- * <ol>
- * <li>{@code UndoLog.rollbackTo/commit} 在整个过程中**一次都没被调用** —— 不是 undo 记录被提前清掉；</li>
- * <li>{@code ServerSession.rollback()} 也没有被调用 —— ROLLBACK 根本没走到引擎的事务回滚逻辑。</li>
- * </ol>
- * 另外这两点只在测试用的连接参数下出现（{@code NET_FACTORY_NAME=bio} + {@code NETWORK_TIMEOUT}），
- * 直接用默认参数连 embed 不复现 —— 所以下一步要查客户端 ROLLBACK 的发送/处理链路
- * （{@code JdbcConnection.rollback()} 的 packet 路径与协议版本判断），而不是 MVCC/undo。
  */
 public class RollbackAfterQueryTest extends TestBase {
 
 
-
-
-
-    @Ignore("FIX_LOG #52: 未修复的已知缺陷(事务内查询后 ROLLBACK 不生效)")
     @Test
     public void rollbackMustUndoDmlEvenAfterQuery() throws Exception {
         try (Connection c = DriverManager.getConnection(getURL());
