@@ -42,6 +42,7 @@ public class RollbackAfterQueryTest extends TestBase {
 
 
 
+
     @Ignore("FIX_LOG #52: 未修复的已知缺陷(事务内查询后 ROLLBACK 不生效)")
     @Test
     public void rollbackMustUndoDmlEvenAfterQuery() throws Exception {
