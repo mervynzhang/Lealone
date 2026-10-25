@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -486,12 +487,36 @@ public class Service extends SchemaObjectBase {
                 new File(path).mkdirs();
             }
             Charset utf8 = Charset.forName("UTF-8");
-            BufferedOutputStream file = new BufferedOutputStream(
-                    new FileOutputStream(path + className + ".java"));
-            file.write(code.toString().getBytes(utf8));
+            byte[] bytes = code.toString().getBytes(utf8);
+            File target = new File(path + className + ".java");
+            // 内容没变就不重写: 代码生成会在每次测试跑时执行, 无谓重写除了改mtime,
+            // 还会让"跑一遍套件就把工作区弄脏"(跟踪的生成文件被整篇替换)以及只读检出直接失败
+            if (target.exists() && target.length() == bytes.length
+                    && sameContent(target, bytes)) {
+                return;
+            }
+            BufferedOutputStream file = new BufferedOutputStream(new FileOutputStream(target));
+            file.write(bytes);
             file.close();
         } catch (IOException e) {
             throw DbException.convertIOException(e, "Failed to write file, path = " + path);
+        }
+    }
+
+    private static boolean sameContent(File file, byte[] bytes) throws IOException {
+        if (file.length() != bytes.length)
+            return false;
+        try (InputStream in = new FileInputStream(file)) {
+            byte[] buff = new byte[8192];
+            int pos = 0;
+            int read;
+            while ((read = in.read(buff)) > 0) {
+                for (int i = 0; i < read; i++)
+                    if (buff[i] != bytes[pos + i])
+                        return false;
+                pos += read;
+            }
+            return pos == bytes.length;
         }
     }
 

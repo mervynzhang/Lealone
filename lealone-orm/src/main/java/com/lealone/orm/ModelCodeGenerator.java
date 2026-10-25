@@ -103,7 +103,7 @@ public class ModelCodeGenerator extends TableCodeGeneratorBase {
                 fields.append(", ");
                 fields.append(getTypeName(mc.value, importSet));
             }
-            fields.append("> ").append(columnName).append(";\r\n");
+            fields.append("> ").append(columnName).append(";\n");
 
             // 例如: id = new PLong<>("id", this);
             initFields.append("        ").append(columnName).append(" = new ")
@@ -114,7 +114,7 @@ public class ModelCodeGenerator extends TableCodeGeneratorBase {
                 MapColumn mc = (MapColumn) c;
                 initFields.append(", ").append(getTypeName(mc.key, importSet)).append(".class");
             }
-            initFields.append(");\r\n");
+            initFields.append(");\n");
             if (fieldNames.length() > 0) {
                 fieldNames.append(", ");
             }
@@ -138,43 +138,43 @@ public class ModelCodeGenerator extends TableCodeGeneratorBase {
                 String ownerClassName = CreateService.toClassName(owner.getName());
                 // add方法，增加单个model实例
                 amBuff.append("    public ").append(className).append(" add").append(ownerClassName)
-                        .append("(").append(ownerClassName).append(" m) {\r\n");
-                amBuff.append("        m.set").append(refTableClassName).append("(this);\r\n");
-                amBuff.append("        super.addModel(m);\r\n");
-                amBuff.append("        return this;\r\n");
-                amBuff.append("    }\r\n");
-                amBuff.append("\r\n");
+                        .append("(").append(ownerClassName).append(" m) {\n");
+                amBuff.append("        m.set").append(refTableClassName).append("(this);\n");
+                amBuff.append("        super.addModel(m);\n");
+                amBuff.append("        return this;\n");
+                amBuff.append("    }\n");
+                amBuff.append("\n");
 
                 // add方法，增加多个model实例
                 amBuff.append("    public ").append(className).append(" add").append(ownerClassName)
-                        .append("(").append(ownerClassName).append("... mArray) {\r\n");
-                amBuff.append("        for (").append(ownerClassName).append(" m : mArray)\r\n");
-                amBuff.append("            add").append(ownerClassName).append("(m);\r\n");
-                amBuff.append("        return this;\r\n");
-                amBuff.append("    }\r\n");
-                amBuff.append("\r\n");
+                        .append("(").append(ownerClassName).append("... mArray) {\n");
+                amBuff.append("        for (").append(ownerClassName).append(" m : mArray)\n");
+                amBuff.append("            add").append(ownerClassName).append("(m);\n");
+                amBuff.append("        return this;\n");
+                amBuff.append("    }\n");
+                amBuff.append("\n");
 
                 // get list方法
                 amBuff.append("    public List<").append(ownerClassName).append("> get")
-                        .append(ownerClassName).append("List() {\r\n");
+                        .append(ownerClassName).append("List() {\n");
                 amBuff.append("        return super.getModelList(").append(ownerClassName)
-                        .append(".class);\r\n");
-                amBuff.append("    }\r\n");
-                amBuff.append("\r\n");
+                        .append(".class);\n");
+                amBuff.append("    }\n");
+                amBuff.append("\n");
 
                 // Adder类
                 IndexColumn[] refColumns = ref.getRefColumns();
                 IndexColumn[] columns = ref.getColumns();
                 adderBuff.append("    protected class ").append(ownerClassName)
                         .append("Adder implements AssociateAdder<").append(ownerClassName)
-                        .append("> {\r\n");
-                adderBuff.append("        @Override\r\n");
-                adderBuff.append("        public ").append(ownerClassName).append(" getDao() {\r\n");
-                adderBuff.append("            return ").append(ownerClassName).append(".dao;\r\n");
-                adderBuff.append("        }\r\n");
-                adderBuff.append("\r\n");
-                adderBuff.append("        @Override\r\n");
-                adderBuff.append("        public void add(").append(ownerClassName).append(" m) {\r\n");
+                        .append("> {\n");
+                adderBuff.append("        @Override\n");
+                adderBuff.append("        public ").append(ownerClassName).append(" getDao() {\n");
+                adderBuff.append("            return ").append(ownerClassName).append(".dao;\n");
+                adderBuff.append("        }\n");
+                adderBuff.append("\n");
+                adderBuff.append("        @Override\n");
+                adderBuff.append("        public void add(").append(ownerClassName).append(" m) {\n");
                 adderBuff.append("            if (");
                 for (int i = 0; i < columns.length; i++) {
                     if (i != 0) {
@@ -187,12 +187,12 @@ public class ModelCodeGenerator extends TableCodeGeneratorBase {
                     adderBuff.append("areEqual(").append(refColumnName).append(", m.").append(columnName)
                             .append(")");
                 }
-                adderBuff.append(") {\r\n");
-                adderBuff.append("                add").append(ownerClassName).append("(m);\r\n");
-                adderBuff.append("            }\r\n");
-                adderBuff.append("        }\r\n");
-                adderBuff.append("    }\r\n");
-                adderBuff.append("\r\n");
+                adderBuff.append(") {\n");
+                adderBuff.append("                add").append(ownerClassName).append("(m);\n");
+                adderBuff.append("            }\n");
+                adderBuff.append("        }\n");
+                adderBuff.append("    }\n");
+                adderBuff.append("\n");
 
                 // new Adder()
                 if (adderInitBuff.length() > 0)
@@ -203,21 +203,21 @@ public class ModelCodeGenerator extends TableCodeGeneratorBase {
 
                 // 引用表字段
                 fields.append("    private ").append(refTableClassName).append(" ").append(refTableVar)
-                        .append(";\r\n");
+                        .append(";\n");
 
                 // get方法
                 amBuff.append("    public ").append(refTableClassName).append(" get")
-                        .append(refTableClassName).append("() {\r\n");
-                amBuff.append("        return ").append(refTableVar).append(";\r\n");
-                amBuff.append("    }\r\n");
-                amBuff.append("\r\n");
+                        .append(refTableClassName).append("() {\n");
+                amBuff.append("        return ").append(refTableVar).append(";\n");
+                amBuff.append("    }\n");
+                amBuff.append("\n");
 
                 // set方法
                 amBuff.append("    public ").append(className).append(" set").append(refTableClassName)
                         .append("(").append(refTableClassName).append(" ").append(refTableVar)
-                        .append(") {\r\n");
+                        .append(") {\n");
                 amBuff.append("        this.").append(refTableVar).append(" = ").append(refTableVar)
-                        .append(";\r\n");
+                        .append(";\n");
 
                 IndexColumn[] refColumns = ref.getRefColumns();
                 IndexColumn[] columns = ref.getColumns();
@@ -227,24 +227,24 @@ public class ModelCodeGenerator extends TableCodeGeneratorBase {
                     String refColumnName = CamelCaseHelper
                             .toCamelFromUnderscore(refColumns[i].column.getName());
                     amBuff.append("        this.").append(columnName).append(".set(").append(refTableVar)
-                            .append(".").append(refColumnName).append(".get());\r\n");
+                            .append(".").append(refColumnName).append(".get());\n");
                 }
-                amBuff.append("        return this;\r\n");
-                amBuff.append("    }\r\n");
-                amBuff.append("\r\n");
+                amBuff.append("        return this;\n");
+                amBuff.append("    }\n");
+                amBuff.append("\n");
 
                 // Setter类
                 setterBuff.append("    protected class ").append(refTableClassName)
                         .append("Setter implements AssociateSetter<").append(refTableClassName)
-                        .append("> {\r\n");
-                setterBuff.append("        @Override\r\n");
-                setterBuff.append("        public ").append(refTableClassName).append(" getDao() {\r\n");
-                setterBuff.append("            return ").append(refTableClassName).append(".dao;\r\n");
-                setterBuff.append("        }\r\n");
-                setterBuff.append("\r\n");
-                setterBuff.append("        @Override\r\n");
+                        .append("> {\n");
+                setterBuff.append("        @Override\n");
+                setterBuff.append("        public ").append(refTableClassName).append(" getDao() {\n");
+                setterBuff.append("            return ").append(refTableClassName).append(".dao;\n");
+                setterBuff.append("        }\n");
+                setterBuff.append("\n");
+                setterBuff.append("        @Override\n");
                 setterBuff.append("        public boolean set(").append(refTableClassName)
-                        .append(" m) {\r\n");
+                        .append(" m) {\n");
                 setterBuff.append("            if (");
                 for (int i = 0; i < columns.length; i++) {
                     if (i != 0) {
@@ -257,14 +257,14 @@ public class ModelCodeGenerator extends TableCodeGeneratorBase {
                     setterBuff.append("areEqual(").append(columnName).append(", m.")
                             .append(refColumnName).append(")");
                 }
-                setterBuff.append(") {\r\n");
-                setterBuff.append("                set").append(refTableClassName).append("(m);\r\n");
-                setterBuff.append("                return true;\r\n");
-                setterBuff.append("            }\r\n");
-                setterBuff.append("            return false;\r\n");
-                setterBuff.append("        }\r\n");
-                setterBuff.append("    }\r\n");
-                setterBuff.append("\r\n");
+                setterBuff.append(") {\n");
+                setterBuff.append("                set").append(refTableClassName).append("(m);\n");
+                setterBuff.append("                return true;\n");
+                setterBuff.append("            }\n");
+                setterBuff.append("            return false;\n");
+                setterBuff.append("        }\n");
+                setterBuff.append("    }\n");
+                setterBuff.append("\n");
 
                 // new Setter()
                 if (setterInitBuff.length() > 0)
@@ -276,45 +276,45 @@ public class ModelCodeGenerator extends TableCodeGeneratorBase {
         /////////////////////////// 以下是生成model类的相关代码 ///////////////////////////
 
         StringBuilder buff = new StringBuilder();
-        buff.append("package ").append(packageName).append(";\r\n\r\n");
+        buff.append("package ").append(packageName).append(";\n\n");
         for (String p : importSet) {
-            buff.append("import ").append(p).append(";\r\n");
+            buff.append("import ").append(p).append(";\n");
         }
-        buff.append("\r\n");
-        buff.append("/**\r\n");
-        buff.append(" * Model for table '").append(tableName).append("'.\r\n");
-        buff.append(" *\r\n");
-        buff.append(" * THIS IS A GENERATED OBJECT, DO NOT MODIFY THIS CLASS.\r\n");
-        buff.append(" */\r\n");
+        buff.append("\n");
+        buff.append("/**\n");
+        buff.append(" * Model for table '").append(tableName).append("'.\n");
+        buff.append(" *\n");
+        buff.append(" * THIS IS A GENERATED OBJECT, DO NOT MODIFY THIS CLASS.\n");
+        buff.append(" */\n");
         // 例如: public class Customer extends Model<Customer> {
         buff.append("public class ").append(className).append(" extends Model<").append(className)
-                .append("> {\r\n");
-        buff.append("\r\n");
+                .append("> {\n");
+        buff.append("\n");
 
         // static create 方法
-        // buff.append(" public static ").append(className).append(" create(String url) {\r\n");
-        // buff.append(" ModelTable t = new ModelTable(url, ").append(tableFullName).append(");\r\n");
-        // buff.append(" return new ").append(className).append("(t, REGULAR_MODEL);\r\n");
-        // buff.append(" }\r\n");
-        // buff.append("\r\n");
+        // buff.append(" public static ").append(className).append(" create(String url) {\n");
+        // buff.append(" ModelTable t = new ModelTable(url, ").append(tableFullName).append(");\n");
+        // buff.append(" return new ").append(className).append("(t, REGULAR_MODEL);\n");
+        // buff.append(" }\n");
+        // buff.append("\n");
 
         // static dao字段
         String daoName = table.getParameter(TableSetting.DAO_NAME.name());
         if (daoName == null)
             daoName = "dao";
         buff.append("    public static final ").append(className).append(" ").append(daoName)
-                .append(" = new ").append(className).append("(null, ROOT_DAO);\r\n");
-        buff.append("\r\n");
+                .append(" = new ").append(className).append("(null, ROOT_DAO);\n");
+        buff.append("\n");
 
         // 字段
         buff.append(fields);
-        buff.append("\r\n");
+        buff.append("\n");
 
         // 默认构造函数
-        buff.append("    public ").append(className).append("() {\r\n");
-        buff.append("        this(null, REGULAR_MODEL);\r\n");
-        buff.append("    }\r\n");
-        buff.append("\r\n");
+        buff.append("    public ").append(className).append("() {\n");
+        buff.append("        this(null, REGULAR_MODEL);\n");
+        buff.append("    }\n");
+        buff.append("\n");
 
         String tableFullName = "\"" + db.getName() + "\", \"" + schema.getName() + "\", \"" + tableName
                 + "\"";
@@ -323,30 +323,30 @@ public class ModelCodeGenerator extends TableCodeGeneratorBase {
         }
         String jsonFormatName = table.getParameter(TableSetting.JSON_FORMAT.name());
         // 内部构造函数
-        buff.append("    private ").append(className).append("(ModelTable t, short modelType) {\r\n");
+        buff.append("    private ").append(className).append("(ModelTable t, short modelType) {\n");
         buff.append("        super(t == null ? new ModelTable(").append(tableFullName)
-                .append(") : t, modelType);\r\n");
+                .append(") : t, modelType);\n");
         buff.append(initFields);
         if (jsonFormatName != null)
-            buff.append("        super.setJsonFormat(\"").append(jsonFormatName).append("\");\r\n");
+            buff.append("        super.setJsonFormat(\"").append(jsonFormatName).append("\");\n");
         buff.append("        super.setModelProperties(new ModelProperty[] { ").append(fieldNames)
-                .append(" });\r\n");
+                .append(" });\n");
         if (setterInitBuff.length() > 0) {
-            buff.append("        super.initSetters(").append(setterInitBuff).append(");\r\n");
+            buff.append("        super.initSetters(").append(setterInitBuff).append(");\n");
         }
         if (adderInitBuff.length() > 0) {
-            buff.append("        super.initAdders(").append(adderInitBuff).append(");\r\n");
+            buff.append("        super.initAdders(").append(adderInitBuff).append(");\n");
         }
-        buff.append("    }\r\n");
-        buff.append("\r\n");
+        buff.append("    }\n");
+        buff.append("\n");
 
         // newInstance方法
-        buff.append("    @Override\r\n");
+        buff.append("    @Override\n");
         buff.append("    protected ").append(className)
-                .append(" newInstance(ModelTable t, short modelType) {\r\n");
-        buff.append("        return new ").append(className).append("(t, modelType);\r\n");
-        buff.append("    }\r\n");
-        buff.append("\r\n");
+                .append(" newInstance(ModelTable t, short modelType) {\n");
+        buff.append("        return new ").append(className).append("(t, modelType);\n");
+        buff.append("    }\n");
+        buff.append("\n");
 
         // associate method
         buff.append(amBuff);
@@ -362,14 +362,14 @@ public class ModelCodeGenerator extends TableCodeGeneratorBase {
         }
 
         // static decode方法
-        buff.append("    public static ").append(className).append(" decode(Object obj) {\r\n");
-        buff.append("        return decode(obj, null);\r\n");
-        buff.append("    }\r\n\r\n");
+        buff.append("    public static ").append(className).append(" decode(Object obj) {\n");
+        buff.append("        return decode(obj, null);\n");
+        buff.append("    }\n\n");
         buff.append("    public static ").append(className)
-                .append(" decode(Object obj, JsonFormat format) {\r\n");
-        buff.append("        return new ").append(className).append("().decode0(obj, format);\r\n");
-        buff.append("    }\r\n");
-        buff.append("}\r\n");
+                .append(" decode(Object obj, JsonFormat format) {\n");
+        buff.append("        return new ").append(className).append("().decode0(obj, format);\n");
+        buff.append("    }\n");
+        buff.append("}\n");
 
         writeFile(table.getCodePath(), packageName, className, buff);
         if (CreateService.isAgentEnabled(session)) {
