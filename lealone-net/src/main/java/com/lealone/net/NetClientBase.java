@@ -132,8 +132,12 @@ public abstract class NetClientBase implements NetClient {
     protected void initSocket(Socket socket, Map<String, String> config) throws SocketException {
         int socketRecvBuffer = MapUtils.getInt(config, ConnectionSetting.SOCKET_RECV_BUFFER_SIZE.name(),
                 16 * 1024);
+        // 8k 太小: 批量 INSERT 一个请求动辄几十到几百 KB, 发送缓冲区只有 8k 时
+        // 客户端会在一次 write 里被拆成很多个 8k 小块, 每块都要等对端 ACK 腾出空间,
+        // 正好撞上 TCP 延迟 ACK 的 40ms, 100k 行 × 85 字符的批量插入会从 0.6s 退化到 ~20s。
+        // 64k 足够让常见批量请求一次进缓冲区, 单个连接的内核缓冲区上限也只增加 56k。
         int socketSendBuffer = MapUtils.getInt(config, ConnectionSetting.SOCKET_SEND_BUFFER_SIZE.name(),
-                8 * 1024);
+                64 * 1024);
         socket.setReceiveBufferSize(socketRecvBuffer);
         socket.setSendBufferSize(socketSendBuffer);
         socket.setTcpNoDelay(true);
