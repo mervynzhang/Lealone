@@ -1,0 +1,211 @@
+/*
+ * Copyright Lealone Database Group.
+ * Licensed under the Server Side Public License, v 1.
+ * Initial Developer: zhh
+ */
+package com.lealone.sql.expression.condition;
+
+import com.lealone.common.util.StatementBuilder;
+import com.lealone.db.Database;
+import com.lealone.db.session.ServerSession;
+import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueArray;
+import com.lealone.db.value.ValueBoolean;
+import com.lealone.db.value.ValueNull;
+import com.lealone.db.value.ValueString;
+import com.lealone.sql.expression.Expression;
+import com.lealone.sql.expression.ValueExpression;
+import com.lealone.sql.expression.visitor.ExpressionVisitor;
+
+/**
+ * A quantified comparison, as in {@code expr = ANY(array)} or {@code expr <> ALL(array)}.
+ * <p>
+ * The right side may be an array value, or a comma separated string. The latter is needed by
+ * PostgreSQL metadata queries: pgjdbc sends {@code n.nspname = ANY(current_schemas(true))}, and
+ * the PostgreSQL compatibility plugin implements current_schemas() as a function returning a
+ * comma separated string.
+ * <p>
+ * NULL is handled with SQL three-valued logic: ANY is TRUE as soon as one element matches,
+ * otherwise UNKNOWN if any element is NULL, otherwise FALSE. ALL is FALSE as soon as one element
+ * does not match, otherwise UNKNOWN if any element is NULL, otherwise TRUE. An empty array gives
+ * FALSE for ANY and TRUE for ALL (even if the left side is NULL).
+ */
+public class ConditionAny extends Condition {
+
+    private final Database database;
+    private Expression left;
+    private Expression right;
+    // true: ALL, false: ANY (or the equivalent SOME)
+    private final boolean all;
+    private final int compareType;
+
+    private static final Value[] EMPTY = new Value[0];
+
+    public ConditionAny(Database database, Expression left, Expression right, boolean all,
+            int compareType) {
+        this.database = database;
+        this.left = left;
+        this.right = right;
+        this.all = all;
+        this.compareType = compareType;
+    }
+
+    public Expression getLeft() {
+        return left;
+    }
+
+    public Expression getRight() {
+        return right;
+    }
+
+    public boolean isAll() {
+        return all;
+    }
+
+    public int getCompareType() {
+        return compareType;
+    }
+
+    @Override
+    public Value getValue(ServerSession session) {
+        Value l = left.getValue(session);
+        Value r = right.getValue(session);
+        Value[] values = toValueList(r);
+        if (values == null) {
+            // 右侧整体是 NULL，无法判定
+            return ValueNull.INSTANCE;
+        }
+        if (values.length == 0) {
+            // 空数组: ANY 恒为 FALSE，ALL 恒为 TRUE
+            return ValueBoolean.get(all);
+        }
+        if (l == ValueNull.INSTANCE) {
+            return ValueNull.INSTANCE;
+        }
+        // 行值(row value)的相等比较要走三值逻辑，跟 ConditionIn 保持一致
+        boolean rowValue = l instanceof ValueArray;
+        boolean hasNull = false;
+        boolean result = all;
+        for (Value v : values) {
+            if (v == ValueNull.INSTANCE) {
+                hasNull = true;
+                continue;
+            }
+            boolean compared;
+            if (rowValue && v instanceof ValueArray) {
+                Value cmp = Comparison.compareRowValue(database, (ValueArray) l, (ValueArray) v,
+                        compareType);
+                if (cmp == ValueNull.INSTANCE) {
+                    hasNull = true;
+                    continue;
+                }
+                compared = cmp.getBoolean();
+            } else {
+                compared = Comparison.compareNotNull(database, l, v.convertTo(l.getType()),
+                        compareType);
+            }
+            if (all) {
+                if (!compared) {
+                    result = false;
+                    break;
+                }
+            } else if (compared) {
+                result = true;
+                break;
+            }
+        }
+        if (hasNull && result == all) {
+            // 没有能决定结果的元素，但存在 NULL 元素
+            return ValueNull.INSTANCE;
+        }
+        return ValueBoolean.get(result);
+    }
+
+    /**
+     * Convert the right side to a list of values.
+     *
+     * @return null if the right side is NULL
+     */
+    private static Value[] toValueList(Value v) {
+        if (v == ValueNull.INSTANCE) {
+            return null;
+        }
+        if (v instanceof ValueArray) {
+            return ((ValueArray) v).getList();
+        }
+        int type = v.getType();
+        if (type == Value.STRING || type == Value.STRING_IGNORECASE
+                || type == Value.STRING_FIXED) {
+            String s = v.getString();
+            if (s.isEmpty()) {
+                return EMPTY;
+            }
+            String[] parts = s.split(",", -1);
+            Value[] values = new Value[parts.length];
+            for (int i = 0; i < parts.length; i++) {
+                values[i] = ValueString.get(parts[i].trim());
+            }
+            return values;
+        }
+        // 其它标量当成只含一个元素的集合
+        return new Value[] { v };
+    }
+
+    @Override
+    public Expression optimize(ServerSession session) {
+        left = left.optimize(session);
+        right = right.optimize(session);
+        if (left.isConstant() && right.isConstant()) {
+            return ValueExpression.get(getValue(session));
+        }
+        return this;
+    }
+
+    @Override
+    public void getSQL(StatementBuilder sql) {
+        sql.enBegin();
+        left.getSQL(sql);
+        sql.append(' ').append(Comparison.getCompareOperator(compareType));
+        sql.append(all ? " ALL(" : " ANY(");
+        right.getSQL(sql);
+        sql.append(')');
+        sql.enEnd();
+    }
+
+    @Override
+    public int getCost() {
+        return left.getCost() + right.getCost() + 1;
+    }
+
+    /**
+     * NOT (expr op ANY(...)) is expr not-op ALL(...), and vice versa.
+     */
+    @Override
+    public Expression getNotIfPossible(ServerSession session) {
+        return new ConditionAny(database, left, right, !all, getNotCompareType());
+    }
+
+    private int getNotCompareType() {
+        switch (compareType) {
+        case Comparison.EQUAL:
+            return Comparison.NOT_EQUAL;
+        case Comparison.NOT_EQUAL:
+            return Comparison.EQUAL;
+        case Comparison.BIGGER_EQUAL:
+            return Comparison.SMALLER;
+        case Comparison.BIGGER:
+            return Comparison.SMALLER_EQUAL;
+        case Comparison.SMALLER_EQUAL:
+            return Comparison.BIGGER;
+        case Comparison.SMALLER:
+            return Comparison.BIGGER_EQUAL;
+        default:
+            return compareType;
+        }
+    }
+
+    @Override
+    public <R> R accept(ExpressionVisitor<R> visitor) {
+        return visitor.visitConditionAny(this);
+    }
+}

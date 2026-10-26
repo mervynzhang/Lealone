@@ -162,6 +162,7 @@ import com.lealone.sql.expression.aggregate.JavaAggregate;
 import com.lealone.sql.expression.condition.CompareLike;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
+import com.lealone.sql.expression.condition.ConditionAny;
 import com.lealone.sql.expression.condition.ConditionExists;
 import com.lealone.sql.expression.condition.ConditionIn;
 import com.lealone.sql.expression.condition.ConditionInSelect;
@@ -2190,13 +2191,23 @@ public class SQLParserBase implements SQLParser {
                 read();
                 if (readIf("ALL")) {
                     read("(");
-                    Query query = parseSelect();
-                    r = new ConditionInSelect(database, r, query, true, compareType);
+                    if (isSelect()) {
+                        Query query = parseSelect();
+                        r = new ConditionInSelect(database, r, query, true, compareType);
+                    } else {
+                        // 数组值或逗号分隔字符串，如 ID <> ALL('1,2,3')
+                        r = new ConditionAny(database, r, readConcat(), true, compareType);
+                    }
                     read(")");
                 } else if (readIf("ANY") || readIf("SOME")) {
                     read("(");
-                    Query query = parseSelect();
-                    r = new ConditionInSelect(database, r, query, false, compareType);
+                    if (isSelect()) {
+                        Query query = parseSelect();
+                        r = new ConditionInSelect(database, r, query, false, compareType);
+                    } else {
+                        // pgjdbc: n.nspname = ANY(current_schemas(true))
+                        r = new ConditionAny(database, r, readConcat(), false, compareType);
+                    }
                     read(")");
                 } else {
                     Expression right = readConcat();

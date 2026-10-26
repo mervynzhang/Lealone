@@ -25,6 +25,7 @@ import com.lealone.sql.expression.aggregate.JavaAggregate;
 import com.lealone.sql.expression.condition.CompareLike;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
+import com.lealone.sql.expression.condition.ConditionAny;
 import com.lealone.sql.expression.condition.ConditionExists;
 import com.lealone.sql.expression.condition.ConditionIn;
 import com.lealone.sql.expression.condition.ConditionInConstantSet;
@@ -131,6 +132,13 @@ public class VoidExpressionVisitor extends ExpressionVisitorBase<Void> {
 
     @Override
     public Void visitConditionAndOr(ConditionAndOr e) {
+        e.getLeft().accept(this);
+        e.getRight().accept(this);
+        return null;
+    }
+
+    @Override
+    public Void visitConditionAny(ConditionAny e) {
         e.getLeft().accept(this);
         e.getRight().accept(this);
         return null;

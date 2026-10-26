@@ -25,6 +25,7 @@ import com.lealone.sql.expression.aggregate.JavaAggregate;
 import com.lealone.sql.expression.condition.CompareLike;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
+import com.lealone.sql.expression.condition.ConditionAny;
 import com.lealone.sql.expression.condition.ConditionExists;
 import com.lealone.sql.expression.condition.ConditionIn;
 import com.lealone.sql.expression.condition.ConditionInConstantSet;
@@ -121,6 +122,11 @@ public abstract class BooleanExpressionVisitor extends ExpressionVisitorBase<Boo
 
     @Override
     public Boolean visitConditionAndOr(ConditionAndOr e) {
+        return e.getLeft().accept(this) && e.getRight().accept(this);
+    }
+
+    @Override
+    public Boolean visitConditionAny(ConditionAny e) {
         return e.getLeft().accept(this) && e.getRight().accept(this);
     }
 

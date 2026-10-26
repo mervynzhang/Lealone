@@ -22,6 +22,7 @@ import com.lealone.sql.expression.aggregate.JavaAggregate;
 import com.lealone.sql.expression.condition.CompareLike;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
+import com.lealone.sql.expression.condition.ConditionAny;
 import com.lealone.sql.expression.condition.ConditionExists;
 import com.lealone.sql.expression.condition.ConditionIn;
 import com.lealone.sql.expression.condition.ConditionInConstantSet;
@@ -73,6 +74,8 @@ public interface ExpressionVisitor<R> {
     R visitComparison(Comparison e);
 
     R visitConditionAndOr(ConditionAndOr e);
+
+    R visitConditionAny(ConditionAny e);
 
     R visitConditionExists(ConditionExists e);
 
