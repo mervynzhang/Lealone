@@ -205,6 +205,14 @@ public class NioEventLoop implements NetEventLoop {
                     if (packetLength == -1) { // 上次连packetLength都没有读出来，先计算packetLength
                         packetLength = conn.getPacketLength(buffer);
                         inBuffer.recycle();
+                        // 这里要区分"包头没读全"和"payload长度就是0"：
+                        // 读完包头后packetLength == 0表示这个包已经完整，必须马上交给conn.handle，
+                        // 不能留到下面用 packetLength != 0 来判断是否还有未处理的包，
+                        // 否则这个包会被当成"还没读到packetLength"而永久丢掉。
+                        // 不能改用某个特殊值记状态，因为0是合法的payload长度。
+                        checkPacketLength(maxPacketSize, packetLength);
+                        if (packetLength == 0)
+                            conn.handle(this.inputBuffer, false);
                     } else {
                         conn.handle(inBuffer, false);
                         inBuffer.recycle();
@@ -597,6 +605,10 @@ public class NioEventLoop implements NetEventLoop {
     }
 
     public static void checkPacketLength(int maxPacketSize, int packetLength) throws IOException {
+        // 负长度(比如PG包头里length < 4)会让后面 buffer.position() 往回退，
+        // 把payload/后续包头当成本包的包头重新解析，必须当成协议错误拒绝。
+        if (packetLength < 0)
+            throw new IOException("Invalid packet length: " + packetLength);
         if (packetLength > maxPacketSize)
             throw new IOException(
                     "Packet too large, maxPacketSize: " + maxPacketSize + ", receive: " + packetLength);
