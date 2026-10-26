@@ -7,9 +7,18 @@ package com.lealone.test.sql.expression;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import org.junit.Test;
 
+import com.lealone.client.jdbc.JdbcConnection;
+import com.lealone.common.exceptions.DbException;
+import com.lealone.common.util.StatementBuilder;
+import com.lealone.db.session.ServerSession;
+import com.lealone.sql.expression.Expression;
+import com.lealone.sql.query.Select;
 import com.lealone.test.sql.SqlAssertTestBase;
 
 /**
@@ -162,5 +171,94 @@ public class ConditionAnyTest extends SqlAssertTestBase {
             executeUpdate("DROP TABLE IF EXISTS PG_CATALOG.PG_TYPE");
             executeUpdate("DROP TABLE IF EXISTS PG_CATALOG.PG_NAMESPACE");
         }
+    }
+
+    /**
+     * CREATE VIEW / CTE 存的是条件表达式的 getSQL()（经由 Select.getPlanSQL），
+     * 所以 getSQL() 必须能打印出可重新解析的 ANY/ALL。
+     * <p>
+     * 回归：以前 ExpressionList 的括号会被 Select.getPlanSQL 的 setEnclosed(false) 吞掉，
+     * ANY((1, 3)) 被打印成 ANY(1, 3)，于是视图能建成功、一查就报语法错
+     * （CTE 同理）。这里既验证视图/CTE 的端到端结果，也直接重新解析 getSQL() 文本。
+     */
+    @Test
+    public void viewAndCteRoundTrip() throws Exception {
+        executeUpdate("DROP VIEW IF EXISTS condition_any_v");
+        executeUpdate("DROP VIEW IF EXISTS condition_any_v_all");
+        executeUpdate("DROP VIEW IF EXISTS condition_any_v_row");
+        executeUpdate("DROP TABLE IF EXISTS condition_any_rt");
+        executeUpdate("CREATE TABLE condition_any_rt(id int primary key, name varchar(10))");
+        executeUpdate("INSERT INTO condition_any_rt VALUES(1, 'a')");
+        executeUpdate("INSERT INTO condition_any_rt VALUES(2, 'b')");
+        executeUpdate("INSERT INTO condition_any_rt VALUES(3, 'c')");
+        try {
+            // 视图：ANY + IN 列表形式
+            executeUpdate("CREATE VIEW condition_any_v AS SELECT id, name FROM condition_any_rt "
+                    + "WHERE id = ANY((1, 3))");
+            assertEquals(Arrays.asList(1, 3), intColumn("SELECT id FROM condition_any_v ORDER BY id"));
+
+            // 视图：<> ALL
+            executeUpdate("CREATE VIEW condition_any_v_all AS SELECT id FROM condition_any_rt "
+                    + "WHERE id <> ALL((1, 3))");
+            assertEquals(Arrays.asList(2), intColumn("SELECT id FROM condition_any_v_all"));
+
+            // 视图：行值(row value)的 ANY
+            executeUpdate("CREATE VIEW condition_any_v_row AS SELECT id FROM condition_any_rt "
+                    + "WHERE (id, name) = ANY(((1, 'a'), (3, 'c')))");
+            assertEquals(Arrays.asList(1, 3), intColumn("SELECT id FROM condition_any_v_row ORDER BY id"));
+
+            // CTE：同样会保存/重新解析 getPlanSQL
+            assertEquals(Arrays.asList(1, 3), intColumn("WITH cte AS (SELECT id FROM condition_any_rt "
+                    + "WHERE id = ANY((1, 3))) SELECT id FROM cte ORDER BY id"));
+            assertEquals(Arrays.asList(2), intColumn("WITH cte AS (SELECT id FROM condition_any_rt "
+                    + "WHERE id <> ALL((1, 3))) SELECT id FROM cte"));
+            // CTE + 窗口函数：两个 getPlanSQL 修复点一起走一遍
+            assertEquals(Arrays.asList(1, 2, 3), intColumn("WITH cte AS (SELECT id, "
+                    + "ROW_NUMBER() OVER (ORDER BY id) AS rn FROM condition_any_rt "
+                    + "WHERE id = ANY((1, 2, 3))) SELECT rn FROM cte ORDER BY id"));
+
+            // 直接断言 getSQL() 能被重新 parse：把条件 SQL 拼回一条完整的 SELECT 再执行
+            ServerSession session = (ServerSession) ((JdbcConnection) conn).getSession();
+            Select select = (Select) session.prepareStatement("SELECT * FROM condition_any_rt "
+                    + "WHERE id = ANY((1, 3, 5))");
+            String conditionSQL = conditionSQL(select.getCondition());
+            assertTrue("ANY((1, 3, 5)) must keep its own parentheses: " + conditionSQL,
+                    conditionSQL.contains("ANY((1, 3, 5))"));
+            assertEquals(2L, queryObject("SELECT COUNT(*) FROM condition_any_rt WHERE "
+                    + conditionSQL));
+
+            // 逗号分隔字符串的右侧不能被多加括号含义变化
+            select = (Select) session.prepareStatement("SELECT * FROM condition_any_rt "
+                    + "WHERE id = ANY('1, 3')");
+            conditionSQL = conditionSQL(select.getCondition());
+            assertTrue(conditionSQL, conditionSQL.contains("ANY('1, 3')"));
+            assertEquals(2L, queryObject("SELECT COUNT(*) FROM condition_any_rt WHERE "
+                    + conditionSQL));
+        } finally {
+            executeUpdate("DROP VIEW IF EXISTS condition_any_v");
+            executeUpdate("DROP VIEW IF EXISTS condition_any_v_all");
+            executeUpdate("DROP VIEW IF EXISTS condition_any_v_row");
+            executeUpdate("DROP TABLE IF EXISTS condition_any_rt");
+        }
+    }
+
+    /** 按 Select.getPlanSQL 的方式打印条件（顶层不加外层括号），用于验证可重新解析 */
+    private static String conditionSQL(Expression condition) {
+        StatementBuilder buff = new StatementBuilder();
+        buff.setEnclosed(false);
+        condition.getSQL(buff);
+        return buff.toString();
+    }
+
+    private List<Integer> intColumn(String querySql) {
+        List<Integer> list = new ArrayList<>();
+        try (ResultSet r = stmt.executeQuery(querySql)) {
+            while (r.next()) {
+                list.add(r.getInt(1));
+            }
+        } catch (java.sql.SQLException e) {
+            throw DbException.convert(e);
+        }
+        return list;
     }
 }

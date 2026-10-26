@@ -164,12 +164,25 @@ public class ConditionAny extends Condition {
     @Override
     public void getSQL(StatementBuilder sql) {
         sql.enBegin();
-        left.getSQL(sql);
+        // 左右两侧都单独用一个 enclosed=true 的 builder 打印。
+        // Select.getPlanSQL 会在打印 WHERE 之前调用 setEnclosed(false)（避免整个条件多一层括号），
+        // 如果直接写在外层 builder 里，ExpressionList（行值/数组构造）自己的括号会被吞掉：
+        //   (ID, NAME) = ANY(((1, 'a')))  ->  ID, NAME = ANY((1, 'a'))
+        //   ID = ANY((1, 3))             ->  ID = ANY(1, 3)
+        // 而 CREATE VIEW / CTE 存的正是这条 plan SQL，重新解析时要么语法错、要么列找不到。
+        appendExpression(sql, left);
         sql.append(' ').append(Comparison.getCompareOperator(compareType));
         sql.append(all ? " ALL(" : " ANY(");
-        right.getSQL(sql);
+        appendExpression(sql, right);
         sql.append(')');
         sql.enEnd();
+    }
+
+    private static void appendExpression(StatementBuilder sql, Expression e) {
+        StatementBuilder buff = new StatementBuilder();
+        buff.setDistributed(sql.isDistributed());
+        e.getSQL(buff);
+        sql.append(buff.toString());
     }
 
     @Override
