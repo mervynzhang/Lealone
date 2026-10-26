@@ -399,4 +399,55 @@ public class WindowFunctionTest extends SqlAssertTestBase {
         // 不支持的窗口函数名
         assertSqlFails("SELECT LEAD(v) OVER (ORDER BY id) FROM window_t");
     }
+
+    /**
+     * 窗口函数只能出现在 SELECT 的列里。以前 DML/DDL 里的 OVER 会被当成普通表达式求值成 NULL：
+     * {@code UPDATE ... SET v = RANK() OVER ()} 会把 v 全部写成 NULL，
+     * {@code DELETE ... WHERE ROW_NUMBER() OVER () = 1} 会静默删掉一行。
+     * 这些必须全部变成明确的语法错误，绝不能静默改数据。
+     */
+    @Test
+    public void testWindowFunctionOutsideSelectIsSyntaxError() throws Exception {
+        initTable();
+        // 先记下原始数据，任何一条非法语句都不允许改动它
+        List<String> before = snapshotRows();
+
+        // UPDATE SET / INSERT VALUES
+        assertSqlFails("UPDATE window_t SET v = RANK() OVER ()");
+        assertSqlFails("INSERT INTO window_t VALUES(6, 1, RANK() OVER ())");
+        assertSqlFails("INSERT INTO window_t(id, k, v) VALUES(6, 1, DENSE_RANK() OVER (ORDER BY id))");
+        assertSqlFails("INSERT INTO window_t VALUES(6, 1, SUM(v) OVER ())");
+        // UPDATE / DELETE 的 WHERE
+        assertSqlFails("UPDATE window_t SET v = 0 WHERE RANK() OVER () = 1");
+        assertSqlFails("UPDATE window_t SET v = 0 WHERE ROW_NUMBER() OVER () = 1");
+        assertSqlFails("DELETE FROM window_t WHERE ROW_NUMBER() OVER () = 1");
+        assertSqlFails("DELETE FROM window_t WHERE RANK() OVER (PARTITION BY k) = 1");
+        // CHECK 约束（建表时和 ALTER TABLE 时）
+        assertSqlFails("CREATE TABLE window_check_t(id int, CHECK (RANK() OVER () = 1))");
+        executeUpdate("DROP TABLE IF EXISTS window_check_t");
+        executeUpdate("CREATE TABLE window_check_t(id int)");
+        assertSqlFails("ALTER TABLE window_check_t ADD CONSTRAINT window_c1 "
+                + "CHECK (ROW_NUMBER() OVER () = 1)");
+        executeUpdate("DROP TABLE IF EXISTS window_check_t");
+
+        // 所有非法语句都解析失败，数据必须原封不动（既没有写 NULL，也没有被删）
+        assertEquals(before, snapshotRows());
+
+        // 但窗口函数在 SELECT 列里、以及 INSERT ... SELECT 里必须继续可用
+        assertEquals(Arrays.asList(1, 2, 3, 4, 5),
+                column("SELECT ROW_NUMBER() OVER (ORDER BY id) AS rn FROM window_t", 1));
+        executeUpdate("INSERT INTO window_t SELECT id + 100, k, RANK() OVER (ORDER BY id) "
+                + "FROM window_t");
+        assertEquals(Arrays.asList(1, 2, 3, 4, 5),
+                column("SELECT v FROM window_t WHERE id > 100 ORDER BY id", 1));
+    }
+
+    /** 把整张表读成 "id/v" 字符串列表，避免用 Object[] 的引用相等做断言 */
+    private List<String> snapshotRows() {
+        List<String> list = new ArrayList<>();
+        for (Object[] row : rows("SELECT id, v FROM window_t ORDER BY id")) {
+            list.add(row[0] + "/" + row[1]);
+        }
+        return list;
+    }
 }

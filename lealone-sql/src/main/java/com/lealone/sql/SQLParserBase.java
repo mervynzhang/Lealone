@@ -2393,8 +2393,17 @@ public class SQLParserBase implements SQLParser {
      *
      * @param wf 已经创建好的窗口函数节点
      * @param emptyWindowReplacement 窗口为空时替换成的表达式（ROW_NUMBER() OVER () 兼容老实现）
+     * @throws DbException 语法错误：OVER 出现在 SELECT 之外（DML 的 SET/VALUES/WHERE、CHECK 约束等）
      */
     protected Expression readOver(WindowFunction wf, StatementBase emptyWindowReplacement) {
+        // 窗口函数的值依赖整个分区，只有 SELECT 执行器会先物化所有行再回填窗口列。
+        // DML/DDL 里没有这个阶段，以前会解析成一个求值为 NULL 的普通表达式：
+        //   UPDATE t SET v = RANK() OVER ()                -> v 全写成 NULL
+        //   DELETE FROM t WHERE ROW_NUMBER() OVER () = 1   -> 静默删掉一行
+        // 静默写坏数据比报错严重得多，所以这里直接拒绝。
+        if (currentSelect == null) {
+            throw getSyntaxError();
+        }
         read("OVER");
         read("(");
         if (readIf(")")) {
