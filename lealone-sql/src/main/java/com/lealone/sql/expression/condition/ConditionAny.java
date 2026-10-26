@@ -5,7 +5,10 @@
  */
 package com.lealone.sql.expression.condition;
 
+import java.util.ArrayList;
+
 import com.lealone.common.util.StatementBuilder;
+import com.lealone.common.util.StringUtils;
 import com.lealone.db.Database;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
@@ -14,6 +17,7 @@ import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueNull;
 import com.lealone.db.value.ValueString;
 import com.lealone.sql.expression.Expression;
+import com.lealone.sql.expression.ExpressionList;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.visitor.ExpressionVisitor;
 
@@ -38,6 +42,9 @@ public class ConditionAny extends Condition {
     // true: ALL, false: ANY (or the equivalent SOME)
     private final boolean all;
     private final int compareType;
+    // 右侧是常量时只预处理一次，避免每行重新 split/trim
+    private Value[] cachedValues;
+    private boolean valuesCached;
 
     private static final Value[] EMPTY = new Value[0];
 
@@ -69,8 +76,7 @@ public class ConditionAny extends Condition {
     @Override
     public Value getValue(ServerSession session) {
         Value l = left.getValue(session);
-        Value r = right.getValue(session);
-        Value[] values = toValueList(r);
+        Value[] values = valuesCached ? cachedValues : toValueList(right.getValue(session));
         if (values == null) {
             // 右侧整体是 NULL，无法判定
             return ValueNull.INSTANCE;
@@ -140,10 +146,12 @@ public class ConditionAny extends Condition {
             if (s.isEmpty()) {
                 return EMPTY;
             }
-            String[] parts = s.split(",", -1);
+            // StringUtils.arraySplit(s, ',', true) 一次性完成 split+trim，比每行
+            // split() 再逐个 trim() 少一次数组复制，也不产生中间 String[] 之外的对象
+            String[] parts = StringUtils.arraySplit(s, ',', true);
             Value[] values = new Value[parts.length];
             for (int i = 0; i < parts.length; i++) {
-                values[i] = ValueString.get(parts[i].trim());
+                values[i] = ValueString.get(parts[i]);
             }
             return values;
         }
@@ -158,7 +166,49 @@ public class ConditionAny extends Condition {
         if (left.isConstant() && right.isConstant()) {
             return ValueExpression.get(getValue(session));
         }
+        if (right.isConstant() || isConstantList(right)) {
+            Value r = right.getValue(session);
+            if (r != ValueNull.INSTANCE) {
+                cachedValues = toValueList(r);
+                valuesCached = true;
+                // 常量数组的 = ANY(...) 改写成 IN(...)：这样优化器能像 IN 一样用主键/索引，
+                // 而不是因为不认识 ConditionAny 退回 tableScan（ConditionIn 会进一步
+                // 优化成 ConditionInConstantSet）。<> ALL 等其它比较符保留原节点，
+                // 语义完全一致。
+                // 行值(左侧是数组)的 IN 打印还有独立的括号问题，这里保守地只改写普通标量比较
+                if (!all && compareType == Comparison.EQUAL && left.getType() != Value.ARRAY) {
+                    if (cachedValues.length == 0) {
+                        return ValueExpression.get(ValueBoolean.get(false));
+                    }
+                    ArrayList<Expression> valueExpressions = new ArrayList<>(cachedValues.length);
+                    for (Value v : cachedValues) {
+                        valueExpressions.add(ValueExpression.get(v));
+                    }
+                    return new ConditionIn(database, left, valueExpressions).optimize(session);
+                }
+            }
+        }
         return this;
+    }
+
+    /**
+     * ExpressionList 的 isConstant() 恒为 false（行值构造器不能整体折叠），
+     * 但所有元素都是常量时仍然可以在优化阶段改写成 IN。
+     */
+    private static boolean isConstantList(Expression e) {
+        if (!(e instanceof ExpressionList)) {
+            return false;
+        }
+        for (Expression element : ((ExpressionList) e).getList()) {
+            if (element instanceof ExpressionList) {
+                if (!isConstantList(element)) {
+                    return false;
+                }
+            } else if (!element.isConstant()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override

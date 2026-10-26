@@ -119,8 +119,9 @@ public class ConditionAnyTest extends SqlAssertTestBase {
         // 含 NULL 且不命中：UNKNOWN 被 WHERE 过滤掉，不能算成命中
         assertQueryEquals(1L, "SELECT COUNT(*) FROM condition_any_t WHERE id = ANY((2, NULL))");
         assertQueryEquals(0L, "SELECT COUNT(*) FROM condition_any_t WHERE id = ANY((9, NULL))");
-        // getSQL() 要能打印出 ANY(...)，供 EXPLAIN/重编译使用
-        assertPlanContains("SELECT * FROM condition_any_t WHERE id = ANY((1, 2, 3))", "ANY(");
+        // 常量数组在优化阶段改写成 IN(...)（这样能用索引），非常量右侧仍打印 ANY(...)
+        assertPlanContains("SELECT * FROM condition_any_t WHERE id = ANY((1, 2, 3))", "IN(");
+        assertPlanContains("SELECT * FROM condition_any_t WHERE id = ANY(csv)", "ANY(");
 
         // 逗号分隔字符串参数
         try (PreparedStatement ps = conn
@@ -186,6 +187,7 @@ public class ConditionAnyTest extends SqlAssertTestBase {
         executeUpdate("DROP VIEW IF EXISTS condition_any_v");
         executeUpdate("DROP VIEW IF EXISTS condition_any_v_all");
         executeUpdate("DROP VIEW IF EXISTS condition_any_v_row");
+        executeUpdate("DROP VIEW IF EXISTS condition_any_v_dyn");
         executeUpdate("DROP TABLE IF EXISTS condition_any_rt");
         executeUpdate("CREATE TABLE condition_any_rt(id int primary key, name varchar(10))");
         executeUpdate("INSERT INTO condition_any_rt VALUES(1, 'a')");
@@ -207,6 +209,18 @@ public class ConditionAnyTest extends SqlAssertTestBase {
                     + "WHERE (id, name) = ANY(((1, 'a'), (3, 'c')))");
             assertEquals(Arrays.asList(1, 3), intColumn("SELECT id FROM condition_any_v_row ORDER BY id"));
 
+            // 视图：右侧不是常量的行值 ANY（不会被改写成 IN，必须保留 ANY 的括号）
+            executeUpdate("DROP VIEW IF EXISTS condition_any_v_dyn");
+            executeUpdate("CREATE VIEW condition_any_v_dyn AS SELECT id FROM condition_any_rt "
+                    + "WHERE (id, name) = ANY(((id, name), (3, 'c')))");
+            assertEquals(Arrays.asList(1, 2, 3),
+                    intColumn("SELECT id FROM condition_any_v_dyn ORDER BY id"));
+
+            // 常量数组的 ANY 在 optimize 里改写成 IN 后也要能用主键索引，而不是 tableScan
+            String plan = explain("SELECT * FROM condition_any_rt WHERE id = ANY((1, 3))");
+            assertTrue(plan, plan.contains("IN("));
+            assertFalse(plan, plan.contains("tableScan"));
+
             // CTE：同样会保存/重新解析 getPlanSQL
             assertEquals(Arrays.asList(1, 3), intColumn("WITH cte AS (SELECT id FROM condition_any_rt "
                     + "WHERE id = ANY((1, 3))) SELECT id FROM cte ORDER BY id"));
@@ -219,25 +233,42 @@ public class ConditionAnyTest extends SqlAssertTestBase {
 
             // 直接断言 getSQL() 能被重新 parse：把条件 SQL 拼回一条完整的 SELECT 再执行
             ServerSession session = (ServerSession) ((JdbcConnection) conn).getSession();
+            // 非常量右侧：ConditionAny 保持原样，ExpressionList 的括号必须打印出来
             Select select = (Select) session.prepareStatement("SELECT * FROM condition_any_rt "
-                    + "WHERE id = ANY((1, 3, 5))");
+                    + "WHERE id = ANY((id + 1, id))");
             String conditionSQL = conditionSQL(select.getCondition());
-            assertTrue("ANY((1, 3, 5)) must keep its own parentheses: " + conditionSQL,
-                    conditionSQL.contains("ANY((1, 3, 5))"));
+            assertTrue("right side ExpressionList must keep its parentheses: " + conditionSQL,
+                    conditionSQL.contains("ANY(("));
+            assertEquals(3L, queryObject("SELECT COUNT(*) FROM condition_any_rt WHERE "
+                    + conditionSQL));
+
+            select = (Select) session.prepareStatement("SELECT * FROM condition_any_rt "
+                    + "WHERE (id, name) = ANY(((id, name), (3, 'c')))");
+            conditionSQL = conditionSQL(select.getCondition());
+            assertTrue("both sides must keep their parentheses: " + conditionSQL,
+                    conditionSQL.contains("ANY((") && conditionSQL.startsWith("(ID, NAME)"));
+            assertEquals(3L, queryObject("SELECT COUNT(*) FROM condition_any_rt WHERE "
+                    + conditionSQL));
+
+            // 常量数组/逗号分隔字符串被优化成 IN，仍然必须可重新解析且语义不变
+            select = (Select) session.prepareStatement("SELECT * FROM condition_any_rt "
+                    + "WHERE id = ANY((1, 3, 5))");
+            conditionSQL = conditionSQL(select.getCondition());
+            assertTrue(conditionSQL, conditionSQL.contains("IN("));
             assertEquals(2L, queryObject("SELECT COUNT(*) FROM condition_any_rt WHERE "
                     + conditionSQL));
 
-            // 逗号分隔字符串的右侧不能被多加括号含义变化
             select = (Select) session.prepareStatement("SELECT * FROM condition_any_rt "
                     + "WHERE id = ANY('1, 3')");
             conditionSQL = conditionSQL(select.getCondition());
-            assertTrue(conditionSQL, conditionSQL.contains("ANY('1, 3')"));
+            assertTrue(conditionSQL, conditionSQL.contains("IN("));
             assertEquals(2L, queryObject("SELECT COUNT(*) FROM condition_any_rt WHERE "
                     + conditionSQL));
         } finally {
             executeUpdate("DROP VIEW IF EXISTS condition_any_v");
             executeUpdate("DROP VIEW IF EXISTS condition_any_v_all");
             executeUpdate("DROP VIEW IF EXISTS condition_any_v_row");
+            executeUpdate("DROP VIEW IF EXISTS condition_any_v_dyn");
             executeUpdate("DROP TABLE IF EXISTS condition_any_rt");
         }
     }
