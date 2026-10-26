@@ -19,6 +19,7 @@ import com.lealone.sql.expression.SequenceValue;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.Variable;
 import com.lealone.sql.expression.Wildcard;
+import com.lealone.sql.expression.WindowFunction;
 import com.lealone.sql.expression.aggregate.AGroupConcat;
 import com.lealone.sql.expression.aggregate.Aggregate;
 import com.lealone.sql.expression.aggregate.JavaAggregate;
@@ -164,6 +165,28 @@ public abstract class BooleanExpressionVisitor extends ExpressionVisitorBase<Boo
     @Override
     public Boolean visitConditionNot(ConditionNot e) {
         return e.getCondition().accept(this);
+    }
+
+    @Override
+    public Boolean visitWindowFunction(WindowFunction e) {
+        if (e.getOn() != null && !e.getOn().accept(this)) {
+            return false;
+        }
+        if (e.getPartitionBy() != null) {
+            for (Expression e2 : e.getPartitionBy()) {
+                if (!e2.accept(this)) {
+                    return false;
+                }
+            }
+        }
+        if (e.getOrderBy() != null) {
+            for (SelectOrderBy o : e.getOrderBy()) {
+                if (o.expression != null && !o.expression.accept(this)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     @Override

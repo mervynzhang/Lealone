@@ -156,8 +156,10 @@ import com.lealone.sql.expression.SequenceValue;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.Variable;
 import com.lealone.sql.expression.Wildcard;
+import com.lealone.sql.expression.WindowFunction;
 import com.lealone.sql.expression.aggregate.AGroupConcat;
 import com.lealone.sql.expression.aggregate.Aggregate;
+import com.lealone.sql.expression.aggregate.BuiltInAggregate;
 import com.lealone.sql.expression.aggregate.JavaAggregate;
 import com.lealone.sql.expression.condition.CompareLike;
 import com.lealone.sql.expression.condition.Comparison;
@@ -2311,6 +2313,7 @@ public class SQLParserBase implements SQLParser {
         if (currentSelect == null) {
             throw getSyntaxError();
         }
+        boolean wasGroupQuery = currentSelect.isGroupQuery();
         currentSelect.setGroupQuery();
         Expression r;
         if (aggregateType == Aggregate.COUNT) {
@@ -2358,7 +2361,101 @@ public class SQLParserBase implements SQLParser {
             r = Aggregate.create(aggregateType, readExpression(), currentSelect, distinct);
         }
         read(")");
+        if (isToken("OVER")) {
+            // 窗口聚合：<聚合函数>(...) OVER (...)
+            // 它不是分组聚合，所以要把 readAggregate 开头设置的 isGroupQuery 还原
+            // COUNT(*) 解析出来的 aggregateType 是 Aggregate.COUNT，
+            // 而节点本身是 ACountAll，真正的类型要看 getAType()
+            BuiltInAggregate agg = (BuiltInAggregate) r;
+            WindowFunction wf = WindowFunction.fromAggregate(agg.getAType(), agg, agg.isDistinct());
+            currentSelect.setGroupQuery(wasGroupQuery);
+            return readOver(wf, null);
+        }
         return r;
+    }
+
+    // 聚合函数名到窗口聚合函数的映射，返回 -1 表示不是聚合函数
+    private int getRankWindowType(String name) {
+        if (equalsToken("RANK", name)) {
+            return WindowFunction.RANK;
+        }
+        if (equalsToken("DENSE_RANK", name)) {
+            return WindowFunction.DENSE_RANK;
+        }
+        return -1;
+    }
+
+    /**
+     * 解析 OVER (...) 子句。
+     * <p>
+     * 支持 {@code OVER ()}、{@code OVER (PARTITION BY ...)}、{@code OVER (ORDER BY ...)} 以及两者组合；
+     * 窗口帧（ROWS/RANGE/GROUPS）和命名窗口不支持，遇到时明确报错。
+     *
+     * @param wf 已经创建好的窗口函数节点
+     * @param emptyWindowReplacement 窗口为空时替换成的表达式（ROW_NUMBER() OVER () 兼容老实现）
+     */
+    protected Expression readOver(WindowFunction wf, StatementBase emptyWindowReplacement) {
+        read("OVER");
+        read("(");
+        if (readIf(")")) {
+            if (emptyWindowReplacement != null) {
+                return new Rownum(emptyWindowReplacement);
+            }
+            markWindowFunctionParsed();
+            return wf;
+        }
+        markWindowFunctionParsed();
+        if (readIf("PARTITION")) {
+            read("BY");
+            ArrayList<Expression> partitionBy = Utils.newSmallArrayList();
+            do {
+                partitionBy.add(readExpression());
+            } while (readIf(","));
+            wf.setPartitionBy(partitionBy);
+        }
+        if (readIf("ORDER")) {
+            read("BY");
+            wf.setOrderBy(readWindowOrderList());
+        }
+        if (!readIf(")")) {
+            // ROWS/RANGE/GROUPS 帧
+            throw DbException.getUnsupportedException("window frame clause (ROWS/RANGE/GROUPS)");
+        }
+        return wf;
+    }
+
+    private void markWindowFunctionParsed() {
+        Select select = currentSelect;
+        if (select == null && currentStatement instanceof Select) {
+            select = (Select) currentStatement;
+        }
+        if (select != null) {
+            select.setWindowFunctionParsed();
+        }
+    }
+
+    // 窗口定义里的 ORDER BY：和普通 ORDER BY 一样支持 ASC/DESC 和 NULLS FIRST/LAST
+    private ArrayList<SelectOrderBy> readWindowOrderList() {
+        ArrayList<SelectOrderBy> orderList = Utils.newSmallArrayList();
+        do {
+            SelectOrderBy order = new SelectOrderBy();
+            order.expression = readExpression();
+            if (readIf("DESC")) {
+                order.descending = true;
+            } else {
+                readIf("ASC");
+            }
+            if (readIf("NULLS")) {
+                if (readIf("FIRST")) {
+                    order.nullsFirst = true;
+                } else {
+                    read("LAST");
+                    order.nullsLast = true;
+                }
+            }
+            orderList.add(order);
+        } while (readIf(","));
+        return orderList;
     }
 
     protected ArrayList<SelectOrderBy> parseSimpleOrderList() {
@@ -2424,6 +2521,14 @@ public class SQLParserBase implements SQLParser {
     }
 
     protected Expression readFunction(Schema schema, String name) {
+        if (schema == null) {
+            // RANK()/DENSE_RANK() 只作为窗口函数支持，它们没有在 SystemFunction 里注册
+            int rankType = getRankWindowType(name);
+            if (rankType > 0) {
+                read(")");
+                return readOver(new WindowFunction(rankType, null), null);
+            }
+        }
         if (schema != null) {
             UserAggregate aggregate = schema.findAggregate(session, name);
             if (aggregate != null) {
@@ -2580,11 +2685,11 @@ public class SQLParserBase implements SQLParser {
             break;
         }
         case SystemFunction.ROW_NUMBER:
+            // ROW_NUMBER() OVER () 还是用原来的 Rownum 实现；
+            // 带 PARTITION BY / ORDER BY 时解析成 WindowFunction
             read(")");
-            read("OVER");
-            read("(");
-            read(")");
-            return new Rownum(currentSelect == null ? currentStatement : currentSelect);
+            return readOver(new WindowFunction(WindowFunction.ROW_NUMBER, null),
+                    currentSelect == null ? currentStatement : currentSelect);
         default:
             if (!readIf(")")) {
                 int i = 0;

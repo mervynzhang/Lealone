@@ -5,6 +5,8 @@
  */
 package com.lealone.sql.query;
 
+import java.util.ArrayList;
+
 import com.lealone.db.result.LocalResult;
 import com.lealone.db.result.ResultTarget;
 import com.lealone.db.row.Row;
@@ -44,6 +46,10 @@ public abstract class QOperator implements Operator {
 
     protected YieldableSelect yieldableSelect;
 
+    // 有窗口函数时，行先缓存到 windowTarget，等全部读完后再计算窗口列
+    private WindowResultTarget windowTarget;
+    private ResultTarget windowRealTarget;
+
     public QOperator(Select select) {
         this.select = select;
         topTableFilter = select.getTopTableFilter();
@@ -67,7 +73,37 @@ public abstract class QOperator implements Operator {
         return yieldableSelect.yieldIfNeeded(rowNumber);
     }
 
+    /**
+     * 打开窗口函数需要的行缓冲：result 先指向缓冲区，等 stop() 时计算完窗口列再写回 to。
+     */
+    public void enableWindowBuffering(ResultTarget to) {
+        windowRealTarget = to;
+        windowTarget = new WindowResultTarget();
+        result = windowTarget;
+    }
+
+    // 计算窗口列并把缓冲的行交给真正的目标(必须在 done()/setLimit 之前)
+    private void flushWindowRows() {
+        if (windowTarget == null) {
+            return;
+        }
+        ArrayList<Value[]> rows = windowTarget.getRows();
+        windowTarget = null;
+        ResultTarget to = windowRealTarget;
+        windowRealTarget = null;
+        if (!rows.isEmpty()) {
+            select.computeWindowFunctions(rows);
+        }
+        for (Value[] row : rows) {
+            to.addRow(row);
+        }
+    }
+
     public boolean canBreakLoop() {
+        // 有窗口函数时必须读完全部行才能计算
+        if (windowTarget != null) {
+            return false;
+        }
         // 不需要排序时，如果超过行数限制了可以退出循环
         if ((select.sort == null || select.sortUsingIndex) && limitRows > 0 && rowCount >= limitRows) {
             return true;
@@ -117,6 +153,7 @@ public abstract class QOperator implements Operator {
 
     @Override
     public void stop() {
+        flushWindowRows();
         if (select.offsetExpr != null) {
             localResult.setOffset(select.offsetExpr.getValue(session).getInt());
         }

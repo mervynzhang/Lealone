@@ -19,6 +19,7 @@ import com.lealone.sql.expression.SequenceValue;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.Variable;
 import com.lealone.sql.expression.Wildcard;
+import com.lealone.sql.expression.WindowFunction;
 import com.lealone.sql.expression.aggregate.AGroupConcat;
 import com.lealone.sql.expression.aggregate.Aggregate;
 import com.lealone.sql.expression.aggregate.JavaAggregate;
@@ -175,6 +176,24 @@ public class VoidExpressionVisitor extends ExpressionVisitorBase<Void> {
     @Override
     public Void visitConditionNot(ConditionNot e) {
         e.getCondition().accept(this);
+        return null;
+    }
+
+    @Override
+    public Void visitWindowFunction(WindowFunction e) {
+        if (e.getOn() != null)
+            e.getOn().accept(this);
+        if (e.getPartitionBy() != null) {
+            for (Expression e2 : e.getPartitionBy()) {
+                e2.accept(this);
+            }
+        }
+        if (e.getOrderBy() != null) {
+            for (SelectOrderBy o : e.getOrderBy()) {
+                if (o.expression != null)
+                    o.expression.accept(this);
+            }
+        }
         return null;
     }
 

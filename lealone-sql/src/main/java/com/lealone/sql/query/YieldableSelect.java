@@ -33,6 +33,10 @@ public class YieldableSelect extends YieldableQueryBase {
         this.select = select;
         this.target = target;
         this.olapThreshold = session.getOlapThreshold();
+        if (select.hasWindowFunctions()) {
+            // 窗口函数要在行缓冲上计算，不能中途切换到 olap 算子
+            disableOlap();
+        }
     }
 
     @Override
@@ -127,6 +131,7 @@ public class YieldableSelect extends YieldableQueryBase {
         QOperator queryOperator;
         int limitRows = getLimitRows(maxRows);
         LocalResult cachedResult = select.resultCache.getResult(maxRows); // 不直接用limitRows
+        boolean fromCache = cachedResult != null;
         if (cachedResult != null) {
             result = cachedResult;
             to = cachedResult;
@@ -159,7 +164,12 @@ public class YieldableSelect extends YieldableQueryBase {
         queryOperator.columnCount = select.expressions.size();
         queryOperator.maxRows = limitRows;
         queryOperator.target = target;
-        queryOperator.result = to;
+        if (select.hasWindowFunctions() && !fromCache) {
+            // 缓存里的行已经算过窗口列了，只有真正要扫描时才需要缓冲
+            queryOperator.enableWindowBuffering(to);
+        } else {
+            queryOperator.result = to;
+        }
         queryOperator.localResult = result;
         queryOperator.yieldableSelect = this;
         return queryOperator;
@@ -203,6 +213,10 @@ public class YieldableSelect extends YieldableQueryBase {
             result = createLocalResult(result);
         }
         if (limitRows >= 0 || select.offsetExpr != null) {
+            result = createLocalResult(result);
+        }
+        if (select.hasWindowFunctions()) {
+            // 窗口函数必须先拿到全部行，强制物化
             result = createLocalResult(result);
         }
         return result;

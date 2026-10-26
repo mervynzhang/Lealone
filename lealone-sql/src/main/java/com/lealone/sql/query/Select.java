@@ -42,6 +42,7 @@ import com.lealone.sql.expression.ExpressionColumn;
 import com.lealone.sql.expression.Parameter;
 import com.lealone.sql.expression.RowVersion;
 import com.lealone.sql.expression.SelectOrderBy;
+import com.lealone.sql.expression.WindowFunction;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
 import com.lealone.sql.expression.visitor.ExpressionVisitor;
@@ -78,6 +79,11 @@ public class Select extends Query {
     int havingIndex;
     HashMap<Expression, Object> currentGroup;
     int currentGroupRowId;
+    // 窗口函数(按 select 列表顺序)，null 表示没有
+    private ArrayList<WindowFunction> windowFunctions;
+    // 解析阶段是否遇到过窗口函数(可能出现在 select 列表之外的位置)。
+    // 用来避免给完全没用到窗口函数的普通查询增加 visitor 遍历开销。
+    private boolean windowFunctionParsed;
     Expression condition;
     int visibleColumnCount;
     int resultColumnCount; // 不包含having和group by中加入的列
@@ -118,6 +124,20 @@ public class Select extends Query {
      */
     public void setGroupQuery() {
         isGroupQuery = true;
+    }
+
+    // 窗口聚合在解析时会先按普通聚合处理(设置了 isGroupQuery)，识别出 OVER 后要还原
+    public void setGroupQuery(boolean isGroupQuery) {
+        this.isGroupQuery = isGroupQuery;
+    }
+
+    public boolean hasWindowFunctions() {
+        return windowFunctions != null && !windowFunctions.isEmpty();
+    }
+
+    // 由 Parser 在解析出窗口函数时调用
+    public void setWindowFunctionParsed() {
+        windowFunctionParsed = true;
     }
 
     public boolean isGroupQuery() {
@@ -237,6 +257,9 @@ public class Select extends Query {
             // prepare阶段还用到orderList，所以先不置null
         }
         resultColumnCount = expressions.size();
+        if (windowFunctionParsed) {
+            initWindowFunctions();
+        }
 
         if (having != null) {
             expressions.add(having);
@@ -259,6 +282,70 @@ public class Select extends Query {
             mapColumns(f, 0);
         }
         checkInit = true;
+    }
+
+    // 收集 select 列表里的窗口函数，并把它们用到的表达式(聚合参数/分区键/排序键)作为隐藏列
+    // 追加到 expressions 末尾，这样每行物化时这些值已经算好，计算窗口时按列索引直接取。
+    private void initWindowFunctions() {
+        for (int i = 0; i < visibleColumnCount; i++) {
+            Expression expr = expressions.get(i);
+            Expression e = expr.getNonAliasExpression();
+            if (e instanceof WindowFunction) {
+                WindowFunction wf = (WindowFunction) e;
+                wf.setOutputColumnIndex(i);
+                wf.prepareColumns(expressions);
+                if (windowFunctions == null) {
+                    windowFunctions = new ArrayList<>();
+                }
+                windowFunctions.add(wf);
+            } else if (WindowFunction.contains(expr)) {
+                // 例如 ROW_NUMBER() OVER () + 1
+                throw DbException.getUnsupportedException(
+                        "window function must be a top level select column: " + expr.getSQL());
+            }
+        }
+    }
+
+    // 只支持"普通单表/join 查询 + 窗口函数"这个子集，其它组合明确报错，避免静默给错结果
+    private void checkWindowFunctionsSupported() {
+        if (condition != null && WindowFunction.contains(condition)) {
+            throw DbException.getUnsupportedException("window function in WHERE");
+        }
+        if (having != null && WindowFunction.contains(having)) {
+            throw DbException.getUnsupportedException("window function in HAVING");
+        }
+        for (int i = visibleColumnCount; i < expressions.size(); i++) {
+            if (WindowFunction.contains(expressions.get(i))) {
+                throw DbException.getUnsupportedException(
+                        "window function in ORDER BY / GROUP BY: " + expressions.get(i).getSQL());
+            }
+        }
+        if (!hasWindowFunctions()) {
+            return;
+        }
+        if (isGroupQuery) {
+            throw DbException.getUnsupportedException(
+                    "window function in a GROUP BY / aggregate query");
+        }
+        if (distinct) {
+            throw DbException.getUnsupportedException("window function with SELECT DISTINCT");
+        }
+        if (isForUpdate) {
+            throw DbException.getUnsupportedException("window function with FOR UPDATE");
+        }
+        for (WindowFunction wf : windowFunctions) {
+            wf.checkSupported();
+        }
+    }
+
+    /**
+     * 计算所有窗口函数，结果写回物化行的窗口列。
+     * 由执行器在全部行读完之后、结果排序/限制之前调用。
+     */
+    public void computeWindowFunctions(ArrayList<Value[]> rows) {
+        for (WindowFunction wf : windowFunctions) {
+            wf.compute(rows, session);
+        }
     }
 
     private void expandColumnList() {
@@ -383,6 +470,10 @@ public class Select extends Query {
         if (SysProperties.CHECK && !checkInit) {
             DbException.throwInternalError("not initialized");
         }
+        if (windowFunctionParsed) {
+            // 窗口函数可能出现在 select 列表之外的位置(WHERE/HAVING/ORDER BY)，也要检查
+            checkWindowFunctionsSupported();
+        }
         if (orderList != null) {
             sort = prepareOrder(session, orderList, expressions.size());
             orderList = null;
@@ -438,6 +529,11 @@ public class Select extends Query {
                     topTableFilter.setIndex(index);
                     isGroupSortedQuery = true;
                 }
+            }
+        }
+        if (hasWindowFunctions()) {
+            for (WindowFunction wf : windowFunctions) {
+                wf.prepareSortOrder(session);
             }
         }
         expressionArray = new Expression[expressions.size()];
@@ -970,6 +1066,11 @@ public class Select extends Query {
 
     @Override
     public boolean allowGlobalConditions() {
+        // 窗口函数在整张表上计算，把上层查询的条件下推到窗口查询里会改变窗口的取值
+        // (例如先过滤掉几行，row_number 就会变)，所以不允许下推
+        if (hasWindowFunctions()) {
+            return false;
+        }
         if (offsetExpr == null && (limitExpr == null || sort == null)) {
             return true;
         }
