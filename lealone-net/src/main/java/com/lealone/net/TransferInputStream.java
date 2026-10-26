@@ -157,9 +157,9 @@ public class TransferInputStream implements NetInputStream {
             return StringUtils.cache("");
         }
         if (len < 0 || len > (Integer.MAX_VALUE >> 1)) {
-            throw new IOException("Illegal string length: " + len);
+            throw new IOException("非法的字符串长度: " + len + " (允许范围 0.." + (Integer.MAX_VALUE >> 1) + ")");
         }
-        byte[] bytes = new byte[len << 1];
+        byte[] bytes = DataUtils.newBytes(len << 1);
         in.readFully(bytes);
         // 不能直接用 new String(bytes, UTF_16BE): JDK 解码器会把不成对的代理项
         // 替换成 U+FFFD，协议层要求逐码元可逆(写入端按原始 char 写)。
@@ -458,6 +458,12 @@ public class TransferInputStream implements NetInputStream {
 
         @Override
         public int read() throws IOException {
+            // 与 read(byte[], int, int) 保持一致: 到尾返回 -1, 而不是让
+            // ByteBuffer.get() 抛未受检的 BufferUnderflowException。
+            // DataInputStream 的各 readXxx 会据此抛 EOFException。
+            if (buffer.getByteBuffer().remaining() <= 0) {
+                return -1;
+            }
             return buffer.getUnsignedByte();
         }
 

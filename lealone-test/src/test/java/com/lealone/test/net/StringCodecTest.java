@@ -9,8 +9,10 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
@@ -164,6 +166,46 @@ public class StringCodecTest {
         for (int len : new int[] { 0, 1, 2, 3, 255, 256, 1023, 1024, 65535, 65536 }) {
             String[] strings = { repeat("a", len), repeat("中", len) };
             assertRoundTrip(strings);
+        }
+    }
+
+    @Test(expected = NullPointerException.class)
+    public void testPutCharsRejectsNull() {
+        DataBuffer.create().putChars(null);
+    }
+
+    @Test
+    public void testReadStringRejectsIllegalLength() throws IOException {
+        DataBuffer dataBuffer = DataBuffer.create(4);
+        dataBuffer.putInt((Integer.MAX_VALUE >> 1) + 1);
+        dataBuffer.getAndFlipBuffer();
+        TransferInputStream in = new TransferInputStream(new NetBuffer(dataBuffer));
+        try {
+            in.readString();
+            fail("超长字符串长度必须被拒绝");
+        } catch (IOException e) {
+            assertTrue("异常信息应说明非法长度: " + e.getMessage(),
+                    e.getMessage().contains("非法的字符串长度"));
+        }
+    }
+
+    @Test
+    public void testReadAtEndReturnsMinusOne() throws IOException {
+        DataBuffer dataBuffer = DataBuffer.create(1);
+        dataBuffer.put((byte) 0x5a);
+        dataBuffer.getAndFlipBuffer();
+        TransferInputStream in = new TransferInputStream(new NetBuffer(dataBuffer));
+        assertEquals(0x5a, in.getDataInputStream().read());
+        // read() 与 read(byte[], off, len) 的到尾语义必须一致: 返回 -1,
+        // 而不是抛未受检的 BufferUnderflowException。
+        assertEquals(-1, in.getDataInputStream().read());
+        assertEquals(-1, in.getDataInputStream().read(new byte[1]));
+        assertEquals(-1, in.getDataInputStream().read(new byte[1], 0, 1));
+        try {
+            in.getDataInputStream().readByte();
+            fail("DataInputStream.readByte 在到尾时应抛 EOFException");
+        } catch (EOFException e) {
+            // expected
         }
     }
 

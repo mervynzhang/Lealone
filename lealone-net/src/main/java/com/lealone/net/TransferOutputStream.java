@@ -179,7 +179,7 @@ public class TransferOutputStream implements NetOutputStream {
     }
 
     /**
-     * Write a string. The maximum string length is Integer.MAX_VALUE.
+     * Write a string. The maximum string length is Integer.MAX_VALUE >> 1 characters.
      *
      * @param s the value
      * @return itself
@@ -188,6 +188,14 @@ public class TransferOutputStream implements NetOutputStream {
     public TransferOutputStream writeString(String s) throws IOException {
         outBuffer.writeString(s);
         return this;
+    }
+
+    // 写端长度上限, 与 TransferInputStream.readString 的读端检查对称。
+    static void checkStringLength(int len) throws IOException {
+        if (len < 0 || len > (Integer.MAX_VALUE >> 1)) {
+            throw new IOException(
+                    "字符串长度超出协议上限: " + len + " (允许范围 0.." + (Integer.MAX_VALUE >> 1) + ")");
+        }
     }
 
     /**
@@ -515,11 +523,14 @@ public class TransferOutputStream implements NetOutputStream {
         // 与原来的 out.writeInt(len) + 逐字符 out.writeChar() 字节完全一致:
         // 先写 int 长度(字符数, -1 表示 null)，再按 UTF-16BE 写每个 char。
         // 整串只做一次容量检查，避免每个字符两次 ensureCapacity。
-        public void writeString(String s) {
+        // 长度上限与 TransferInputStream.readString 对称(2^31-1 个字节 -> 2^30-1 个字符),
+        // 否则 len << 1 会在写到一半时溢出成负数, 对端只能看到一个损坏的包。
+        public void writeString(String s) throws IOException {
             if (s == null) {
                 buffer.appendInt(-1);
             } else {
                 int len = s.length();
+                checkStringLength(len);
                 buffer.appendInt(len);
                 buffer.appendChars(s);
             }
