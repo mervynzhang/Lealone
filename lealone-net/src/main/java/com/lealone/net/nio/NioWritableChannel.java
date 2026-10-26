@@ -14,6 +14,7 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.lealone.db.scheduler.Scheduler;
 import com.lealone.net.AsyncConnection;
@@ -23,6 +24,12 @@ import com.lealone.net.NetEventLoop;
 import com.lealone.net.WritableChannel;
 
 public class NioWritableChannel implements WritableChannel {
+
+    // 单个待发送缓冲超过该阈值时, 把本连接的 SO_SNDBUF 自适应上调一次。
+    // 典型场景是 batch=500 的 INSERT, 一个请求约 100k, 8k 发送缓冲会把它拆成
+    // 十几个小块, 每块都要等对端 ACK, 撞上 TCP 延迟 ACK 会慢 20 倍以上。
+    static final int ADAPTIVE_SEND_BUFFER_THRESHOLD = 32 * 1024;
+    static final int ADAPTIVE_SEND_BUFFER_SIZE = 64 * 1024;
 
     private final String host;
     private final int port;
@@ -37,6 +44,11 @@ public class NioWritableChannel implements WritableChannel {
     private AsyncConnection conn;
     private NetBuffer inputBuffer;
     private boolean closed;
+
+    // 只在没有显式配置 SOCKET_SEND_BUFFER_SIZE 的客户端连接上开启, 见 NioNetClient。
+    private volatile boolean adaptiveSendBuffer;
+    // 上调是幂等的, 用 CAS 保证每个连接最多调用一次 setSendBufferSize。
+    private final AtomicBoolean sendBufferAdjusted = new AtomicBoolean();
 
     public NioWritableChannel(Scheduler scheduler, SocketChannel channel) throws IOException {
         this.channel = channel;
@@ -194,10 +206,31 @@ public class NioWritableChannel implements WritableChannel {
         buffer.flip();
     }
 
+    void setAdaptiveSendBuffer(boolean adaptiveSendBuffer) {
+        this.adaptiveSendBuffer = adaptiveSendBuffer;
+    }
+
+    // 只把本连接的内核发送缓冲上调一次, 不改变协议和连接状态:
+    // 已经显式配置得更大时不缩小; 任何异常都吞掉, 一次 setsockopt 失败不能让连接断开。
+    void adjustSendBufferIfNeeded(int pendingBytes) {
+        if (!adaptiveSendBuffer || pendingBytes < ADAPTIVE_SEND_BUFFER_THRESHOLD
+                || !sendBufferAdjusted.compareAndSet(false, true))
+            return;
+        try {
+            Socket socket = channel.socket();
+            if (socket == null || socket.getSendBufferSize() >= ADAPTIVE_SEND_BUFFER_SIZE)
+                return;
+            socket.setSendBufferSize(ADAPTIVE_SEND_BUFFER_SIZE);
+        } catch (Throwable t) {
+            // 上调失败时保持原来的缓冲区, 连接继续可用
+        }
+    }
+
     @Override
     public void write(WritableBuffer buffer) {
         if (closed)
             return;
+        adjustSendBufferIfNeeded(buffer.getByteBuffer().remaining());
         if (eventLoop != null) {
             eventLoop.write(this, buffer);
         } else {

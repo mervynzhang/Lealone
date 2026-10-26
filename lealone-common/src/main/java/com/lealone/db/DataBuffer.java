@@ -247,10 +247,14 @@ public class DataBuffer {
      * DataOutputStream.writeChar for every character. The whole string is
      * written with a single capacity check instead of one check per character.
      *
-     * @param s the string
+     * @param s the string, must not be null
      * @return this
+     * @throws NullPointerException if s is null
      */
     public DataBuffer putChars(String s) {
+        if (s == null) {
+            throw new NullPointerException("s");
+        }
         int len = s.length();
         ByteBuffer b = ensureCapacity(len << 1);
         for (int i = 0; i < len; i++) {

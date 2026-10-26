@@ -10,11 +10,10 @@ set lealone (
         level: 'info'
     ),
     scheduler: (
-        -- 不要在这里写死 scheduler_count。这份配置也被压测复用,
-        -- 写死 8 会把 16/32/64 并发的服务端压在 8 个核上:
-        -- 实测 count(*) 32 客户端线程: 8 调度 37.9-41.1k op/s / p99 5.2-5.7ms,
-        -- 默认(Runtime.availableProcessors(), 本 pod cgroup 配额 32) 55.0k / p99 0.79-0.82ms。
-        -- 需要让测试服务轻量时用命令行/连接参数显式覆盖, 不要改这里。
+        -- 功能测试不关心并发度, 显式给一个小值, 避免在无 cgroup 限制的高核 CI runner 上
+        -- 按 availableProcessors() 起上百个调度线程(AOTE 还会按该值建
+        -- TransactionManager/RedoLog 数组)。并发/吞吐结论见 docs/PERF_SCHEDULER.md。
+        scheduler_count: 4,
         prefer_batch_write: false,
         max_packet_count_per_loop: 1000, -- 每次循环最多读取多少个数据包，默认20
     ),

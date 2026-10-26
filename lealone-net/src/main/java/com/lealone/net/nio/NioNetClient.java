@@ -10,6 +10,7 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.util.Map;
 
+import com.lealone.db.ConnectionSetting;
 import com.lealone.db.DataBuffer;
 import com.lealone.db.async.AsyncCallback;
 import com.lealone.db.scheduler.Scheduler;
@@ -25,12 +26,19 @@ import com.lealone.net.TcpClientConnection;
 
 public class NioNetClient extends NetClientBase {
 
+    // 用户显式配置了 SOCKET_SEND_BUFFER_SIZE 时以用户配置为准, 不再自适应上调;
+    // 没配置时连接先用默认 8k, 遇到大于 32k 的单个待发送缓冲再上调到 64k。
+    static boolean isAdaptiveSendBuffer(Map<String, String> config) {
+        return config == null || !config.containsKey(ConnectionSetting.SOCKET_SEND_BUFFER_SIZE.name());
+    }
+
     private static class ConnectionAttachment {
         private AsyncConnectionManager connectionManager;
         private InetSocketAddress inetSocketAddress;
         private AsyncCallback<AsyncConnection> ac;
         private int maxSharedSize;
         private boolean shared;
+        private boolean adaptiveSendBuffer;
     }
 
     @Override
@@ -48,6 +56,7 @@ public class NioNetClient extends NetClientBase {
             if (block) {
                 channel.connect(inetSocketAddress);
                 NioWritableChannel writableChannel = new NioWritableChannel(null, channel);
+                writableChannel.setAdaptiveSendBuffer(isAdaptiveSendBuffer(config));
                 AsyncConnection conn;
                 if (connectionManager != null) {
                     conn = connectionManager.createConnection(writableChannel, false, scheduler);
@@ -70,6 +79,7 @@ public class NioNetClient extends NetClientBase {
                 attachment.ac = ac;
                 attachment.maxSharedSize = AsyncConnectionPool.getMaxSharedSize(config);
                 attachment.shared = AsyncConnectionPool.isShared(config);
+                attachment.adaptiveSendBuffer = isAdaptiveSendBuffer(config);
                 channel.register(eventLoop.getSelector(), SelectionKey.OP_CONNECT, attachment);
                 channel.connect(inetSocketAddress);
                 // 如果前面已经在执行事件循环，此时就不能再次进入事件循环
@@ -94,6 +104,7 @@ public class NioNetClient extends NetClientBase {
         try {
             channel.finishConnect();
             NioWritableChannel writableChannel = new NioWritableChannel(scheduler, channel);
+            writableChannel.setAdaptiveSendBuffer(attachment.adaptiveSendBuffer);
             writableChannel.setSelectionKey(key);
             AsyncConnection conn;
             if (attachment.connectionManager != null) {

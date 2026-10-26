@@ -4,8 +4,10 @@
 > 调研报告里"32 线程时服务端只用满 8.07 核、吞吐 30.8k→33.0k 不涨、p99 0.36→6.69ms"的根因是
 > **测试/压测服务端配置 `lealone-test.sql` 里写死了 `scheduler_count: 8`**，不是默认值。
 > 本 pod 的 JVM 实际只看到 32 个核（host `nproc`=192，但 cgroup `cpu.max = 3200000 100000` = 32 核），
-> 默认值 = 32，正好接近配额上限。把测试配置里的 8 删掉后，同一份代码在 32/64 客户端线程下
-> 吞吐提升 32%–45%，p99 降到 1/5–1/7。
+> 默认值 = 32，正好接近配额上限。把压测实例的调度线程数从 8 提到默认的 32 后，同一份代码在
+> 32/64 客户端线程下吞吐提升 32%–45%，p99 降到 1/5–1/7。
+> 功能测试共用配置 `lealone-test.sql` 则显式固定 `scheduler_count: 4`：功能测试不关心并发度，
+> 小值可以避免在无 cgroup 限制的高核 CI runner 上起上百个调度线程。
 
 ## 环境与方法
 
@@ -36,6 +38,8 @@
 - 8 客户端线程：两种配置吞吐/p99 完全一样（服务端只需要 ~6.7 核），默认值没有额外开销。
 - 16/32/64 客户端线程：8 调度线程被卡在 ~7.5 核，吞吐 40k 左右、p99 5–16ms；
   默认 32 调度线程用满 ~27.5 核，吞吐 48–55k、p99 0.4–3.2ms。
+- 32 客户端线程那一组的原始一次性记录：8 调度 37.9–41.1k op/s、p99 5.2–5.7ms；
+  默认 32 调度 55.0k op/s、p99 0.79–0.82ms（上表是同一组的中位数/代表值）。
 
 ## 结果 2：调度线程数扫描（32 客户端线程）
 
@@ -55,11 +59,16 @@
 
 1. **不改 `Config.java`**：默认 `availableProcessors()`（本 pod = 32）是合理值，不需要
    `min(核数, 上限)` 之类的 cap；实测 64 个调度线程在 32 核配额上过订阅后尾延迟反而更差。
-2. **改测试配置**：`lealone-test/src/test/resources/lealone-test.sql` 删掉写死的
-   `scheduler_count: 8`，让测试服务端也走默认值。这份配置同时被性能压测复用，写死 8 会把
-   16/32/64 并发的服务端锁在 8 个核上，制造"默认值不扩容"的假象。
-   需要让功能测试服务保持轻量时，用命令行/连接参数显式覆盖，不要改这份默认配置。
-3. 新增 `SchedulerConfigTest` 锁住"默认值 = availableProcessors、可被显式覆盖"的契约。
+2. **功能测试配置显式给小值**：`lealone-test/src/test/resources/lealone-test.sql` 固定
+   `scheduler_count: 4`。功能测试不关心并发度；这份配置会在没有 cgroup 限制的高核 CI runner 上
+   被共享服务端使用，不写死就会按 `availableProcessors()`（本机 192）起上百个调度线程，
+   AOTE 还会按该值建 `TransactionManager`/`RedoLog` 数组。需要注意 `scheduler_count` 只从
+   服务端 config map 读取（`MapUtils.getSchedulerCount`），JDBC 连接参数改不了服务端；
+   `ConnectionSetting.SCHEDULER_COUNT` 只影响客户端自己的调度器。并发/吞吐实验请按本文方法
+   独立起压测实例，不要复用功能测试配置。
+3. 新增 `SchedulerConfigTest` 锁住真实读取路径：`MapUtils.getSchedulerCount(new HashMap<>())`
+   回落到 `availableProcessors()`、显式值可覆盖，并检查 `lealone-test.sql` 里确实是一个小值、
+   不出现写死的 192。
 4. 残余风险：如果部署机 `availableProcessors()` 很大但单核性能弱，调度线程数可能偏多；
    本次实测在 8 客户端线程下没有观察到默认值的额外开销，且 64 调度线程的过订阅已有反例，
    因此没有足够证据支持加上限。若某个部署确实要限制，请用 `scheduler_count` 显式配置。
