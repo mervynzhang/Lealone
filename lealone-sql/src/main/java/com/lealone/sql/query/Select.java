@@ -81,6 +81,10 @@ public class Select extends Query {
     int currentGroupRowId;
     // 窗口函数(按 select 列表顺序)，null 表示没有
     private ArrayList<WindowFunction> windowFunctions;
+    // 窗口函数追加的隐藏列区间 [windowHiddenColumnStart, windowHiddenColumnEnd)。
+    // 分布式执行时这些列只在本节点计算窗口时使用，不能出现在发给其它节点的 plan SQL 里。
+    private int windowHiddenColumnStart = -1;
+    private int windowHiddenColumnEnd = -1;
     // 解析阶段是否遇到过窗口函数(可能出现在 select 列表之外的位置)。
     // 用来避免给完全没用到窗口函数的普通查询增加 visitor 遍历开销。
     private boolean windowFunctionParsed;
@@ -287,13 +291,21 @@ public class Select extends Query {
     // 收集 select 列表里的窗口函数，并把它们用到的表达式(聚合参数/分区键/排序键)作为隐藏列
     // 追加到 expressions 末尾，这样每行物化时这些值已经算好，计算窗口时按列索引直接取。
     private void initWindowFunctions() {
+        Database db = session.getDatabase();
+        // 记录已有表达式的 SQL，隐藏列按 SQL 去重（多个窗口共用排序键/分区键时只存一份）
+        ArrayList<String> expressionSQL = new ArrayList<>(expressions.size());
+        for (Expression e : expressions) {
+            // 可见列可能是别名，比较时用非别名表达式，才能和隐藏列(如 ORDER BY 的列)按 SQL 对上
+            expressionSQL.add(e.getNonAliasExpression().getSQL());
+        }
+        windowHiddenColumnStart = expressions.size();
         for (int i = 0; i < visibleColumnCount; i++) {
             Expression expr = expressions.get(i);
             Expression e = expr.getNonAliasExpression();
             if (e instanceof WindowFunction) {
                 WindowFunction wf = (WindowFunction) e;
                 wf.setOutputColumnIndex(i);
-                wf.prepareColumns(expressions);
+                wf.prepareColumns(expressions, db, expressionSQL);
                 if (windowFunctions == null) {
                     windowFunctions = new ArrayList<>();
                 }
@@ -304,6 +316,12 @@ public class Select extends Query {
                         "window function must be a top level select column: " + expr.getSQL());
             }
         }
+        if (expressions.size() > windowHiddenColumnStart) {
+            windowHiddenColumnEnd = expressions.size();
+        } else {
+            // 所有窗口键都复用了可见列，没有隐藏列
+            windowHiddenColumnStart = -1;
+        }
     }
 
     // 只支持"普通单表/join 查询 + 窗口函数"这个子集，其它组合明确报错，避免静默给错结果
@@ -311,10 +329,14 @@ public class Select extends Query {
         if (condition != null && WindowFunction.contains(condition)) {
             throw DbException.getUnsupportedException("window function in WHERE");
         }
-        if (having != null && WindowFunction.contains(having)) {
+        // having 在 init() 里已经挪进 expressions 并置 null，必须查 havingIndex 才能生效
+        if (havingIndex >= 0 && WindowFunction.contains(expressions.get(havingIndex))) {
             throw DbException.getUnsupportedException("window function in HAVING");
         }
         for (int i = visibleColumnCount; i < expressions.size(); i++) {
+            if (i == havingIndex) {
+                continue;
+            }
             if (WindowFunction.contains(expressions.get(i))) {
                 throw DbException.getUnsupportedException(
                         "window function in ORDER BY / GROUP BY: " + expressions.get(i).getSQL());
@@ -339,13 +361,13 @@ public class Select extends Query {
     }
 
     /**
-     * 计算所有窗口函数，结果写回物化行的窗口列。
-     * 由执行器在全部行读完之后、结果排序/限制之前调用。
+     * 创建窗口函数的分步计算器。执行器在全部行读完之后调用，每次 {@code step()} 只算一小批，
+     * 中间可以让出/取消；结果直接写回物化行的窗口列。
      */
-    public void computeWindowFunctions(ArrayList<Value[]> rows) {
-        for (WindowFunction wf : windowFunctions) {
-            wf.compute(rows, session);
-        }
+    public WindowFunction.WindowComputation createWindowComputation(ArrayList<Value[]> rows,
+            WindowFunction.YieldController yieldController) {
+        return new WindowFunction.WindowComputation(windowFunctions, rows, session,
+                yieldController);
     }
 
     private void expandColumnList() {
@@ -900,6 +922,11 @@ public class Select extends Query {
             columnCount = expressions.size();
         for (int i = 0; i < columnCount; i++) {
             if (isDistributed && havingIndex >= 0 && i == havingIndex)
+                continue;
+            // 窗口函数的隐藏列（聚合参数/分区键/排序键）只在本地算窗口时使用，
+            // 发给其它节点会多出列、导致远程重解析时列数与结果对不上
+            if (isDistributed && windowHiddenColumnStart >= 0 && i >= windowHiddenColumnStart
+                    && i < windowHiddenColumnEnd)
                 continue;
             StatementBuilder expr = new StatementBuilder();
             expr.setDistributed(isDistributed);

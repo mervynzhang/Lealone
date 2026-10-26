@@ -14,7 +14,17 @@ import java.util.List;
 
 import org.junit.Test;
 
+import com.lealone.client.jdbc.JdbcConnection;
 import com.lealone.common.exceptions.DbException;
+import com.lealone.db.Constants;
+import com.lealone.db.api.ErrorCode;
+import com.lealone.db.session.ServerSession;
+import com.lealone.db.value.Value;
+import com.lealone.db.value.ValueInt;
+import com.lealone.db.value.ValueNull;
+import com.lealone.sql.expression.Expression;
+import com.lealone.sql.expression.WindowFunction;
+import com.lealone.sql.query.Select;
 import com.lealone.test.sql.SqlAssertTestBase;
 
 /**
@@ -440,6 +450,190 @@ public class WindowFunctionTest extends SqlAssertTestBase {
                 + "FROM window_t");
         assertEquals(Arrays.asList(1, 2, 3, 4, 5),
                 column("SELECT v FROM window_t WHERE id > 100 ORDER BY id", 1));
+    }
+
+    /**
+     * 窗口计算必须先物化行，以前用无界 ArrayList 缓存，完全绕过 LocalResult 的
+     * MAX_MEMORY_ROWS 落盘保护。现在超过上限要给明确的资源不足错误。
+     */
+    @Test
+    public void testWindowBufferRespectsMaxMemoryRows() throws Exception {
+        initTable();
+        executeUpdate("SET MAX_MEMORY_ROWS 3");
+        try {
+            SQLException e = assertSqlFails(
+                    "SELECT ROW_NUMBER() OVER (ORDER BY id) AS rn FROM window_t");
+            assertEquals(ErrorCode.WINDOW_FUNCTION_BUFFER_EXCEEDS_MAX_MEMORY_ROWS_1,
+                    e.getErrorCode());
+            assertTrue(e.getMessage(), e.getMessage().contains("MAX_MEMORY_ROWS"));
+            // 上限以内的行照常计算
+            assertEquals(Arrays.asList(1, 2, 3), column(
+                    "SELECT ROW_NUMBER() OVER (ORDER BY id) AS rn FROM window_t WHERE id <= 3", 1));
+        } finally {
+            executeUpdate("SET MAX_MEMORY_ROWS " + Constants.DEFAULT_MAX_MEMORY_ROWS);
+        }
+    }
+
+    /**
+     * 窗口计算必须是可恢复步骤：频繁要求让出后仍然得到正确结果；取消异常要能在计算中途
+     * 抛出，而不是等整个 O(n log n) 排序/分区扫描跑完。
+     */
+    @Test
+    public void testWindowComputationIsResumable() throws Exception {
+        initTable();
+        ServerSession session = (ServerSession) ((JdbcConnection) conn).getSession();
+        String sql = "SELECT id, ROW_NUMBER() OVER (ORDER BY v), "
+                + "SUM(v) OVER (PARTITION BY k) FROM window_t";
+        Select select = (Select) session.prepareStatement(sql);
+        int[][] data = { { 1, 1, 10 }, { 2, 1, 20 }, { 3, 2, 10 }, { 4, 2, 30 },
+                { 5, 3, 40 } };
+        ArrayList<Value[]> rows = materializeWindowRows(select, data);
+        final int[] yields = { 0 };
+        WindowFunction.YieldController yielding = rowNumber -> {
+            yields[0]++;
+            return yields[0] % 7 == 0;
+        };
+        WindowFunction.WindowComputation computation = select.createWindowComputation(rows,
+                yielding);
+        int steps = 0;
+        while (!computation.step()) {
+            steps++;
+            assertTrue("window computation did not make progress", steps < 10000);
+        }
+        assertTrue("expected multiple resumable steps, got " + steps, steps > 1);
+        assertTrue("yieldIfNeeded was not called often enough: " + yields[0], yields[0] > 20);
+        // ROW_NUMBER() OVER (ORDER BY v)：v=10 的两行按扫描顺序编号 1,2，v=20 编号 3
+        assertEquals(1, rows.get(0)[1].getInt());
+        assertEquals(3, rows.get(1)[1].getInt());
+        assertEquals(2, rows.get(2)[1].getInt());
+        assertEquals(4, rows.get(3)[1].getInt());
+        assertEquals(5, rows.get(4)[1].getInt());
+        // SUM(v) OVER (PARTITION BY k)
+        assertEquals(30, rows.get(0)[2].getInt());
+        assertEquals(30, rows.get(1)[2].getInt());
+        assertEquals(40, rows.get(2)[2].getInt());
+        assertEquals(40, rows.get(3)[2].getInt());
+        assertEquals(40, rows.get(4)[2].getInt());
+
+        // 第 5 次让出检查时抛取消异常：计算过程中必须立刻抛出
+        ArrayList<Value[]> rows2 = materializeWindowRows(select, data);
+        final int[] checks = { 0 };
+        WindowFunction.YieldController canceling = rowNumber -> {
+            checks[0]++;
+            if (checks[0] == 5) {
+                throw DbException.get(ErrorCode.STATEMENT_WAS_CANCELED);
+            }
+            return false;
+        };
+        WindowFunction.WindowComputation computation2 = select.createWindowComputation(rows2,
+                canceling);
+        try {
+            while (!computation2.step()) {
+                // 计算过程中会周期性调用 yieldIfNeeded
+            }
+            fail("expected STATEMENT_WAS_CANCELED");
+        } catch (DbException e) {
+            assertEquals(ErrorCode.STATEMENT_WAS_CANCELED, e.getErrorCode());
+        }
+    }
+
+    /**
+     * 隐藏列按 SQL 去重，且分布式 plan SQL 里不能出现这些只用于本地窗口计算的列。
+     */
+    @Test
+    public void testHiddenColumnsDedupAndDistributedPlan() throws Exception {
+        initTable();
+        ServerSession session = (ServerSession) ((JdbcConnection) conn).getSession();
+        String sql = "SELECT id, ROW_NUMBER() OVER (ORDER BY v) AS rn, "
+                + "RANK() OVER (ORDER BY v) AS rk, COUNT(*) OVER (PARTITION BY k) AS c "
+                + "FROM window_t LIMIT 5";
+        Select select = (Select) session.prepareStatement(sql);
+        // 可见列 4 个；隐藏列 V 被两个窗口共用(只存一份)，再加上 K，一共多 2 列
+        assertEquals(4, select.getColumnCount());
+        assertEquals(6, select.getExpressions().size());
+        // getPlanSQL(true) 只有在带 LIMIT/OFFSET/GROUP BY 时才走 plan 打印分支
+        String plan = select.getPlanSQL(true);
+        assertEquals(plan, 4, selectListColumnCount(plan));
+        for (String line : plan.split("\n")) {
+            assertFalse(plan, line.equals("    V") || line.equals("    V,")
+                    || line.equals("    K") || line.equals("    K,"));
+        }
+
+        List<Object[]> list = rows("SELECT id, ROW_NUMBER() OVER (ORDER BY v) AS rn, "
+                + "RANK() OVER (ORDER BY v) AS rk, COUNT(*) OVER (PARTITION BY k) AS c "
+                + "FROM window_t ORDER BY id");
+        assertEquals(5, list.size());
+        assertEquals(1, list.get(0)[1]);
+        assertEquals(1, list.get(0)[2]);
+        assertEquals(2L, list.get(0)[3]);
+        assertEquals(3, list.get(1)[1]);
+        assertEquals(3, list.get(1)[2]);
+        assertEquals(2L, list.get(1)[3]);
+        assertEquals(2, list.get(2)[1]);
+        assertEquals(1, list.get(2)[2]);
+        assertEquals(2L, list.get(2)[3]);
+        assertEquals(4, list.get(3)[1]);
+        assertEquals(4, list.get(3)[2]);
+        assertEquals(2L, list.get(3)[3]);
+        assertEquals(5, list.get(4)[1]);
+        assertEquals(5, list.get(4)[2]);
+        assertEquals(1L, list.get(4)[3]);
+    }
+
+    /**
+     * 聚合窗口的参数是尚未 optimize 的表达式时要先 optimize 再取类型。
+     * 回归：MIN(v + 1) 曾经整列返回 NULL（dataType 取到 UNKNOWN），AVG(v + 1) 返回整数 23。
+     */
+    @Test
+    public void testAggregateWindowOnExpression() throws Exception {
+        initTable();
+        assertColumnEquals(Arrays.asList(11, 11, 11, 11, 11),
+                "SELECT MIN(v + 1) OVER () AS m FROM window_t", 1);
+        assertColumnEquals(Arrays.asList(41, 41, 41, 41, 41),
+                "SELECT MAX(v + 1) OVER () AS m FROM window_t", 1);
+        assertColumnEquals(Arrays.asList(23.0, 23.0, 23.0, 23.0, 23.0),
+                "SELECT AVG(v + 1) OVER () AS a FROM window_t", 1);
+        assertColumnEquals(Arrays.asList(32L, 32L, 42L, 42L, 41L),
+                "SELECT SUM(v + 1) OVER (PARTITION BY k) AS s FROM window_t ORDER BY id", 1);
+    }
+
+    /** 按 select 表达式列表(含隐藏列)构造物化行，用于直接驱动 WindowComputation */
+    private ArrayList<Value[]> materializeWindowRows(Select select, int[][] data) {
+        List<Expression> expressions = select.getExpressions();
+        ArrayList<Value[]> rows = new ArrayList<>();
+        for (int[] d : data) {
+            Value[] row = new Value[expressions.size()];
+            for (int i = 0; i < row.length; i++) {
+                String expressionSQL = expressions.get(i).getSQL();
+                if ("ID".equals(expressionSQL)) {
+                    row[i] = ValueInt.get(d[0]);
+                } else if ("K".equals(expressionSQL)) {
+                    row[i] = ValueInt.get(d[1]);
+                } else if ("V".equals(expressionSQL)) {
+                    row[i] = ValueInt.get(d[2]);
+                } else {
+                    // 窗口函数输出列，compute 之后会被回填
+                    row[i] = ValueNull.INSTANCE;
+                }
+            }
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    /** 数一下 plan SQL 的 select 列表打印了几个列表达式 */
+    private static int selectListColumnCount(String plan) {
+        int from = plan.indexOf("\nFROM ");
+        if (from < 0) {
+            from = plan.length();
+        }
+        int count = 0;
+        for (String line : plan.substring(0, from).split("\n")) {
+            if (line.startsWith("    ") && !line.startsWith("     ")) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /** 把整张表读成 "id/v" 字符串列表，避免用 Object[] 的引用相等做断言 */

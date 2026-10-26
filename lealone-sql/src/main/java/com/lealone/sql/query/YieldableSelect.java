@@ -5,6 +5,8 @@
  */
 package com.lealone.sql.query;
 
+import java.util.ArrayList;
+
 import com.lealone.agent.SystemOutline;
 import com.lealone.agent.SystemOutlineNode;
 import com.lealone.db.async.AsyncResultHandler;
@@ -16,16 +18,23 @@ import com.lealone.db.result.ResultTarget;
 import com.lealone.db.session.SessionStatus;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueNull;
+import com.lealone.sql.expression.WindowFunction;
 import com.lealone.sql.operator.Operator;
 import com.lealone.sql.operator.OperatorFactory;
 
-public class YieldableSelect extends YieldableQueryBase {
+public class YieldableSelect extends YieldableQueryBase implements WindowFunction.YieldController {
 
     private final Select select;
     private final ResultTarget target;
     private final int olapThreshold;
     private boolean olapDisabled;
     private Operator queryOperator;
+    // 本地算子(OLAP 插件算子不一定是 QOperator)。窗口缓冲只在本地算子上，
+    // 且窗口查询在构造函数里就禁用了 OLAP，所以这里的引用始终有效。
+    private QOperator qOperator;
+    // 扫描结束后窗口列的缓冲行和分步计算器（null 表示没有正在进行的窗口计算）
+    private ArrayList<Value[]> windowRows;
+    private WindowFunction.WindowComputation windowComputation;
 
     public YieldableSelect(Select select, int maxRows, boolean scrollable,
             AsyncResultHandler<Result> asyncHandler, ResultTarget target) {
@@ -81,15 +90,22 @@ public class YieldableSelect extends YieldableQueryBase {
         SystemOutline.createNode(SystemOutlineNode.Select_start);
         // select.getTopTableFilter().lock(session, select.isForUpdate);
         select.fireBeforeSelectTriggers();
-        queryOperator = createQueryOperator();
+        queryOperator = qOperator = createQueryOperator();
         queryOperator.start();
     }
 
     @Override
     protected void stopInternal() {
         // 执行startInternal抛异常时queryOperator可能为null
-        if (queryOperator != null)
+        if (queryOperator != null) {
+            // 异常/取消时不要再把窗口缓冲算完再抛（O(n log n) 白白占用 scheduler 线程）
+            if (pendingException != null && qOperator != null) {
+                qOperator.abortWindow();
+            }
             queryOperator.stop();
+        }
+        windowComputation = null;
+        windowRows = null;
     }
 
     @Override
@@ -97,6 +113,24 @@ public class YieldableSelect extends YieldableQueryBase {
         SystemOutline.createNode(SystemOutlineNode.Select_execute);
         while (true) {
             session.setStatus(SessionStatus.STATEMENT_RUNNING);
+            if (windowComputation != null) {
+                // 窗口计算的可恢复步骤：step() 内部每处理一行都会 yieldIfNeeded，
+                // 这里只负责在让出/计算完成之间做状态切换
+                if (windowComputation.step()) {
+                    windowComputation = null;
+                    // 窗口列已经写回缓冲行，交给真正的结果目标（LocalResult）。
+                    // 必须在 stop()/localResult.done() 之前完成
+                    qOperator.finishWindowRows(windowRows);
+                    windowRows = null;
+                    completeQuery();
+                    break;
+                }
+                if (session.getStatus() == SessionStatus.STATEMENT_YIELDED
+                        || session.getStatus() == SessionStatus.WAITING) {
+                    return;
+                }
+                continue;
+            }
             try {
                 queryOperator.run();
             } catch (RuntimeException e) {
@@ -107,15 +141,14 @@ public class YieldableSelect extends YieldableQueryBase {
                 }
             }
             if (queryOperator.isStopped()) {
-                // 查询结果已经增加到target了
-                if (target != null) {
-                    session.setStatus(SessionStatus.STATEMENT_COMPLETED);
-                } else if (queryOperator.getLocalResult() != null) {
-                    LocalResult r = queryOperator.getLocalResult();
-                    setResult(r, r.getRowCount());
-                    select.resultCache.setResult(r);
-                    session.setStatus(SessionStatus.STATEMENT_COMPLETED);
+                // 有窗口函数时先取出缓冲行，分步计算窗口列后再结束查询；
+                // 不能在这里直接标记完成，也不能把计算放到 stop() 里做
+                if (qOperator.hasWindowBuffer()) {
+                    windowRows = qOperator.takeWindowRows();
+                    windowComputation = select.createWindowComputation(windowRows, this);
+                    continue;
                 }
+                completeQuery();
                 break;
             }
             if (session.getStatus() == SessionStatus.STATEMENT_YIELDED
@@ -124,6 +157,19 @@ public class YieldableSelect extends YieldableQueryBase {
             }
         }
     }
+
+    private void completeQuery() {
+        // 查询结果已经增加到target了
+        if (target != null) {
+            session.setStatus(SessionStatus.STATEMENT_COMPLETED);
+        } else if (queryOperator.getLocalResult() != null) {
+            LocalResult r = queryOperator.getLocalResult();
+            setResult(r, r.getRowCount());
+            select.resultCache.setResult(r);
+            session.setStatus(SessionStatus.STATEMENT_COMPLETED);
+        }
+    }
+
 
     private QOperator createQueryOperator() {
         LocalResult result;

@@ -6,8 +6,6 @@
 package com.lealone.sql.expression;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
 
 import com.lealone.common.exceptions.DbException;
 import com.lealone.common.util.StatementBuilder;
@@ -42,9 +40,18 @@ import com.lealone.sql.query.SelectUnion;
  * 的聚合窗口（那是 running aggregate 语义，跟"整个分区聚合一次"不同，宁可报错也不给错结果）。
  * <p>
  * 执行方式：不做流式窗口算子。查询先把所有行物化，窗口函数用到的表达式（聚合参数、分区键、排序键）
- * 在解析阶段就作为隐藏列追加到 select 列表末尾，所以每一行物化时这些值已经算好（见
- * {@link #prepareColumns(ArrayList)}）。物化完成后按 (分区键, 排序键) 对行号做一次稳定排序，
- * 再逐个分区写回窗口列（见 {@link #compute(ArrayList, ServerSession)}）。
+ * 在解析阶段就作为隐藏列追加到 select 列表末尾（相同 SQL 的隐藏列会去重），所以每一行物化时这些值
+ * 已经算好（见 {@link #prepareColumns(ArrayList, Database, ArrayList)}）。物化完成后按
+ * (分区键, 排序键) 对行号做一次稳定排序，再逐个分区写回窗口列。排序和分区扫描都是
+ * {@link WindowComputation#step() step()} 驱动的可恢复步骤，每处理一行就调用
+ * {@link YieldController#yieldIfNeeded(int)}，不会在 scheduler 线程里一次跑完整个大结果集。
+ * <p>
+ * 内存上界：输入行先缓存在 {@code WindowResultTarget} 里，最多
+ * {@code MAX_MEMORY_ROWS} 行（默认 {@code Constants.DEFAULT_MAX_MEMORY_ROWS} = 100000），
+ * 超过上限会抛资源不足错误而不是无界增长。计算阶段同一个时刻只算一个窗口函数，额外内存是
+ * 一个 {@code int[n]} 排序索引加一个 {@code int[n]} 归并缓冲（约 8 字节/行），算完立即释放；
+ * 聚合窗口的中间状态是 O(1)。{@code LIMIT} 不能减少窗口需要读取的行数（窗口语义要求看到
+ * 整个分区），所以 {@code SELECT ... OVER (...) LIMIT 1} 仍然最多占用上述缓冲。
  * <p>
  * 语义约定：
  * <ul>
@@ -187,16 +194,25 @@ public class WindowFunction extends Expression {
      * 把窗口用到的表达式作为隐藏列追加到 select 的表达式列表末尾。
      * 这样每行物化时这些值就已经算好，计算窗口时按列索引直接取即可，
      * 不需要在物化之后重新求值（物化之后表行已经不在当前行了）。
+     * <p>
+     * 隐藏列按 SQL 去重（仿 {@code Query.initOrder}）：多个窗口函数共用同一个排序键/分区键，
+     * 或者窗口键本身就是可见列时，不再重复追加，避免同一表达式在每行里存两份。
+     *
+     * @param expressions select 的表达式列表，隐藏列会追加到末尾
+     * @param db 用于标识符大小写不敏感比较
+     * @param expressionSQL 已有的表达式 SQL，用来查找可以复用的列（找到后会把新列 SQL 也加进去）
      */
-    public void prepareColumns(ArrayList<Expression> expressions) {
+    public void prepareColumns(ArrayList<Expression> expressions, Database db,
+            ArrayList<String> expressionSQL) {
         if (on != null) {
-            argColumnIndex = addHiddenColumn(expressions, on);
+            argColumnIndex = addHiddenColumn(expressions, on, db, expressionSQL);
         }
         if (partitionBy != null && !partitionBy.isEmpty()) {
             int size = partitionBy.size();
             partitionColumnIndexes = new int[size];
             for (int i = 0; i < size; i++) {
-                partitionColumnIndexes[i] = addHiddenColumn(expressions, partitionBy.get(i));
+                partitionColumnIndexes[i] = addHiddenColumn(expressions, partitionBy.get(i), db,
+                        expressionSQL);
             }
         }
         if (orderBy != null && !orderBy.isEmpty()) {
@@ -205,7 +221,7 @@ public class WindowFunction extends Expression {
             orderSortTypes = new int[size];
             for (int i = 0; i < size; i++) {
                 SelectOrderBy o = orderBy.get(i);
-                orderColumnIndexes[i] = addHiddenColumn(expressions, o.expression);
+                orderColumnIndexes[i] = addHiddenColumn(expressions, o.expression, db, expressionSQL);
                 int sortType = o.descending ? SortOrder.DESCENDING : SortOrder.ASCENDING;
                 if (o.nullsFirst) {
                     sortType += SortOrder.NULLS_FIRST;
@@ -220,9 +236,18 @@ public class WindowFunction extends Expression {
         }
     }
 
-    private static int addHiddenColumn(ArrayList<Expression> expressions, Expression e) {
+    private static int addHiddenColumn(ArrayList<Expression> expressions, Expression e, Database db,
+            ArrayList<String> expressionSQL) {
+        String sql = e.getSQL();
+        for (int i = 0, size = expressionSQL.size(); i < size; i++) {
+            if (db.equalsIdentifiers(expressionSQL.get(i), sql)) {
+                // 已经有同 SQL 的可见列/隐藏列，直接复用，保证多个窗口共用同一列
+                return i;
+            }
+        }
         int index = expressions.size();
         expressions.add(e);
+        expressionSQL.add(sql);
         return index;
     }
 
@@ -258,68 +283,373 @@ public class WindowFunction extends Expression {
     }
 
     /**
-     * 在物化后的行上计算本窗口函数，结果直接写回每行的窗口列。
-     *
-     * @param rows 物化后的行（包含隐藏列）
-     * @param session 当前会话
+     * 由执行器提供的让出钩子。窗口计算按 {@link WindowComputation#step()} 分步推进，
+     * 每处理一行/一个排序元素就调用一次 {@code yieldIfNeeded}，让 scheduler 有机会
+     * 切到其它 session，同时触发周期性的 {@code checkCanceled()}。
      */
-    public void compute(ArrayList<Value[]> rows, ServerSession session) {
-        int rowCount = rows.size();
-        if (rowCount == 0) {
-            return;
+    public interface YieldController {
+        /**
+         * @param rowNumber 已处理的行/元素计数（用于 scheduler 的周期性检查）
+         * @return true 表示调用方应立刻返回，下一次再继续 step()
+         */
+        boolean yieldIfNeeded(int rowNumber);
+    }
+
+    /**
+     * 所有窗口函数的分步计算器：一个窗口函数算完再算下一个，每次 step() 有固定预算。
+     * <p>
+     * 内存：输入行由调用方（WindowResultTarget）限制在 MAX_MEMORY_ROWS 以内；
+     * 这里同一时刻只为一个窗口函数分配 {@code int[n]} 排序索引和 {@code int[n]} 归并缓冲。
+     */
+    public static final class WindowComputation {
+
+        private final ArrayList<WindowFunction> functions;
+        private final ArrayList<Value[]> rows;
+        private final ServerSession session;
+        private final YieldController yieldController;
+        private int functionIndex;
+        private Computation current;
+
+        public WindowComputation(ArrayList<WindowFunction> functions, ArrayList<Value[]> rows,
+                ServerSession session, YieldController yieldController) {
+            this.functions = functions;
+            this.rows = rows;
+            this.session = session;
+            this.yieldController = yieldController;
         }
-        Integer[] order = new Integer[rowCount];
-        for (int i = 0; i < rowCount; i++) {
-            order[i] = i;
-        }
-        if (sortOrder != null) {
-            // 稳定排序：ORDER BY 相等的行之间保持扫描顺序
-            Arrays.sort(order, new RowComparator(rows, sortOrder));
-        }
-        int start = 0;
-        while (start < rowCount) {
-            int end;
-            if (partitionSortOrder == null) {
-                end = rowCount; // 整张表一个分区
-            } else {
-                end = start + 1;
-                Value[] first = rows.get(order[start]);
-                while (end < rowCount
-                        && partitionSortOrder.compare(first, rows.get(order[end])) == 0) {
-                    end++;
+
+        /**
+         * 执行一小批工作。
+         *
+         * @return true 表示所有窗口函数都已经算完；false 表示还需要继续调用 step()
+         *         （预算用完，或者 scheduler 要求让出——后者可以通过会话状态区分）
+         */
+        public boolean step() {
+            while (functionIndex < functions.size()) {
+                if (current == null) {
+                    current = functions.get(functionIndex).new Computation(rows, session,
+                            yieldController);
                 }
+                if (!current.step()) {
+                    return false;
+                }
+                current = null;
+                functionIndex++;
             }
-            computePartition(rows, order, start, end, session);
-            start = end;
+            return true;
+        }
+
+        public boolean isDone() {
+            return functionIndex >= functions.size();
         }
     }
 
-    private void computePartition(ArrayList<Value[]> rows, Integer[] order, int start, int end,
-            ServerSession session) {
-        switch (type) {
-        case ROW_NUMBER:
-            for (int i = start; i < end; i++) {
-                setWindowValue(rows.get(order[i]), ValueInt.get(i - start + 1));
+    /**
+     * 单个窗口函数的可恢复计算过程。
+     * <p>
+     * 排序用 int[] 下标做自底向上的稳定归并排序（ORDER BY 相等的行保持扫描顺序），
+     * 不产生 Integer 装箱对象；归并和分区扫描都可以在中途停下来，下一次 step() 从
+     * 保存的状态继续。这样大结果集的排序/聚合不会整块跑在 stop() 里。
+     */
+    private final class Computation {
+
+        // 一次 step() 最多处理的行/元素数。即使没有 scheduler，也会定期回到
+        // executeInternal 检查会话状态，单个 step 不会无界执行。
+        private static final int STEP_BUDGET = 1024;
+
+        private final ArrayList<Value[]> rows;
+        private final ServerSession session;
+        private final YieldController yieldController;
+        private final int rowCount;
+        private final boolean aggregate;
+
+        // 排序索引：int[] 而不是 Integer[]（每个窗口函数 4 字节/行，且没有装箱对象）
+        private int[] order;
+        private int[] temp;
+
+        private int progress;
+        private boolean sorting;
+        private int sortWidth;
+        private int sortLo;
+        private int mergeMid;
+        private int mergeHi;
+        private int mergeI;
+        private int mergeJ;
+        private int mergeK;
+        private int copyPos;
+        private boolean merging;
+
+        private boolean done;
+        private int computePos;
+        private int partStart;
+        private int rank;
+        private int denseRank;
+
+        // 聚合窗口的两阶段状态：先扫完整个分区并累加，再把结果写回分区内的每一行
+        private boolean aggWriting;
+        private int aggScanPos;
+        private int aggWritePos;
+        private int partEnd = -1;
+        private long aggCount;
+        private Value aggValue;
+        private Value aggResult;
+
+        Computation(ArrayList<Value[]> rows, ServerSession session,
+                YieldController yieldController) {
+            this.rows = rows;
+            this.session = session;
+            this.yieldController = yieldController;
+            this.rowCount = rows.size();
+            this.aggregate = isAggregate();
+            if (rowCount == 0) {
+                done = true;
+                return;
             }
-            return;
-        case RANK:
-        case DENSE_RANK: {
-            int rank = 1;
-            int denseRank = 1;
-            for (int i = start; i < end; i++) {
-                if (i > start && !isPeer(rows.get(order[i - 1]), rows.get(order[i]))) {
-                    rank = i - start + 1;
-                    denseRank++;
-                }
-                setWindowValue(rows.get(order[i]), ValueInt.get(type == RANK ? rank : denseRank));
+            order = new int[rowCount];
+            for (int i = 0; i < rowCount; i++) {
+                order[i] = i;
             }
-            return;
+            if (sortOrder != null && rowCount > 1) {
+                temp = new int[rowCount];
+                sorting = true;
+                sortWidth = 1;
+                sortLo = 0;
+                startSortRun();
+            }
         }
-        default: // 聚合窗口：整个分区聚合一次，结果写到分区的每一行
-            Value value = aggregate(rows, order, start, end, session);
-            for (int i = start; i < end; i++) {
-                setWindowValue(rows.get(order[i]), value);
+
+        private void startSortRun() {
+            mergeMid = Math.min(sortLo + sortWidth, rowCount);
+            mergeHi = Math.min(sortLo + 2 * sortWidth, rowCount);
+            merging = mergeMid < mergeHi;
+            mergeI = sortLo;
+            mergeJ = mergeMid;
+            mergeK = sortLo;
+            copyPos = sortLo;
+        }
+
+        boolean step() {
+            if (done) {
+                return true;
             }
+            // 即使当前没有 scheduler/不需要让出，也要响应 Statement.cancel()
+            session.checkCanceled();
+            int budget = STEP_BUDGET;
+            while (sorting && budget > 0) {
+                budget--;
+                if (stepSort()) {
+                    return false;
+                }
+            }
+            if (sorting) {
+                return false;
+            }
+            while (!done && budget > 0) {
+                budget--;
+                if (stepCompute()) {
+                    return false;
+                }
+            }
+            return done;
+        }
+
+        private boolean yieldNow() {
+            return yieldController.yieldIfNeeded(++progress);
+        }
+
+        /** 处理一次归并写入，返回 true 表示需要让出 */
+        private boolean stepSort() {
+            int[] src = order;
+            int[] dst = temp;
+            if (merging) {
+                int i = mergeI;
+                int j = mergeJ;
+                if (i < mergeMid && (j >= mergeHi
+                        || sortOrder.compare(rows.get(src[i]), rows.get(src[j])) <= 0)) {
+                    dst[mergeK++] = src[i++];
+                    mergeI = i;
+                } else {
+                    dst[mergeK++] = src[j++];
+                    mergeJ = j;
+                }
+                if (mergeK == mergeHi) {
+                    finishSortRun();
+                }
+            } else {
+                dst[copyPos] = src[copyPos];
+                copyPos++;
+                if (copyPos == mergeHi) {
+                    finishSortRun();
+                }
+            }
+            return yieldNow();
+        }
+
+        private void finishSortRun() {
+            sortLo = mergeHi;
+            if (sortLo >= rowCount) {
+                // 这一趟归并完成，交换源/目标数组
+                int[] t = order;
+                order = temp;
+                temp = t;
+                if (sortWidth > rowCount / 2) {
+                    sortWidth = rowCount;
+                } else {
+                    sortWidth <<= 1;
+                }
+                sortLo = 0;
+                if (sortWidth >= rowCount) {
+                    sorting = false;
+                    temp = null; // 排序完成，立即释放归并缓冲
+                } else {
+                    startSortRun();
+                }
+            } else {
+                startSortRun();
+            }
+        }
+
+        /** 处理一行窗口值计算，返回 true 表示需要让出 */
+        private boolean stepCompute() {
+            if (computePos >= rowCount) {
+                done = true;
+                return false;
+            }
+            if (aggregate) {
+                return stepAggregate();
+            }
+            int i = computePos;
+            Value[] row = rows.get(order[i]);
+            if (i == partStart) {
+                rank = 1;
+                denseRank = 1;
+            } else if (partitionSortOrder != null
+                    && partitionSortOrder.compare(rows.get(order[i - 1]), row) != 0) {
+                // 分区边界：排序时分区键在最前面，所以分区一定是连续的
+                partStart = i;
+                rank = 1;
+                denseRank = 1;
+            } else if ((type == RANK || type == DENSE_RANK)
+                    && !isPeer(rows.get(order[i - 1]), row)) {
+                rank = i - partStart + 1;
+                denseRank++;
+            }
+            int value;
+            switch (type) {
+            case ROW_NUMBER:
+                value = i - partStart + 1;
+                break;
+            case RANK:
+                value = rank;
+                break;
+            default: // DENSE_RANK
+                value = denseRank;
+                break;
+            }
+            setWindowValue(row, ValueInt.get(value));
+            computePos++;
+            if (computePos >= rowCount) {
+                done = true;
+            }
+            return yieldNow();
+        }
+
+        private boolean stepAggregate() {
+            if (!aggWriting) {
+                if (aggScanPos == partStart) {
+                    initAggregate();
+                } else if (partitionSortOrder != null
+                        && partitionSortOrder.compare(rows.get(order[aggScanPos - 1]),
+                                rows.get(order[aggScanPos])) != 0) {
+                    // 当前分区已经扫完，下一行属于下一个分区；转到写回阶段
+                    partEnd = aggScanPos;
+                    aggResult = finishAggregate();
+                    aggWriting = true;
+                    aggWritePos = partStart;
+                    return false;
+                }
+                accumulate(rows.get(order[aggScanPos]));
+                aggScanPos++;
+                if (aggScanPos >= rowCount) {
+                    partEnd = rowCount;
+                    aggResult = finishAggregate();
+                    aggWriting = true;
+                    aggWritePos = partStart;
+                }
+                return yieldNow();
+            }
+            // 把聚合结果写到分区内的每一行
+            setWindowValue(rows.get(order[aggWritePos]), aggResult);
+            aggWritePos++;
+            if (aggWritePos >= partEnd) {
+                partStart = partEnd;
+                computePos = partEnd;
+                aggScanPos = partEnd;
+                aggWriting = false;
+                partEnd = -1;
+                aggResult = null;
+                if (partStart >= rowCount) {
+                    done = true;
+                }
+            }
+            return yieldNow();
+        }
+
+        private void initAggregate() {
+            aggCount = 0;
+            aggValue = null;
+        }
+
+        private void accumulate(Value[] row) {
+            Value v = null;
+            if (type != COUNT_ALL) {
+                v = row[argColumnIndex];
+                if (v == ValueNull.INSTANCE) {
+                    return;
+                }
+            }
+            aggCount++;
+            switch (type) {
+            case SUM:
+                if (aggValue == null) {
+                    aggValue = v.convertTo(dataType);
+                } else {
+                    aggValue = aggValue.add(v.convertTo(aggValue.getType()));
+                }
+                break;
+            case AVG:
+                if (aggValue == null) {
+                    aggValue = v.convertTo(DataType.getAddProofType(dataType));
+                } else {
+                    aggValue = aggValue.add(v.convertTo(aggValue.getType()));
+                }
+                break;
+            case MIN:
+                if (aggValue == null || session.getDatabase().compare(v, aggValue) < 0) {
+                    aggValue = v;
+                }
+                break;
+            case MAX:
+                if (aggValue == null || session.getDatabase().compare(v, aggValue) > 0) {
+                    aggValue = v;
+                }
+                break;
+            default: // COUNT / COUNT_ALL
+                break;
+            }
+        }
+
+        private Value finishAggregate() {
+            if (type == COUNT || type == COUNT_ALL) {
+                return ValueLong.get(aggCount);
+            }
+            if (aggValue == null) {
+                return ValueNull.INSTANCE;
+            }
+            if (type == AVG) {
+                return divide(aggValue, aggCount).convertTo(dataType);
+            }
+            return aggValue.convertTo(dataType);
         }
     }
 
@@ -335,60 +665,6 @@ public class WindowFunction extends Expression {
         return orderSortOrder.compare(a, b) == 0;
     }
 
-    private Value aggregate(ArrayList<Value[]> rows, Integer[] order, int start, int end,
-            ServerSession session) {
-        long count = 0;
-        Value value = null;
-        for (int i = start; i < end; i++) {
-            Value v = null;
-            if (type != COUNT_ALL) {
-                v = rows.get(order[i])[argColumnIndex];
-                if (v == ValueNull.INSTANCE) {
-                    continue;
-                }
-            }
-            count++;
-            switch (type) {
-            case SUM:
-                if (value == null) {
-                    value = v.convertTo(dataType);
-                } else {
-                    value = value.add(v.convertTo(value.getType()));
-                }
-                break;
-            case AVG:
-                if (value == null) {
-                    value = v.convertTo(DataType.getAddProofType(dataType));
-                } else {
-                    value = value.add(v.convertTo(value.getType()));
-                }
-                break;
-            case MIN:
-                if (value == null || session.getDatabase().compare(v, value) < 0) {
-                    value = v;
-                }
-                break;
-            case MAX:
-                if (value == null || session.getDatabase().compare(v, value) > 0) {
-                    value = v;
-                }
-                break;
-            default: // COUNT / COUNT_ALL
-                break;
-            }
-        }
-        if (type == COUNT || type == COUNT_ALL) {
-            return ValueLong.get(count);
-        }
-        if (value == null) {
-            return ValueNull.INSTANCE;
-        }
-        if (type == AVG) {
-            value = divide(value, count);
-        }
-        return value.convertTo(dataType);
-    }
-
     private static Value divide(Value a, long by) {
         if (by == 0) {
             return ValueNull.INSTANCE;
@@ -396,22 +672,6 @@ public class WindowFunction extends Expression {
         int type = Value.getHigherOrder(a.getType(), Value.LONG);
         Value b = ValueLong.get(by).convertTo(type);
         return a.convertTo(type).divide(b);
-    }
-
-    private static final class RowComparator implements Comparator<Integer> {
-
-        private final ArrayList<Value[]> rows;
-        private final SortOrder sortOrder;
-
-        RowComparator(ArrayList<Value[]> rows, SortOrder sortOrder) {
-            this.rows = rows;
-            this.sortOrder = sortOrder;
-        }
-
-        @Override
-        public int compare(Integer a, Integer b) {
-            return sortOrder.compare(rows.get(a), rows.get(b));
-        }
     }
 
     /**
@@ -493,8 +753,11 @@ public class WindowFunction extends Expression {
 
     @Override
     public Expression optimize(ServerSession session) {
-        // on/partitionBy/orderBy 里的表达式同时也会作为隐藏列被 optimize，
-        // 这里只按当前(已 mapColumns 的)参数类型确定结果类型。
+        // 聚合参数可能是一个还没被 optimize 的表达式(例如 MIN(v + 1))。
+        // 隐藏列虽然也会被 optimize，但 visible 列的 WindowFunction 先于隐藏列优化，
+        // 这里必须先 optimize 参数再取类型，否则 getType() 可能返回 UNKNOWN：
+        // MIN/MAX 会把结果转成 NULL，AVG 会选错结果类型。
+        Expression arg = type >= SUM ? on.optimize(session) : null;
         switch (type) {
         case ROW_NUMBER:
         case RANK:
@@ -513,16 +776,16 @@ public class WindowFunction extends Expression {
             break;
         case MIN:
         case MAX:
-            dataType = on.getType();
-            scale = on.getScale();
-            precision = on.getPrecision();
-            displaySize = on.getDisplaySize();
+            dataType = arg.getType();
+            scale = arg.getScale();
+            precision = arg.getPrecision();
+            displaySize = arg.getDisplaySize();
             break;
         case SUM: {
-            dataType = on.getType();
-            scale = on.getScale();
-            precision = on.getPrecision();
-            displaySize = on.getDisplaySize();
+            dataType = arg.getType();
+            scale = arg.getScale();
+            precision = arg.getPrecision();
+            displaySize = arg.getDisplaySize();
             if (dataType == Value.BOOLEAN) {
                 dataType = Value.LONG;
                 scale = 0;
@@ -538,10 +801,10 @@ public class WindowFunction extends Expression {
             break;
         }
         case AVG: {
-            dataType = on.getType();
-            scale = on.getScale();
-            precision = on.getPrecision();
-            displaySize = on.getDisplaySize();
+            dataType = arg.getType();
+            scale = arg.getScale();
+            precision = arg.getPrecision();
+            displaySize = arg.getDisplaySize();
             if (dataType == Value.NULL || dataType == Value.UNKNOWN) {
                 dataType = Value.DECIMAL;
             } else if (!DataType.supportsAdd(dataType)) {
