@@ -186,15 +186,7 @@ public class TransferOutputStream implements NetOutputStream {
      */
     @Override
     public TransferOutputStream writeString(String s) throws IOException {
-        if (s == null) {
-            out.writeInt(-1);
-        } else {
-            int len = s.length();
-            out.writeInt(len);
-            for (int i = 0; i < len; i++) {
-                out.writeChar(s.charAt(i));
-            }
-        }
+        outBuffer.writeString(s);
         return this;
     }
 
@@ -518,6 +510,19 @@ public class TransferOutputStream implements NetOutputStream {
         @Override
         public void write(byte b[], int off, int len) {
             buffer.appendBytes(b, off, len);
+        }
+
+        // 与原来的 out.writeInt(len) + 逐字符 out.writeChar() 字节完全一致:
+        // 先写 int 长度(字符数, -1 表示 null)，再按 UTF-16BE 写每个 char。
+        // 整串只做一次容量检查，避免每个字符两次 ensureCapacity。
+        public void writeString(String s) {
+            if (s == null) {
+                buffer.appendInt(-1);
+            } else {
+                int len = s.length();
+                buffer.appendInt(len);
+                buffer.appendChars(s);
+            }
         }
 
         @Override

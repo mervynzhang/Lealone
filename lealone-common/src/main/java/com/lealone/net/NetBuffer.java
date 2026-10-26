@@ -40,6 +40,11 @@ public class NetBuffer {
         return this;
     }
 
+    public NetBuffer appendChars(String s) {
+        dataBuffer.putChars(s);
+        return this;
+    }
+
     public NetBuffer appendInt(int i) {
         dataBuffer.putInt(i);
         return this;
