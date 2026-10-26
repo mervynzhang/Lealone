@@ -201,23 +201,22 @@ public class SelectUnion extends Query implements ISelectUnion {
         if (sort != null) {
             buff.append("\nORDER BY ").append(sort.getSQL(exprList, exprList.length));
         }
-        buff.setEnclosed(false);
+        // 每个表达式用独立的 builder 打印，只省略它自己最外层那一对冗余括号
         if (limitExpr != null) {
             buff.append("\nLIMIT ");
-            limitExpr.getSQL(buff);
+            Expression.appendChildSQL(buff, limitExpr, false);
             if (offsetExpr != null) {
                 buff.append("\nOFFSET ");
-                offsetExpr.getSQL(buff);
+                Expression.appendChildSQL(buff, offsetExpr, false);
             }
         }
         if (sampleSizeExpr != null) {
             buff.append("\nSAMPLE_SIZE ");
-            sampleSizeExpr.getSQL(buff);
+            Expression.appendChildSQL(buff, sampleSizeExpr, false);
         }
         if (isForUpdate) {
             buff.append("\nFOR UPDATE");
         }
-        buff.setEnclosed(true);
         return buff.toString();
     }
 

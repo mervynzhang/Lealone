@@ -62,18 +62,52 @@ public class StatementBuilder {
         return enclosed;
     }
 
+    /**
+     * 打开/关闭“可省略的括号”。
+     * <p>
+     * 注意这里只是<b>可选</b>括号：某些位置（例如整条 WHERE 条件的最外层）多一对括号是冗余的，
+     * 打印 plan SQL 时可以省掉。但这个开关会沿调用链继承下去，因此只能用来控制“在当前上下文里
+     * 可有可无”的括号；一旦某个括号是重新解析所必需的（行值/列表构造、标量子查询、嵌套的
+     * 算术表达式、NOT 里的 AND/OR 组合等），就必须用 {@link #enBegin(boolean)} 传 true 强制输出，
+     * 否则 enclosed=false 会把子节点的括号一起吞掉，打印出的 SQL 无法再解析成等价语义。
+     */
     public void setEnclosed(boolean enclosed) {
         this.enclosed = enclosed;
     }
 
+    /**
+     * 输出一对“可省略”的括号：是否真的输出由 {@link #setEnclosed(boolean)} 决定。
+     * 与 {@code enBegin(false)} 等价。
+     */
     public StatementBuilder enBegin() {
-        if (enclosed)
+        return enBegin(false);
+    }
+
+    /**
+     * 输出一对括号。
+     *
+     * @param required true 表示这对括号是重新解析所必需的，无视 enclosed 开关，始终输出
+     */
+    public StatementBuilder enBegin(boolean required) {
+        if (required || enclosed)
             append('(');
         return this;
     }
 
+    /**
+     * 与 {@link #enBegin()} 配对。
+     */
     public StatementBuilder enEnd() {
-        if (enclosed)
+        return enEnd(false);
+    }
+
+    /**
+     * 与 {@link #enBegin(boolean)} 配对，required 必须与对应的 enBegin 一致。
+     *
+     * @param required true 表示这对括号是重新解析所必需的，无视 enclosed 开关，始终输出
+     */
+    public StatementBuilder enEnd(boolean required) {
+        if (required || enclosed)
             append(')');
         return this;
     }

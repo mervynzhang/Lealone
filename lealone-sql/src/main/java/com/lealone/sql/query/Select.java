@@ -956,12 +956,15 @@ public class Select extends Query {
                 } while (f != null);
             }
         }
-        buff.setEnclosed(false);
+        // 这里的每个表达式都用独立的 builder 打印，只省略“这个表达式最外层”那一对冗余括号。
+        // 以前是在 buff 上调用 setEnclosed(false) 再打印 WHERE，这个开关会继承给整棵子树，
+        // 把行值/列表、标量子查询、嵌套算术表达式里必需的括号一起吞掉，导致视图/CTE
+        // 落盘的 SQL 无法重新解析（或者更糟：能解析但语义变了）。
         // 合并时可以忽略WHERE子句
         if (!isMerged) {
             if (condition != null) {
                 buff.append("\nWHERE ");
-                condition.getSQL(buff);
+                Expression.appendChildSQL(buff, condition, false);
             }
         }
         if (groupIndex != null) {
@@ -971,7 +974,7 @@ public class Select extends Query {
                 Expression g = exprList[gi];
                 g = g.getNonAliasExpression();
                 buff.appendExceptFirst(", ");
-                g.getSQL(buff);
+                Expression.appendChildSQL(buff, g, false);
             }
         }
         if (group != null) {
@@ -979,7 +982,7 @@ public class Select extends Query {
             buff.resetCount();
             for (Expression g : group) {
                 buff.appendExceptFirst(", ");
-                g.getSQL(buff);
+                Expression.appendChildSQL(buff, g, false);
             }
         }
 
@@ -993,11 +996,11 @@ public class Select extends Query {
             // called
             Expression h = having;
             buff.append("\nHAVING ");
-            h.getSQL(buff);
+            Expression.appendChildSQL(buff, h, false);
         } else if (havingIndex >= 0) {
             Expression h = exprList[havingIndex];
             buff.append("\nHAVING ");
-            h.getSQL(buff);
+            Expression.appendChildSQL(buff, h, false);
         }
         if (sort != null) {
             buff.append("\nORDER BY ").append(sort.getSQL(exprList, visibleColumnCount));
@@ -1007,7 +1010,11 @@ public class Select extends Query {
             buff.resetCount();
             for (SelectOrderBy o : orderList) {
                 buff.appendExceptFirst(", ");
-                o.getSQL(buff);
+                StatementBuilder expr = new StatementBuilder();
+                expr.setDistributed(isDistributed);
+                expr.setEnclosed(false);
+                o.getSQL(expr);
+                buff.append(expr.toString());
             }
         }
         if (limitExpr != null) {
@@ -1019,16 +1026,16 @@ public class Select extends Query {
                 buff.append("\nLIMIT ").append(limit);
             } else {
                 buff.append("\nLIMIT ");
-                limitExpr.getSQL(buff);
+                Expression.appendChildSQL(buff, limitExpr, false);
                 if (offsetExpr != null) {
                     buff.append(" OFFSET ");
-                    offsetExpr.getSQL(buff);
+                    Expression.appendChildSQL(buff, offsetExpr, false);
                 }
             }
         }
         if (sampleSizeExpr != null) {
             buff.append("\nSAMPLE_SIZE ");
-            sampleSizeExpr.getSQL(buff);
+            Expression.appendChildSQL(buff, sampleSizeExpr, false);
         }
         if (isForUpdate) {
             buff.append("\nFOR UPDATE");

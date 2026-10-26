@@ -58,19 +58,24 @@ public class ConditionAndOr extends Condition {
 
     @Override
     public void getSQL(StatementBuilder sql) {
+        // AND/OR 的两个操作数不需要各自的组合括号：AND 结合且优先级最高、OR 自己一定会打括号，
+        // 所以这里固定用 enclosed=false 打印，避免给每个比较都套一层括号（"WHERE (ID = 1) AND (NAME = 'a')"）。
+        // 注意这只影响“操作数自己的分组括号”，操作数内部重新解析必需的括号（行值/子查询/嵌套算术）不受影响。
         switch (andOrType) {
         case AND:
+            // 只有 AND 自己这一对括号是可省的（整条 WHERE 条件的最外层、AND 套在 OR 里时）
             sql.enBegin();
-            left.getSQL(sql);
+            Expression.appendChildSQL(sql, left, false);
             sql.append("\n    AND ");
-            right.getSQL(sql);
+            Expression.appendChildSQL(sql, right, false);
             sql.enEnd();
             break;
         case OR:
+            // OR 的优先级比 AND 低，套在 AND 里时括号不能省，所以直接打括号
             sql.append('(');
-            left.getSQL(sql);
+            Expression.appendChildSQL(sql, left, false);
             sql.append("\n    OR ");
-            right.getSQL(sql);
+            Expression.appendChildSQL(sql, right, false);
             sql.append(')');
             break;
         default:
