@@ -10,7 +10,10 @@ set lealone (
         level: 'info'
     ),
     scheduler: (
-        scheduler_count: 8,
+        -- 功能测试不关心并发度, 显式给一个小值, 避免在无 cgroup 限制的高核 CI runner 上
+        -- 按 availableProcessors() 起上百个调度线程(AOTE 还会按该值建
+        -- TransactionManager/RedoLog 数组)。并发/吞吐结论见 docs/PERF_SCHEDULER.md。
+        scheduler_count: 4,
         prefer_batch_write: false,
         max_packet_count_per_loop: 1000, -- 每次循环最多读取多少个数据包，默认20
     ),

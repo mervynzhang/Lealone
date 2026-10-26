@@ -223,3 +223,58 @@ SLT 门禁 53 个文件 / 442,461 条查询 PASS。逐提交速查表见 [FIX_IN
 | 28 | `CheckpointDurabilityTest` 的重启校验会把**进程里一直在用的 `db_0`（lealone 元数据库）**复制到隔离目录，复制一个活跃库有竞态：子进程偶尔 `ExceptionInInitializerError`（实测全量套件 3 轮里 1 次），表现为该用例假红 | **未修**。试过的两条路都不行：① 子进程用自己的空 base dir 直接打开原库目录 → Lealone 把该目录当成新库（`Table "T" not found`），因为库名要靠 `db_0` 解析；② 只复制库目录不带 `db_0` → 同上。可行的后续方向：先让元数据库做一次 SYNC checkpooint 再复制，或让 `BackupRestoreCheck` 支持按存储路径构造库实例 | 已记录（不是引擎缺陷，属测试基建） |
 | 24 | 测试不 hermetic：不清理 `target/test-data` 再跑会有 131 errors；跑套件会改写被跟踪的 `orm/generated/*.java` | `TestBase.java:51`、`SqlTestBase` 默认库 |
 
+---
+
+## 二、`fix/any-csv-safety`：第三方评审 H1（`= ANY('a,b,c')` 隐式拆分导致静默错值）
+
+> 本节接在历史台账之后。本轮针对第三方评审 H1 单开分支（基于 `integration/all-fixes` 的 `b51002b2a`），
+> 代码、测试、文档在同一个提交里；提交信息按约定写 问题 / 根因 / 改动 / 测试 / 影响面。
+
+| 项 | 内容 |
+|---|---|
+| 问题 | `= ANY/ALL('...')` 对**字符串右值无条件按逗号拆分**：`SELECT 'Doe, John' = ANY('Doe, John')` 返回 **FALSE**（右侧被拆成 `'Doe'`、`'John'`），`name = ANY('Doe, John')` 也匹配不到真正的值 `'Doe, John'`，而且不报任何错——典型静默错值。PG 里 `= ANY('a,b')` 本身就是类型错误（字符串不是数组），说明这是 Lealone 独有的隐式约定，且没有开关 |
+| 根因 | `ConditionAny.toValueList()` 命中字符串分支后无条件 `StringUtils.arraySplit(s, ',', true)`（`lealone-sql/.../condition/ConditionAny.java:149-151`），把"右值是数组"与"右值是含逗号的字符串"混为一谈 |
+| 改动 | ① 只有**花括号包裹**的字符串才当数组字面量：新增 `ArrayLiteralParser`（PG 最小子集：`{a,b,c}`、`{"a,b","c"}`、`\"`/`\\` 转义、`NULL` 元素、`'{}'` 空数组、首尾空白容错）；② 普通字符串常量（含逗号）按**单值**；③ 花括号字面量解析失败抛新错误码 **90151**（`MALFORMED_ARRAY_LITERAL_1`，中英文消息已加），**不静默退化成单值**；④ 同步更新 `ConditionAny` 类注释与 `SQLParserBase` 的 ANY/ALL 注释 |
+| 测试 | `ConditionAnyTest` 从 8 个用例方法增到 **10** 个：原 CSV 断言改为 `'{a,b,c}'`；新增 `plainStringIsSingleValue`（关键回归 `'Doe, John' = ANY('Doe, John')`）与 `malformedArrayLiteralIsRejected`（90151），并扩展表列/参数/IN 改写/视图 CTE round-trip 断言。**红对照**：在 `b51002b2a` 上跑同一份测试 → `Tests run: 10, Failures: 3, Errors: 3`，关键断言 `SELECT 'Doe, John' = ANY('Doe, John') expected:<true> but was:<false>`；带修复 **10/10 绿** |
+| 全量 | `mvn -o -q -DskipTests install && mvn -o test -pl lealone-test` → **435 tests, 0 failures, 0 errors, 10 skipped**（基线 433） |
+| 行为变化 | 见下面"修复前后逐条对照"与"行为变化声明" |
+| 提交 | 本分支 `fix/any-csv-safety`（基于 `b51002b2a`），提交见 `git log -1` |
+
+### 修复前后逐条对照（同一条 SQL，嵌入模式实测）
+
+| SQL | 修复前 | 修复后 |
+|---|---|---|
+| `SELECT 'b' = ANY('a,b,c')` | TRUE（按逗号拆成 3 个元素） | **FALSE**（单值 `'a,b,c'`） |
+| `SELECT 'Doe, John' = ANY('Doe, John')` | **FALSE**（被拆成 `'Doe'`、`'John'`） | **TRUE** |
+| `SELECT 'Doe' = ANY('Doe, John')` | TRUE（拆开后命中） | **FALSE** |
+| `SELECT 'John' = ANY('Doe, John')` | TRUE（拆开后命中） | **FALSE** |
+| `SELECT 'a' = ANY('{a,b,c}')` | FALSE（花括号被当成元素内容） | **TRUE** |
+| `SELECT 'b' = ANY('{"a,b","c"}')` | FALSE | **FALSE**（`'a,b'` 是一个元素，`'b'` 不是） |
+| `SELECT 'a,b' = ANY('{"a,b","c"}')` | FALSE | **TRUE** |
+| `SELECT 1 = ANY('1,2,3')` | TRUE（拆开后命中 1） | **错误 22018**（单值 `'1,2,3'` 无法转成 INT，不会再"碰巧"匹配） |
+| `SELECT 1 = ANY('{1,2,3}')` | 错误 22018（`"{1"` 转 INT） | **TRUE** |
+| `SELECT 1 = ANY('{}')` | 错误 22018 | **FALSE**（空数组） |
+| `SELECT 'x' = ANY('{NULL}')` | FALSE | **NULL**（三值逻辑） |
+| `SELECT 'NULL' = ANY('{"NULL"}')` | FALSE | **TRUE**（带引号的 NULL 是普通字符串） |
+| `SELECT 'a"b' = ANY('{"a\"b"}')` | FALSE | **TRUE**（`\"` 转义） |
+| `SELECT 1 = ANY('{1,2')` | 错误 22018（`"{1"` 转 INT） | **错误 90151**（明确的格式错误） |
+| `SELECT 1 = ANY('{a,,b}')` | 错误 22018 | **错误 90151** |
+| `SELECT 1 = ANY('{{1,2},{3,4}}')` | 错误 22018 | **错误 90151**（多维暂不支持） |
+| 表 `('Doe','John','Doe, John')`：`name = ANY('{Doe, John}')` | 0 行 | **2 行** |
+| 同上：`name = ANY('Doe, John')` | 2 行（拆开后命中 Doe/John） | **1 行**（真正的 `'Doe, John'`） |
+| 同上：`name = ANY(name)` | 2 行（含逗号的那行匹配不到自己） | **3 行** |
+
+### 行为变化声明（第三方评审要求）
+
+1. `= ANY('a,b,c')` / `= ALL('a,b,c')` **不再按逗号拆分**，普通字符串一律单值；数组写 `'{a,b,c}'`。
+   连带影响：`= ANY('')` 由"空数组（FALSE）"变为"单个空字符串元素"（空数组写 `'{}'`）；JDBC `setString`
+   参数与表列值遵循同一规则；以 `{` 开头但无法解析的字符串（例如 JSON `'{"a":1}'`）会报 90151，不再
+   静默当单值（确需单值可改用 `IN ('{"a":1}')`，`ConditionIn` 不经过数组解析）。
+2. **`ROW_NUMBER() OVER ()` 等窗口函数以前在 DML 里会被静默求值为 NULL，现在是语法错**：
+   `UPDATE t SET v = RANK() OVER ()` 旧行为是**写入 NULL**、`DELETE ... WHERE ROW_NUMBER() OVER () = 1`
+   旧行为是**静默删行**；现在解析阶段直接报 `Syntax error ... OVER[*] ()`（有意收紧，属于窗口函数
+   Blocker 修复 `f3f30264d` 的一部分）。
+3. **窗口函数仅支持单机**：分布式 plan 会打印窗口函数本体（隐藏列已不打印），跨节点场景没有验证，
+   对外说明与文档必须标注"**窗口函数仅支持单机**"。
+
+

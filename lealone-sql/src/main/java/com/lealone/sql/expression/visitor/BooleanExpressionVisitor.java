@@ -19,12 +19,14 @@ import com.lealone.sql.expression.SequenceValue;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.Variable;
 import com.lealone.sql.expression.Wildcard;
+import com.lealone.sql.expression.WindowFunction;
 import com.lealone.sql.expression.aggregate.AGroupConcat;
 import com.lealone.sql.expression.aggregate.Aggregate;
 import com.lealone.sql.expression.aggregate.JavaAggregate;
 import com.lealone.sql.expression.condition.CompareLike;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
+import com.lealone.sql.expression.condition.ConditionAny;
 import com.lealone.sql.expression.condition.ConditionExists;
 import com.lealone.sql.expression.condition.ConditionIn;
 import com.lealone.sql.expression.condition.ConditionInConstantSet;
@@ -125,6 +127,11 @@ public abstract class BooleanExpressionVisitor extends ExpressionVisitorBase<Boo
     }
 
     @Override
+    public Boolean visitConditionAny(ConditionAny e) {
+        return e.getLeft().accept(this) && e.getRight().accept(this);
+    }
+
+    @Override
     public Boolean visitConditionExists(ConditionExists e) {
         return visitQuery(e.getQuery());
     }
@@ -158,6 +165,28 @@ public abstract class BooleanExpressionVisitor extends ExpressionVisitorBase<Boo
     @Override
     public Boolean visitConditionNot(ConditionNot e) {
         return e.getCondition().accept(this);
+    }
+
+    @Override
+    public Boolean visitWindowFunction(WindowFunction e) {
+        if (e.getOn() != null && !e.getOn().accept(this)) {
+            return false;
+        }
+        if (e.getPartitionBy() != null) {
+            for (Expression e2 : e.getPartitionBy()) {
+                if (!e2.accept(this)) {
+                    return false;
+                }
+            }
+        }
+        if (e.getOrderBy() != null) {
+            for (SelectOrderBy o : e.getOrderBy()) {
+                if (o.expression != null && !o.expression.accept(this)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     @Override

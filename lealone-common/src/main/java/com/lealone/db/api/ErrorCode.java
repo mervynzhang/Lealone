@@ -1912,6 +1912,25 @@ public class ErrorCode {
 
     public static final int PLUGIN_NOT_FOUND_1 = 90149;
 
+    /**
+     * The error with code <code>90150</code> is thrown when a query with window functions
+     * needs to materialize more rows than the database setting MAX_MEMORY_ROWS allows.
+     * Window functions need the whole partition, so the rows can not be streamed or
+     * written to disk like a normal result set.
+     */
+    public static final int WINDOW_FUNCTION_BUFFER_EXCEEDS_MAX_MEMORY_ROWS_1 = 90150;
+
+    /**
+     * The error with code <code>90151</code> is thrown when the right side of ANY/ALL is a string
+     * constant that starts with '{' but is not a well formed PostgreSQL array literal, for example
+     * <pre>
+     * SELECT 1 = ANY('{1,2');
+     * </pre>
+     * Such a string is never silently treated as a single value, because that would hide a typo
+     * behind a wrong comparison result.
+     */
+    public static final int MALFORMED_ARRAY_LITERAL_1 = 90151;
+
     // next are 90056, 90110, 90122, 90149
 
     private ErrorCode() {

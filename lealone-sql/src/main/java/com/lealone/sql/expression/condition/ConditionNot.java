@@ -64,7 +64,10 @@ public class ConditionNot extends Condition {
     @Override
     public void getSQL(StatementBuilder sql) {
         sql.append("(NOT ");
-        condition.getSQL(sql);
+        // 外面的这对括号是 NOT 自己的分组括号，不能拿来当操作数的分组括号用：
+        // 如果操作数是 AND/OR 组合，它必须再打一层自己的括号，
+        // 否则 "NOT (a = 1 AND b = 2)" 会被打印成 "(NOT a = 1 AND b = 2)"，语义就反了。
+        Expression.appendChildSQL(sql, condition, true);
         sql.append(')');
     }
 

@@ -201,11 +201,28 @@ public abstract class StatementBase implements PreparedSQLStatement, ParsedSQLSt
         if (fetchSize != SysProperties.SERVER_RESULT_SET_FETCH_SIZE) {
             stmt.setFetchSize(fetchSize);
         }
+        // 重新编译出来的语句要继承旧语句已经设置好的参数值: 否则在语句准备好之后、
+        // 执行之前发生了 DDL(比如在触发器里建表), 语句会被重新编译, 参数值随之丢失,
+        // 执行时报 Parameter "#n" is not set
+        copyParameterValues(stmt);
         // prepareAlways的语句每次执行都要重新编译，不需要保留
         if (!prepareAlways) {
             delegate = stmt;
         }
         return stmt;
+    }
+
+    private void copyParameterValues(StatementBase newStatement) {
+        ArrayList<Parameter> oldList = parameters;
+        ArrayList<Parameter> newList = newStatement.parameters;
+        if (oldList == null || newList == null)
+            return;
+        for (int i = 0, n = Math.min(oldList.size(), newList.size()); i < n; i++) {
+            Parameter old = oldList.get(i);
+            if (old.isValueSet()) {
+                newList.get(i).setValue(old.getValue());
+            }
+        }
     }
 
     /**

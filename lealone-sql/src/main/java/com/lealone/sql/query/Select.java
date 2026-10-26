@@ -42,6 +42,7 @@ import com.lealone.sql.expression.ExpressionColumn;
 import com.lealone.sql.expression.Parameter;
 import com.lealone.sql.expression.RowVersion;
 import com.lealone.sql.expression.SelectOrderBy;
+import com.lealone.sql.expression.WindowFunction;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
 import com.lealone.sql.expression.visitor.ExpressionVisitor;
@@ -78,6 +79,15 @@ public class Select extends Query {
     int havingIndex;
     HashMap<Expression, Object> currentGroup;
     int currentGroupRowId;
+    // 窗口函数(按 select 列表顺序)，null 表示没有
+    private ArrayList<WindowFunction> windowFunctions;
+    // 窗口函数追加的隐藏列区间 [windowHiddenColumnStart, windowHiddenColumnEnd)。
+    // 分布式执行时这些列只在本节点计算窗口时使用，不能出现在发给其它节点的 plan SQL 里。
+    private int windowHiddenColumnStart = -1;
+    private int windowHiddenColumnEnd = -1;
+    // 解析阶段是否遇到过窗口函数(可能出现在 select 列表之外的位置)。
+    // 用来避免给完全没用到窗口函数的普通查询增加 visitor 遍历开销。
+    private boolean windowFunctionParsed;
     Expression condition;
     int visibleColumnCount;
     int resultColumnCount; // 不包含having和group by中加入的列
@@ -118,6 +128,20 @@ public class Select extends Query {
      */
     public void setGroupQuery() {
         isGroupQuery = true;
+    }
+
+    // 窗口聚合在解析时会先按普通聚合处理(设置了 isGroupQuery)，识别出 OVER 后要还原
+    public void setGroupQuery(boolean isGroupQuery) {
+        this.isGroupQuery = isGroupQuery;
+    }
+
+    public boolean hasWindowFunctions() {
+        return windowFunctions != null && !windowFunctions.isEmpty();
+    }
+
+    // 由 Parser 在解析出窗口函数时调用
+    public void setWindowFunctionParsed() {
+        windowFunctionParsed = true;
     }
 
     public boolean isGroupQuery() {
@@ -237,6 +261,9 @@ public class Select extends Query {
             // prepare阶段还用到orderList，所以先不置null
         }
         resultColumnCount = expressions.size();
+        if (windowFunctionParsed) {
+            initWindowFunctions();
+        }
 
         if (having != null) {
             expressions.add(having);
@@ -259,6 +286,88 @@ public class Select extends Query {
             mapColumns(f, 0);
         }
         checkInit = true;
+    }
+
+    // 收集 select 列表里的窗口函数，并把它们用到的表达式(聚合参数/分区键/排序键)作为隐藏列
+    // 追加到 expressions 末尾，这样每行物化时这些值已经算好，计算窗口时按列索引直接取。
+    private void initWindowFunctions() {
+        Database db = session.getDatabase();
+        // 记录已有表达式的 SQL，隐藏列按 SQL 去重（多个窗口共用排序键/分区键时只存一份）
+        ArrayList<String> expressionSQL = new ArrayList<>(expressions.size());
+        for (Expression e : expressions) {
+            // 可见列可能是别名，比较时用非别名表达式，才能和隐藏列(如 ORDER BY 的列)按 SQL 对上
+            expressionSQL.add(e.getNonAliasExpression().getSQL());
+        }
+        windowHiddenColumnStart = expressions.size();
+        for (int i = 0; i < visibleColumnCount; i++) {
+            Expression expr = expressions.get(i);
+            Expression e = expr.getNonAliasExpression();
+            if (e instanceof WindowFunction) {
+                WindowFunction wf = (WindowFunction) e;
+                wf.setOutputColumnIndex(i);
+                wf.prepareColumns(expressions, db, expressionSQL);
+                if (windowFunctions == null) {
+                    windowFunctions = new ArrayList<>();
+                }
+                windowFunctions.add(wf);
+            } else if (WindowFunction.contains(expr)) {
+                // 例如 ROW_NUMBER() OVER () + 1
+                throw DbException.getUnsupportedException(
+                        "window function must be a top level select column: " + expr.getSQL());
+            }
+        }
+        if (expressions.size() > windowHiddenColumnStart) {
+            windowHiddenColumnEnd = expressions.size();
+        } else {
+            // 所有窗口键都复用了可见列，没有隐藏列
+            windowHiddenColumnStart = -1;
+        }
+    }
+
+    // 只支持"普通单表/join 查询 + 窗口函数"这个子集，其它组合明确报错，避免静默给错结果
+    private void checkWindowFunctionsSupported() {
+        if (condition != null && WindowFunction.contains(condition)) {
+            throw DbException.getUnsupportedException("window function in WHERE");
+        }
+        // having 在 init() 里已经挪进 expressions 并置 null，必须查 havingIndex 才能生效
+        if (havingIndex >= 0 && WindowFunction.contains(expressions.get(havingIndex))) {
+            throw DbException.getUnsupportedException("window function in HAVING");
+        }
+        for (int i = visibleColumnCount; i < expressions.size(); i++) {
+            if (i == havingIndex) {
+                continue;
+            }
+            if (WindowFunction.contains(expressions.get(i))) {
+                throw DbException.getUnsupportedException(
+                        "window function in ORDER BY / GROUP BY: " + expressions.get(i).getSQL());
+            }
+        }
+        if (!hasWindowFunctions()) {
+            return;
+        }
+        if (isGroupQuery) {
+            throw DbException.getUnsupportedException(
+                    "window function in a GROUP BY / aggregate query");
+        }
+        if (distinct) {
+            throw DbException.getUnsupportedException("window function with SELECT DISTINCT");
+        }
+        if (isForUpdate) {
+            throw DbException.getUnsupportedException("window function with FOR UPDATE");
+        }
+        for (WindowFunction wf : windowFunctions) {
+            wf.checkSupported();
+        }
+    }
+
+    /**
+     * 创建窗口函数的分步计算器。执行器在全部行读完之后调用，每次 {@code step()} 只算一小批，
+     * 中间可以让出/取消；结果直接写回物化行的窗口列。
+     */
+    public WindowFunction.WindowComputation createWindowComputation(ArrayList<Value[]> rows,
+            WindowFunction.YieldController yieldController) {
+        return new WindowFunction.WindowComputation(windowFunctions, rows, session,
+                yieldController);
     }
 
     private void expandColumnList() {
@@ -383,6 +492,10 @@ public class Select extends Query {
         if (SysProperties.CHECK && !checkInit) {
             DbException.throwInternalError("not initialized");
         }
+        if (windowFunctionParsed) {
+            // 窗口函数可能出现在 select 列表之外的位置(WHERE/HAVING/ORDER BY)，也要检查
+            checkWindowFunctionsSupported();
+        }
         if (orderList != null) {
             sort = prepareOrder(session, orderList, expressions.size());
             orderList = null;
@@ -438,6 +551,11 @@ public class Select extends Query {
                     topTableFilter.setIndex(index);
                     isGroupSortedQuery = true;
                 }
+            }
+        }
+        if (hasWindowFunctions()) {
+            for (WindowFunction wf : windowFunctions) {
+                wf.prepareSortOrder(session);
             }
         }
         expressionArray = new Expression[expressions.size()];
@@ -805,6 +923,11 @@ public class Select extends Query {
         for (int i = 0; i < columnCount; i++) {
             if (isDistributed && havingIndex >= 0 && i == havingIndex)
                 continue;
+            // 窗口函数的隐藏列（聚合参数/分区键/排序键）只在本地算窗口时使用，
+            // 发给其它节点会多出列、导致远程重解析时列数与结果对不上
+            if (isDistributed && windowHiddenColumnStart >= 0 && i >= windowHiddenColumnStart
+                    && i < windowHiddenColumnEnd)
+                continue;
             StatementBuilder expr = new StatementBuilder();
             expr.setDistributed(isDistributed);
             buff.appendExceptFirst(",");
@@ -833,12 +956,15 @@ public class Select extends Query {
                 } while (f != null);
             }
         }
-        buff.setEnclosed(false);
+        // 这里的每个表达式都用独立的 builder 打印，只省略“这个表达式最外层”那一对冗余括号。
+        // 以前是在 buff 上调用 setEnclosed(false) 再打印 WHERE，这个开关会继承给整棵子树，
+        // 把行值/列表、标量子查询、嵌套算术表达式里必需的括号一起吞掉，导致视图/CTE
+        // 落盘的 SQL 无法重新解析（或者更糟：能解析但语义变了）。
         // 合并时可以忽略WHERE子句
         if (!isMerged) {
             if (condition != null) {
                 buff.append("\nWHERE ");
-                condition.getSQL(buff);
+                Expression.appendChildSQL(buff, condition, false);
             }
         }
         if (groupIndex != null) {
@@ -848,7 +974,7 @@ public class Select extends Query {
                 Expression g = exprList[gi];
                 g = g.getNonAliasExpression();
                 buff.appendExceptFirst(", ");
-                g.getSQL(buff);
+                Expression.appendChildSQL(buff, g, false);
             }
         }
         if (group != null) {
@@ -856,7 +982,7 @@ public class Select extends Query {
             buff.resetCount();
             for (Expression g : group) {
                 buff.appendExceptFirst(", ");
-                g.getSQL(buff);
+                Expression.appendChildSQL(buff, g, false);
             }
         }
 
@@ -870,11 +996,11 @@ public class Select extends Query {
             // called
             Expression h = having;
             buff.append("\nHAVING ");
-            h.getSQL(buff);
+            Expression.appendChildSQL(buff, h, false);
         } else if (havingIndex >= 0) {
             Expression h = exprList[havingIndex];
             buff.append("\nHAVING ");
-            h.getSQL(buff);
+            Expression.appendChildSQL(buff, h, false);
         }
         if (sort != null) {
             buff.append("\nORDER BY ").append(sort.getSQL(exprList, visibleColumnCount));
@@ -884,7 +1010,11 @@ public class Select extends Query {
             buff.resetCount();
             for (SelectOrderBy o : orderList) {
                 buff.appendExceptFirst(", ");
-                o.getSQL(buff);
+                StatementBuilder expr = new StatementBuilder();
+                expr.setDistributed(isDistributed);
+                expr.setEnclosed(false);
+                o.getSQL(expr);
+                buff.append(expr.toString());
             }
         }
         if (limitExpr != null) {
@@ -896,16 +1026,16 @@ public class Select extends Query {
                 buff.append("\nLIMIT ").append(limit);
             } else {
                 buff.append("\nLIMIT ");
-                limitExpr.getSQL(buff);
+                Expression.appendChildSQL(buff, limitExpr, false);
                 if (offsetExpr != null) {
                     buff.append(" OFFSET ");
-                    offsetExpr.getSQL(buff);
+                    Expression.appendChildSQL(buff, offsetExpr, false);
                 }
             }
         }
         if (sampleSizeExpr != null) {
             buff.append("\nSAMPLE_SIZE ");
-            sampleSizeExpr.getSQL(buff);
+            Expression.appendChildSQL(buff, sampleSizeExpr, false);
         }
         if (isForUpdate) {
             buff.append("\nFOR UPDATE");
@@ -970,6 +1100,11 @@ public class Select extends Query {
 
     @Override
     public boolean allowGlobalConditions() {
+        // 窗口函数在整张表上计算，把上层查询的条件下推到窗口查询里会改变窗口的取值
+        // (例如先过滤掉几行，row_number 就会变)，所以不允许下推
+        if (hasWindowFunctions()) {
+            return false;
+        }
         if (offsetExpr == null && (limitExpr == null || sort == null)) {
             return true;
         }

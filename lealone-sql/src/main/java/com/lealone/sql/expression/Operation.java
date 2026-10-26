@@ -98,22 +98,33 @@ public class Operation extends Expression {
 
     @Override
     public void getSQL(StatementBuilder sql) {
+        // 自己这一对括号只是“可选”的：作为整条 WHERE 条件/比较操作数时它是冗余的
         sql.enBegin();
         if (opType == NEGATE) {
             // don't remove the space, otherwise it might end up some thing like
             // --1 which is a line remark
             sql.append("- ");
-            left.getSQL(sql);
+            appendOperand(sql, left);
         } else {
             // don't remove the space, otherwise it might end up some thing like
             // --1 which is a line remark
-            left.getSQL(sql);
+            appendOperand(sql, left);
             sql.append(' ');
             sql.append(getOperationToken());
             sql.append(' ');
-            right.getSQL(sql);
+            appendOperand(sql, right);
         }
         sql.enEnd();
+    }
+
+    /**
+     * 算术/字符串运算的优先级完全靠树形结构表达，打印成中缀时必须把嵌套的运算括起来，
+     * 否则 "(id + 1) * 2" 会被打印成 "id + 1 * 2"、"(a - (b - c))" 会被打印成 "a - b - c"，
+     * 重新解析后语义就变了（这类错误是静默的，比语法错误更危险）。
+     * 外层的 setEnclosed(false) 只允许省掉最外层那一对冗余括号，这里的嵌套括号必须强制输出。
+     */
+    private static void appendOperand(StatementBuilder sql, Expression e) {
+        Expression.appendChildSQL(sql, e, sql.isEnclosed() || e instanceof Operation);
     }
 
     private String getOperationToken() {

@@ -16,12 +16,14 @@ import com.lealone.sql.expression.SequenceValue;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.Variable;
 import com.lealone.sql.expression.Wildcard;
+import com.lealone.sql.expression.WindowFunction;
 import com.lealone.sql.expression.aggregate.AGroupConcat;
 import com.lealone.sql.expression.aggregate.Aggregate;
 import com.lealone.sql.expression.aggregate.JavaAggregate;
 import com.lealone.sql.expression.condition.CompareLike;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
+import com.lealone.sql.expression.condition.ConditionAny;
 import com.lealone.sql.expression.condition.ConditionExists;
 import com.lealone.sql.expression.condition.ConditionIn;
 import com.lealone.sql.expression.condition.ConditionInConstantSet;
@@ -58,6 +60,8 @@ public interface ExpressionVisitor<R> {
 
     R visitRownum(Rownum e);
 
+    R visitWindowFunction(WindowFunction e);
+
     R visitSequenceValue(SequenceValue e);
 
     R visitSubQuery(SubQuery e);
@@ -73,6 +77,8 @@ public interface ExpressionVisitor<R> {
     R visitComparison(Comparison e);
 
     R visitConditionAndOr(ConditionAndOr e);
+
+    R visitConditionAny(ConditionAny e);
 
     R visitConditionExists(ConditionExists e);
 

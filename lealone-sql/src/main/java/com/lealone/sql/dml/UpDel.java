@@ -74,16 +74,16 @@ public abstract class UpDel extends ManipulationStatement {
     }
 
     protected void appendPlanSQL(StatementBuilder buff) {
-        buff.setEnclosed(false);
+        // 与 Select.getPlanSQL 一样：每个表达式用独立的 builder 打印，
+        // 只省略它自己最外层那一对冗余括号，避免把子树里必需的括号（行值/子查询/嵌套算术）一起吞掉
         if (condition != null) {
             buff.append("\nWHERE ");
-            condition.getSQL(buff);
+            Expression.appendChildSQL(buff, condition, false);
         }
         if (limitExpr != null) {
             buff.append("\nLIMIT ");
-            limitExpr.getSQL(buff);
+            Expression.appendChildSQL(buff, limitExpr, false);
         }
-        buff.setEnclosed(true);
     }
 
     protected static abstract class YieldableUpDel extends YieldableLoopUpdateBase {

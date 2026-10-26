@@ -19,12 +19,14 @@ import com.lealone.sql.expression.SequenceValue;
 import com.lealone.sql.expression.ValueExpression;
 import com.lealone.sql.expression.Variable;
 import com.lealone.sql.expression.Wildcard;
+import com.lealone.sql.expression.WindowFunction;
 import com.lealone.sql.expression.aggregate.AGroupConcat;
 import com.lealone.sql.expression.aggregate.Aggregate;
 import com.lealone.sql.expression.aggregate.JavaAggregate;
 import com.lealone.sql.expression.condition.CompareLike;
 import com.lealone.sql.expression.condition.Comparison;
 import com.lealone.sql.expression.condition.ConditionAndOr;
+import com.lealone.sql.expression.condition.ConditionAny;
 import com.lealone.sql.expression.condition.ConditionExists;
 import com.lealone.sql.expression.condition.ConditionIn;
 import com.lealone.sql.expression.condition.ConditionInConstantSet;
@@ -137,6 +139,13 @@ public class VoidExpressionVisitor extends ExpressionVisitorBase<Void> {
     }
 
     @Override
+    public Void visitConditionAny(ConditionAny e) {
+        e.getLeft().accept(this);
+        e.getRight().accept(this);
+        return null;
+    }
+
+    @Override
     public Void visitConditionExists(ConditionExists e) {
         visitQuery(e.getQuery());
         return null;
@@ -167,6 +176,24 @@ public class VoidExpressionVisitor extends ExpressionVisitorBase<Void> {
     @Override
     public Void visitConditionNot(ConditionNot e) {
         e.getCondition().accept(this);
+        return null;
+    }
+
+    @Override
+    public Void visitWindowFunction(WindowFunction e) {
+        if (e.getOn() != null)
+            e.getOn().accept(this);
+        if (e.getPartitionBy() != null) {
+            for (Expression e2 : e.getPartitionBy()) {
+                e2.accept(this);
+            }
+        }
+        if (e.getOrderBy() != null) {
+            for (SelectOrderBy o : e.getOrderBy()) {
+                if (o.expression != null)
+                    o.expression.accept(this);
+            }
+        }
         return null;
     }
 

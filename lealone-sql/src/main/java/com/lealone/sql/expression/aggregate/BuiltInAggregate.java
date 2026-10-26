@@ -63,6 +63,10 @@ public abstract class BuiltInAggregate extends Aggregate {
         return type;
     }
 
+    public boolean isDistinct() {
+        return distinct;
+    }
+
     @Override
     public Expression getOn() {
         return on;

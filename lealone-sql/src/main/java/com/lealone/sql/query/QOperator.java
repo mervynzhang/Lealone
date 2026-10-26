@@ -5,6 +5,8 @@
  */
 package com.lealone.sql.query;
 
+import java.util.ArrayList;
+
 import com.lealone.db.result.LocalResult;
 import com.lealone.db.result.ResultTarget;
 import com.lealone.db.row.Row;
@@ -44,6 +46,10 @@ public abstract class QOperator implements Operator {
 
     protected YieldableSelect yieldableSelect;
 
+    // 有窗口函数时，行先缓存到 windowTarget，等全部读完后再计算窗口列
+    private WindowResultTarget windowTarget;
+    private ResultTarget windowRealTarget;
+
     public QOperator(Select select) {
         this.select = select;
         topTableFilter = select.getTopTableFilter();
@@ -67,7 +73,62 @@ public abstract class QOperator implements Operator {
         return yieldableSelect.yieldIfNeeded(rowNumber);
     }
 
+    /**
+     * 打开窗口函数需要的行缓冲：result 先指向缓冲区，等扫描结束后由执行器分步计算窗口列，
+     * 算完再把缓冲的行交给真正的目标。
+     */
+    public void enableWindowBuffering(ResultTarget to) {
+        windowRealTarget = to;
+        windowTarget = new WindowResultTarget(session);
+        result = windowTarget;
+    }
+
+    /** 是否还有等待计算窗口列的缓冲行 */
+    public boolean hasWindowBuffer() {
+        return windowTarget != null;
+    }
+
+    /**
+     * 取出缓冲的行交给执行器计算窗口列；同时解除 result 引用，
+     * 避免 stop() 再走一次整表计算。
+     */
+    public ArrayList<Value[]> takeWindowRows() {
+        if (windowTarget == null) {
+            return null;
+        }
+        ArrayList<Value[]> rows = windowTarget.getRows();
+        windowTarget = null;
+        return rows;
+    }
+
+    /**
+     * 窗口列已经算完，把行写给真正的目标。必须在 localResult.done()/setLimit 之前调用。
+     */
+    public void finishWindowRows(ArrayList<Value[]> rows) {
+        ResultTarget to = windowRealTarget;
+        windowRealTarget = null;
+        if (to == null || rows == null) {
+            return;
+        }
+        for (Value[] row : rows) {
+            to.addRow(row);
+        }
+    }
+
+    /**
+     * 异常/取消时丢弃窗口缓冲：不再做排序/分区扫描，也不再写结果。
+     */
+    public void abortWindow() {
+        windowTarget = null;
+        windowRealTarget = null;
+    }
+
     public boolean canBreakLoop() {
+        // 有窗口函数时必须读完全部行才能计算（窗口语义要求看到整个分区，
+        // LIMIT 不能提前截断；缓冲大小由 WindowResultTarget 的 maxMemoryRows 限制）
+        if (windowTarget != null) {
+            return false;
+        }
         // 不需要排序时，如果超过行数限制了可以退出循环
         if ((select.sort == null || select.sortUsingIndex) && limitRows > 0 && rowCount >= limitRows) {
             return true;
@@ -117,6 +178,10 @@ public abstract class QOperator implements Operator {
 
     @Override
     public void stop() {
+        // 正常路径下窗口列已经在 executeInternal 的分步计算里算完并 flush 过了。
+        // 走到这里还有缓冲，说明扫描/计算中途异常或取消，直接丢弃：
+        // 不能在 stop() 里再做一次 O(n log n) 的排序/聚合（异常路径会把整表算完）。
+        abortWindow();
         if (select.offsetExpr != null) {
             localResult.setOffset(select.offsetExpr.getValue(session).getInt());
         }

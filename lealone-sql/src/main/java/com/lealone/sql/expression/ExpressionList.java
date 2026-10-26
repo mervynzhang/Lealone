@@ -68,7 +68,11 @@ public class ExpressionList extends Expression {
 
     @Override
     public void getSQL(StatementBuilder sql) {
-        sql.enBegin();
+        // 行值/列表构造器的括号是重新解析所必需的。以前用 enBegin()，会被 Select.getPlanSQL
+        // 的 setEnclosed(false) 吞掉："(ID, NAME) = (1, 2)" 变成 "ID, NAME = 1, 2"、
+        // "(ID, NAME) IN ((1, 2), (3, 4))" 变成 "ID, NAME IN(1, 2, 3, 4)"，
+        // 视图/CTE 存下这段文本后就再也解析不回来了。
+        sql.enBegin(true);
         sql.resetCount();
         for (Expression e : list) {
             sql.appendExceptFirst(", ");
@@ -77,7 +81,7 @@ public class ExpressionList extends Expression {
         if (list.length == 1) {
             sql.append(',');
         }
-        sql.enEnd();
+        sql.enEnd(true);
     }
 
     @Override

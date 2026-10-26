@@ -132,6 +132,15 @@ public abstract class NetClientBase implements NetClient {
     protected void initSocket(Socket socket, Map<String, String> config) throws SocketException {
         int socketRecvBuffer = MapUtils.getInt(config, ConnectionSetting.SOCKET_RECV_BUFFER_SIZE.name(),
                 16 * 1024);
+        // 默认保持 8k: SO_SNDBUF 是每个连接的内核发送缓冲, 而且一旦显式设置,
+        // Linux 的 tcp_wmem 自动调优就失效了。按评审口径, 64k 时 1k/10k 连接的
+        // 不可换出内核内存约 160MB/1.6GB, 旧值 8k 约 48MB/480MB。
+        // 需要更大发送缓冲的批量写不要改默认值: NioWritableChannel 会在单个待发送
+        // 缓冲区超过 32k 时按连接自适应上调一次到 64k; 也可以在 JDBC URL /
+        // 连接参数里用 SOCKET_SEND_BUFFER_SIZE 显式指定(此时不再自适应)。
+        // 自带用例 batch=500 的单个请求实测约 103.8KB, 8k/64k 分别会拆成约 13/2 块;
+        // 这里只是减少拆分次数, 并不保证请求一次进缓冲区。实测 100k 行 × 85 字符
+        // 经 TCP 批量插入: 固定 8k 约 9.0-9.2s, 64k 或自适应上调后约 0.27-0.33s。
         int socketSendBuffer = MapUtils.getInt(config, ConnectionSetting.SOCKET_SEND_BUFFER_SIZE.name(),
                 8 * 1024);
         socket.setReceiveBufferSize(socketRecvBuffer);

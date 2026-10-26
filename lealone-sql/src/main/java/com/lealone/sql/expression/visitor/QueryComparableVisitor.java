@@ -7,12 +7,19 @@ package com.lealone.sql.expression.visitor;
 
 import com.lealone.sql.expression.Rownum;
 import com.lealone.sql.expression.SequenceValue;
+import com.lealone.sql.expression.WindowFunction;
 import com.lealone.sql.expression.function.Function;
 
 public class QueryComparableVisitor extends BooleanExpressionVisitor {
 
     @Override
     public Boolean visitRownum(Rownum e) {
+        return false;
+    }
+
+    // 窗口函数列不是可下推的查询条件(它的值要等整张表物化后才算出来)
+    @Override
+    public Boolean visitWindowFunction(WindowFunction e) {
         return false;
     }
 

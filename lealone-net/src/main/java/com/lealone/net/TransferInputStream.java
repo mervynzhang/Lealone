@@ -153,13 +153,22 @@ public class TransferInputStream implements NetInputStream {
         if (len == -1) {
             return null;
         }
-        StringBuilder buff = new StringBuilder(len);
-        for (int i = 0; i < len; i++) {
-            buff.append(in.readChar());
+        if (len == 0) {
+            return StringUtils.cache("");
         }
-        String s = buff.toString();
-        s = StringUtils.cache(s);
-        return s;
+        if (len < 0 || len > (Integer.MAX_VALUE >> 1)) {
+            throw new IOException("非法的字符串长度: " + len + " (允许范围 0.." + (Integer.MAX_VALUE >> 1) + ")");
+        }
+        byte[] bytes = DataUtils.newBytes(len << 1);
+        in.readFully(bytes);
+        // 不能直接用 new String(bytes, UTF_16BE): JDK 解码器会把不成对的代理项
+        // 替换成 U+FFFD，协议层要求逐码元可逆(写入端按原始 char 写)。
+        // 这里按大端序逐码元还原，一次读完再逐 char 组装，不再每个字符一次虚调用。
+        char[] chars = new char[len];
+        for (int i = 0, j = 0; i < len; i++) {
+            chars[i] = (char) (((bytes[j++] & 0xff) << 8) | (bytes[j++] & 0xff));
+        }
+        return StringUtils.cache(new String(chars));
     }
 
     /**
@@ -449,7 +458,27 @@ public class TransferInputStream implements NetInputStream {
 
         @Override
         public int read() throws IOException {
+            // 与 read(byte[], int, int) 保持一致: 到尾返回 -1, 而不是让
+            // ByteBuffer.get() 抛未受检的 BufferUnderflowException。
+            // DataInputStream 的各 readXxx 会据此抛 EOFException。
+            if (buffer.getByteBuffer().remaining() <= 0) {
+                return -1;
+            }
             return buffer.getUnsignedByte();
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            if (len == 0) {
+                return 0;
+            }
+            int remaining = buffer.getByteBuffer().remaining();
+            if (remaining <= 0) {
+                return -1;
+            }
+            int n = Math.min(len, remaining);
+            buffer.getByteBuffer().get(b, off, n);
+            return n;
         }
 
         @Override

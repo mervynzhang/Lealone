@@ -91,9 +91,11 @@ public class SubQuery extends Expression {
 
     @Override
     public void getSQL(StatementBuilder sql) {
-        sql.enBegin();
+        // 出现在值位置上的子查询必须有括号："ID = (SELECT ...)" 去掉括号会变成 "ID = SELECT ..."，
+        // 而且后面的 AND/OR/ORDER BY 还可能被内层查询吞掉，所以这对括号不能用 enBegin() 的可省开关。
+        sql.enBegin(true);
         sql.append(query.getPlanSQL());
-        sql.enEnd();
+        sql.enEnd(true);
     }
 
     private Expression getExpression() {

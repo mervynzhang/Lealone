@@ -127,6 +127,34 @@ public abstract class Expression implements com.lealone.sql.IExpression {
     }
 
     /**
+     * 用一个独立的打印机（独立的括号策略）打印子表达式，再追加到外层 builder。
+     * <p>
+     * {@link StatementBuilder#setEnclosed(boolean)} 是“当前上下文里括号可有可无”的开关，会沿调用链
+     * 继承给整棵子树。为了让“省略最外层冗余括号”只作用于真正冗余的那一对，而不是把子表达式里
+     * 重新解析必需的括号一起吞掉，需要打印子表达式的地方都走这个方法：
+     * <ul>
+     * <li>括号确实冗余的位置（WHERE/HAVING 的整条条件、GROUP BY/ORDER BY 里的表达式）传 enclosed=false；</li>
+     * <li>操作数自己的组合括号不能省的位置（NOT 的操作数）传 enclosed=true，
+     * 这样操作数（例如 AND/OR 组合）会重新输出自己的括号；</li>
+     * <li>操作数不需要组合括号的位置（AND/OR 的操作数）传 enclosed=false，
+     * 靠 AND/OR 的优先级和 OR 自己必打的括号就能保证语义，不必给每个比较都套一层括号。</li>
+     * </ul>
+     * 节点内部真正必需的括号（行值/列表、标量子查询、嵌套算术表达式）由节点自己用
+     * {@code enBegin(true)} 保证，与这里传什么无关。
+     *
+     * @param sql 外层 builder，只用来接收文本，它的 enclosed 设置不会被改动
+     * @param e 要打印的表达式
+     * @param enclosed 打印 e 时是否允许省略 e 自己最外层那一对冗余括号
+     */
+    public static void appendChildSQL(StatementBuilder sql, Expression e, boolean enclosed) {
+        StatementBuilder buff = new StatementBuilder();
+        buff.setDistributed(sql.isDistributed());
+        buff.setEnclosed(enclosed);
+        e.getSQL(buff);
+        sql.append(buff.toString());
+    }
+
+    /**
      * Update an aggregate value.
      * This method is called at statement execution time.
      * It is usually called once for each row, but if the expression is used multiple
