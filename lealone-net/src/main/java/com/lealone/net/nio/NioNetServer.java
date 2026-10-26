@@ -6,6 +6,7 @@
 package com.lealone.net.nio;
 
 import java.net.InetSocketAddress;
+import java.net.StandardSocketOptions;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 
@@ -58,6 +59,15 @@ public class NioNetServer extends NetServerBase {
         try {
             SocketChannel channel = serverChannel.accept();
             channel.configureBlocking(false);
+            // 服务端默认开着 Nagle: 一次响应分多个小包写出时(比如 PostgreSQL 协议先发
+            // RowDescription 再发 DataRow/CommandComplete/ReadyForQuery), 后面的小包会被
+            // 延迟 ACK 拖住, 一次往返能多出 ~40ms。客户端侧 NetClientBase 早就关了 Nagle,
+            // 服务端也要关, 否则用 PG 协议这类客户端每条约慢 40ms。
+            try {
+                channel.setOption(StandardSocketOptions.TCP_NODELAY, Boolean.TRUE);
+            } catch (Exception e) {
+                // 个别实现不支持该选项时忽略, 不影响连接建立
+            }
             writableChannel = new NioWritableChannel(scheduler, channel);
             conn = createConnection(writableChannel, scheduler);
         } catch (Throwable e) {
