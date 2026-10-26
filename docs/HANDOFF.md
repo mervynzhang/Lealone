@@ -22,6 +22,7 @@
 | `/tmp/wt-win` | `fix/window-row-number` | `73780ca23` | 窗口函数最小子集 + 2 Blocker 修复 | 已 push |
 | `/tmp/wt-paren` | `fix/sql-paren-print` | `480235474` | 行值/列表括号打印（系统性缺陷） | 已 push |
 | `/tmp/wt-net` | `fix/zero-length-packet` | `6628fa146` | 0 长度包丢失 + 负长度包 | 已 push |
+| `/tmp/wt-any2` | `fix/any-csv-safety` | 见 `git log -1` | 第三方评审 **H1**：`= ANY('a,b,c')` 不再隐式拆分（改为 `'{a,b,c}'`） | 已 push（基于 `b51002b2a`） |
 | `/tmp/pl-cat` | `fix/pg-jdbc-funcs` | `e7c29f3` | **PostgreSQL 插件**（不在核心评审范围，仅供参考） | 已 push |
 
 集成分支的合并顺序：`73780ca23`(基) ← `480235474`(fast-forward) ← `6628fa146`(merge) ← `3290fc83a`(merge) ← `e9831e251`(merge)。
@@ -54,10 +55,15 @@
 
 ### 3.2 `expr = ANY/ALL(<array>)`（`abad9f55a`）
 - 新增 `lealone-sql/.../expression/condition/ConditionAny.java`
-- 支持 `= <> > >= < <=` × `ANY/SOME/ALL`；右侧支持数组值、逗号分隔字符串、子查询（复用 `ConditionInSelect`）
+- 支持 `= <> > >= < <=` × `ANY/SOME/ALL`；右侧支持数组值、PG 风格花括号数组字面量 `'{a,b,c}'`、子查询（复用 `ConditionInSelect`）
 - 三值逻辑：命中即 TRUE；无命中且含 NULL → UNKNOWN；`ALL` 有决定 FALSE 即 FALSE；空数组 ANY=FALSE/ALL=TRUE
 - `getSQL()`/`optimize()`（常量数组改写 `ConditionIn`，走索引）/`mapColumns`/`NOT` 改写 均已覆盖
 - **Blocker 修复**（`4061b2d40`）：`getSQL()` 打印 rhs 时括号被 `setEnclosed(false)` 吞掉 → 视图/CTE 建成功但查询失败
+- **H1 修复**（本分支 `fix/any-csv-safety`，基于 `b51002b2a`，第三方评审要求）：
+  字符串右值**只有花括号包裹时**才按数组字面量解析（新增 `ArrayLiteralParser`，支持 `{a,b,c}`、
+  `{"a,b","c"}` 双引号元素、`\"`/`\\` 转义、`NULL` 元素、`'{}'` 空数组）；普通字符串常量（哪怕含逗号）
+  一律按**单值**处理；花括号字面量解析失败抛新错误码 `90151`，**不退化成单值**。
+  行为变化与影响面见 8.1。
 
 ### 3.3 行值/列表括号打印（`480235474`，系统性缺陷）
 - 根因：`StatementBuilder.enclosed` 是**沿调用链继承给整棵子树**的开关；`Select.getPlanSQL`/`UpDel.appendPlanSQL`
@@ -99,6 +105,7 @@
 | 验证项 | 结果 |
 |---|---|
 | 全量回归 `mvn -o test -pl lealone-test` | **424 tests, 0 failures, 0 errors, 10 skipped, BUILD SUCCESS** |
+| H1 分支（`fix/any-csv-safety`）全量回归 `mvn -o test -pl lealone-test` | **435 tests, 0 failures, 0 errors, 10 skipped, BUILD SUCCESS**（基线 433 + 2 个新增用例方法） |
 | 4 种 DML 形态里的窗口函数 + 数据快照 | 全部抛 `Syntax error ... OVER[*] ()`，数据逐行不变 |
 | 10 种表达式形态建视图 + 读 `information_schema.views` 定义 | 全通过（含修复前会失败的 `(a,b) IN (...)`、`(id+1)*2=4`） |
 | `SET MAX_MEMORY_ROWS 3` + 5 行窗口查询 | 报 `90150` 明确资源不足错误 |
@@ -127,7 +134,9 @@
 
 ### D. 语义正确性
 10. `pattern`：窗口的 ORDER BY 默认 NULL 位置采用 PG 语义（ASC=NULLS LAST、DESC=NULLS FIRST），而 Lealone 普通 ORDER BY 默认相反——这个不一致是否是坑。
-11. `= ANY(<逗号字符串>)` 的隐式拆分会把 `'a, b'` 拆成两个元素（含 trim），是否与用户预期冲突；是否应只在 PG 方言下启用。
+11. ~~`= ANY(<逗号字符串>)` 的隐式拆分会把 `'a, b'` 拆成两个元素（含 trim），是否与用户预期冲突；是否应只在 PG 方言下启用。~~
+    **已修复（H1，分支 `fix/any-csv-safety`）**：改为显式花括号语法 `'{a,b,c}'`，普通字符串（含逗号）按单值，
+    解析失败报 `90151`；行为变化声明见 8.1。
 12. 括号打印改动后，`EXPLAIN`/plan SQL 是否对所有既有测试保持逐字一致（有"不许多余括号"反向断言，但覆盖面有限）。
 
 ### E. 代码风格与一致性
@@ -191,11 +200,32 @@ classpath **必须**包含 `lealone-test/target/test-classes`（分隔符不能�
 |---|---|---|
 | 窗口帧 `ROWS/RANGE/GROUPS`、running aggregate、命名窗口、`LAG/LEAD` | 不做 | 显式报错即可保证不产生错误结果；实现成本远高于收益 |
 | 窗口超 `MAX_MEMORY_ROWS` 落盘 | 不做（报错） | 窗口计算需要随机访问行，落盘流不满足 |
-| `ARRAY[...]` 字面量 | 不做 | Lealone 的 `[` 是下标语法，与既有语法冲突；用 `(1,2,3)` 或 `'1,2,3'` |
+| `ARRAY[...]` 字面量 | 不做 | Lealone 的 `[` 是下标语法，与既有语法冲突；用 `(1,2,3)` 或字符串字面量 `'{1,2,3}'` |
 | `ConditionAny` 的裸逗号值列表 `ANY(1,2)` | 不做 | 标准要求数组；`(1,2)` 已是既有数组/行值字面量 |
+| `= ANY('a,b,c')` 的裸逗号字符串 | **不再支持**（按单值处理） | 隐式拆分让 `'Doe, John'` 静默错值（H1）；数组改用 `'{a,b,c}'` |
+| 以 `{` 开头、但无法解析成数组字面量的字符串（如 JSON `'{"a":1}'`） | 当数组解析并报 `90151` | 宁可显式报错也不静默退化成单值；确需单值请改用 `IN ('{"a":1}')`（`ConditionIn` 不经过数组解析） |
+| 窗口函数（`ROW_NUMBER()` 等） | **仅支持单机** | 分布式 plan 会打印窗口函数本体，跨节点场景没有验证（详见 8.1） |
 | `~*`/`!~*`（大小写不敏感正则） | 不做 | 核心无对应实现，退化为 `REGEXP`（与旧行为一致） |
 | 分布式 plan SQL 真集群验证 | 未做 | 无集群环境；只验证了 `EXPLAIN`/本地路径 |
 | `(a,b) IN (SELECT c1,c2 ...)` | 不支持 | 引擎拒绝多列子查询（既有），非打印问题 |
+
+### 8.1 行为变化声明（第三方评审要求）【事实】
+
+1. **`= ANY('a,b,c')` / `= ALL('a,b,c')` 不再按逗号拆分**：普通字符串常量一律按**单值**处理，
+   要表达数组必须写花括号字面量 `'{a,b,c}'`（PG 风格；支持 `'{"a,b","c"}'`、`\"`/`\\` 转义、
+   `NULL` 元素、`'{}'` 空数组）。原因：旧行为会把 `'Doe, John'` 静默拆成 `'Doe'` 和 `'John'`，
+   真正的单值反而匹配不到，也不报错。具体影响面：
+   - `'a,b,c'`、`'1,2,3'` 这类写法以前是 3 个元素，现在是 1 个元素（`'b' = ANY('a,b,c')` 由 TRUE 变 FALSE）；
+   - `'a, b, c'`（逗号后带空格）同理，以前会 trim 成 3 个元素；
+   - `= ANY('')` 以前是空数组（ANY=FALSE），现在是单个空字符串元素；空数组要写 `'{}'`；
+   - JDBC `setString` 参数、表列值也遵循同一规则：含逗号的普通字符串是单值，只有花括号才当数组；
+   - 以 `{` 开头但写错（括号不配对、空元素、多维数组等）→ 错误码 `90151`，不会退化成单值。
+2. **DML 里的窗口函数以前静默求值为 NULL，现在是语法错**（有意收紧）：
+   `UPDATE t SET v = RANK() OVER ()` 旧行为是**写入 NULL**、`DELETE ... WHERE ROW_NUMBER() OVER () = 1`
+   旧行为是**静默删行**；现在解析阶段直接抛 `Syntax error ... OVER[*] ()`。这是窗口函数 Blocker 修复
+   （`f3f30264d`）的一部分，第三方评审要求显式声明这条行为变化。
+3. **窗口函数仅支持单机**：分布式 plan 会打印窗口函数本体（隐藏列已不打印），跨节点执行没有验证；
+   对外说明与文档都必须标注"**窗口函数仅支持单机**"。
 
 ## 9. 流程教训（本轮最大收获）
 

@@ -176,6 +176,7 @@
 90148=Access to the schema {0} is denied
 90149=Plugin {0} not found
 90150=Window functions need to materialize more rows than MAX_MEMORY_ROWS ({0}) allows
+90151=Malformed array literal: {0}. {1}
 HY000=General error: {0}
 HY004=Unknown data type: {0}
 HYC00=Feature not supported: {0}

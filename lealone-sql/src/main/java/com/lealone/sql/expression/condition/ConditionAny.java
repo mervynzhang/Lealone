@@ -8,14 +8,12 @@ package com.lealone.sql.expression.condition;
 import java.util.ArrayList;
 
 import com.lealone.common.util.StatementBuilder;
-import com.lealone.common.util.StringUtils;
 import com.lealone.db.Database;
 import com.lealone.db.session.ServerSession;
 import com.lealone.db.value.Value;
 import com.lealone.db.value.ValueArray;
 import com.lealone.db.value.ValueBoolean;
 import com.lealone.db.value.ValueNull;
-import com.lealone.db.value.ValueString;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.expression.ExpressionList;
 import com.lealone.sql.expression.ValueExpression;
@@ -24,10 +22,17 @@ import com.lealone.sql.expression.visitor.ExpressionVisitor;
 /**
  * A quantified comparison, as in {@code expr = ANY(array)} or {@code expr <> ALL(array)}.
  * <p>
- * The right side may be an array value, or a comma separated string. The latter is needed by
- * PostgreSQL metadata queries: pgjdbc sends {@code n.nspname = ANY(current_schemas(true))}, and
- * the PostgreSQL compatibility plugin implements current_schemas() as a function returning a
- * comma separated string.
+ * The right side may be an array value, or a PostgreSQL style array literal such as
+ * <code>'{a,b,c}'</code>. Only a string that starts with '{' is parsed into elements; a plain
+ * string constant (even one that contains commas) is a single element. The old behavior of
+ * unconditionally splitting a comma separated string silently turned {@code 'Doe, John'} into
+ * {@code 'Doe'} and {@code 'John'}, so the value itself never matched (third party review H1).
+ * A string that starts with '{' but is not a well formed array literal is rejected with
+ * {@link com.lealone.db.api.ErrorCode#MALFORMED_ARRAY_LITERAL_1} instead of falling back to a
+ * single element.
+ * <p>
+ * The PostgreSQL compatibility plugin no longer relies on comma separated strings: it rewrites
+ * {@code n.nspname = ANY(current_schemas(true))} into {@code ANY(SELECT ...)}.
  * <p>
  * NULL is handled with SQL three-valued logic: ANY is TRUE as soon as one element matches,
  * otherwise UNKNOWN if any element is NULL, otherwise FALSE. ALL is FALSE as soon as one element
@@ -42,11 +47,9 @@ public class ConditionAny extends Condition {
     // true: ALL, false: ANY (or the equivalent SOME)
     private final boolean all;
     private final int compareType;
-    // 右侧是常量时只预处理一次，避免每行重新 split/trim
+    // 右侧是常量时只预处理一次，避免每行重新解析
     private Value[] cachedValues;
     private boolean valuesCached;
-
-    private static final Value[] EMPTY = new Value[0];
 
     public ConditionAny(Database database, Expression left, Expression right, boolean all,
             int compareType) {
@@ -143,17 +146,14 @@ public class ConditionAny extends Condition {
         if (type == Value.STRING || type == Value.STRING_IGNORECASE
                 || type == Value.STRING_FIXED) {
             String s = v.getString();
-            if (s.isEmpty()) {
-                return EMPTY;
+            // 只有 PG 风格的花括号字面量才按数组解析；普通字符串即使含逗号也是单个元素。
+            // 以前无条件 arraySplit(s, ',') 会把 'Doe, John' 静默拆成 'Doe' 和 'John'，
+            // 真正的单值反而匹配不到（第三方评审 H1）。解析失败直接抛错，不退化成单值。
+            String trimmed = s.trim();
+            if (trimmed.startsWith("{")) {
+                return ArrayLiteralParser.parse(trimmed);
             }
-            // StringUtils.arraySplit(s, ',', true) 一次性完成 split+trim，比每行
-            // split() 再逐个 trim() 少一次数组复制，也不产生中间 String[] 之外的对象
-            String[] parts = StringUtils.arraySplit(s, ',', true);
-            Value[] values = new Value[parts.length];
-            for (int i = 0; i < parts.length; i++) {
-                values[i] = ValueString.get(parts[i]);
-            }
-            return values;
+            return new Value[] { v };
         }
         // 其它标量当成只含一个元素的集合
         return new Value[] { v };

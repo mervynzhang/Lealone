@@ -2197,7 +2197,7 @@ public class SQLParserBase implements SQLParser {
                         Query query = parseSelect();
                         r = new ConditionInSelect(database, r, query, true, compareType);
                     } else {
-                        // 数组值或逗号分隔字符串，如 ID <> ALL('1,2,3')
+                        // 数组值或花括号数组字面量，如 ID <> ALL('{1,2,3}')
                         r = new ConditionAny(database, r, readConcat(), true, compareType);
                     }
                     read(")");
@@ -2207,7 +2207,8 @@ public class SQLParserBase implements SQLParser {
                         Query query = parseSelect();
                         r = new ConditionInSelect(database, r, query, false, compareType);
                     } else {
-                        // pgjdbc: n.nspname = ANY(current_schemas(true))
+                        // 也可放单个字符串/列，如 ID = ANY('Doe, John'); pgjdbc 的
+                        // n.nspname = ANY(current_schemas(true)) 由 PG 插件改写成 ANY(SELECT ...)
                         r = new ConditionAny(database, r, readConcat(), false, compareType);
                     }
                     read(")");

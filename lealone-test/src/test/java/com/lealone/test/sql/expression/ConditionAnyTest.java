@@ -7,6 +7,7 @@ package com.lealone.test.sql.expression;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -16,6 +17,7 @@ import org.junit.Test;
 import com.lealone.client.jdbc.JdbcConnection;
 import com.lealone.common.exceptions.DbException;
 import com.lealone.common.util.StatementBuilder;
+import com.lealone.db.api.ErrorCode;
 import com.lealone.db.session.ServerSession;
 import com.lealone.sql.expression.Expression;
 import com.lealone.sql.query.Select;
@@ -25,7 +27,13 @@ import com.lealone.test.sql.SqlAssertTestBase;
  * {@code expr = ANY(array)} / {@code expr <> ALL(array)} 以及其它比较运算符的 ANY/ALL 形式。
  * <p>
  * 右侧既可以是数组值（Lealone 用行值构造器 {@code (1, 2, 3)}、{@code ('a', 'b')} 表示数组），
- * 也可以是插件函数常返回的逗号分隔字符串，例如 PostgreSQL 的 current_schemas()。
+ * 也可以是 PostgreSQL 风格的花括号数组字面量，例如 {@code '{a,b,c}'}。
+ * <p>
+ * <b>只有花括号包裹的字符串常量才按元素拆分</b>；普通字符串常量（即使含逗号）按单值处理。
+ * 这条规则来自第三方评审 H1：以前 {@code 'Doe, John' = ANY('Doe, John')} 会把右侧按逗号拆成
+ * {@code 'Doe'} 和 {@code 'John'}，静默错值。花括号字面量解析失败时报
+ * {@link ErrorCode#MALFORMED_ARRAY_LITERAL_1}，不会退化成单值。
+ * <p>
  * NULL 按 SQL 三值逻辑处理。
  */
 public class ConditionAnyTest extends SqlAssertTestBase {
@@ -87,33 +95,97 @@ public class ConditionAnyTest extends SqlAssertTestBase {
     }
 
     @Test
-    public void commaSeparatedStringRightSide() {
-        // 插件把数组实现成逗号分隔字符串时也要能用
-        assertQueryTrue("SELECT 1 = ANY('1,2,3')");
-        assertQueryFalse("SELECT 4 = ANY('1,2,3')");
-        assertQueryTrue("SELECT 'b' = ANY('a,b,c')");
-        // 允许逗号后有空格
-        assertQueryTrue("SELECT 'b' = ANY('a, b, c')");
-        assertQueryFalse("SELECT 'd' = ANY('a, b, c')");
-        assertQueryTrue("SELECT 2 <> ALL('1,3,4')");
-        assertQueryFalse("SELECT 2 <> ALL('1,2,3')");
+    public void braceArrayLiteralRightSide() {
+        // PG 风格数组字面量：只有花括号包裹的字符串才按元素拆分
+        assertQueryTrue("SELECT 1 = ANY('{1,2,3}')");
+        assertQueryFalse("SELECT 4 = ANY('{1,2,3}')");
+        assertQueryTrue("SELECT 2 <> ALL('{1,3,4}')");
+        assertQueryFalse("SELECT 2 <> ALL('{1,2,3}')");
+        assertQueryTrue("SELECT 'a' = ANY('{a,b,c}')");
+        assertQueryFalse("SELECT 'd' = ANY('{a,b,c}')");
+        // 未加引号的元素两端空白会被去掉（与 PG array_in 一致）
+        assertQueryTrue("SELECT 'b' = ANY('{a, b , c}')");
+        // 每个元素前后的空白也算数组的一部分，不影响识别
+        assertQueryTrue("SELECT 1 = ANY(' {1,2,3} ')");
+        // 双引号元素里的逗号是元素内容，不是分隔符
+        assertQueryFalse("SELECT 'b' = ANY('{\"a,b\",\"c\"}')");
+        assertQueryTrue("SELECT 'a,b' = ANY('{\"a,b\",\"c\"}')");
+        assertQueryTrue("SELECT 'c' = ANY('{\"a,b\", \"c\"}')");
+        // 双引号内的转义：\" 和 \\
+        assertQueryTrue("SELECT 'a\"b' = ANY('{\"a\\\"b\"}')");
+        assertQueryTrue("SELECT 'c\\d' = ANY('{\"c\\\\d\"}')");
+        assertQueryFalse("SELECT 'c\\\\d' = ANY('{\"c\\\\d\"}')");
+        // NULL 元素参与三值逻辑；带双引号的 "NULL" 是普通字符串
+        assertQueryNull("SELECT 'x' = ANY('{NULL}')");
+        assertQueryTrue("SELECT 'x' = ANY('{NULL,x}')");
+        assertQueryTrue("SELECT 'NULL' = ANY('{\"NULL\"}')");
+        // 空数组：ANY 恒为 FALSE，ALL 恒为 TRUE
+        assertQueryFalse("SELECT 1 = ANY('{}')");
+        assertQueryFalse("SELECT NULL = ANY('{}')");
+        assertQueryTrue("SELECT 1 <> ALL('{}')");
+        assertQueryTrue("SELECT NULL <> ALL('{}')");
+    }
+
+    @Test
+    public void plainStringIsSingleValue() {
+        // 第三方评审 H1 的关键回归：普通字符串常量不再按逗号隐式拆分
+        assertQueryTrue("SELECT 'Doe, John' = ANY('Doe, John')");
+        assertQueryFalse("SELECT 'Doe' = ANY('Doe, John')");
+        assertQueryFalse("SELECT 'John' = ANY('Doe, John')");
+        // 单值语义同样作用于 ALL：'Doe' 与唯一的元素 'Doe, John' 不相等
+        assertQueryFalse("SELECT 'Doe, John' <> ALL('Doe, John')");
+        assertQueryTrue("SELECT 'Doe' <> ALL('Doe, John')");
+        // 空字符串是"一个空字符串元素"，不是空数组（空数组写 '{}'）
+        assertQueryTrue("SELECT '' = ANY('')");
+        assertQueryFalse("SELECT 'a' = ANY('')");
+        // 想表达"只含一个带逗号的元素"要显式加花括号和双引号
+        assertQueryTrue("SELECT 'Doe, John' = ANY('{\"Doe, John\"}')");
+        // 不以 { 开头的字符串即使以 } 结尾也还是单值
+        assertQueryTrue("SELECT 'a}' = ANY('a}')");
+        // 数值列遇上 '1,2,3' 这种单值字符串是数据转换错误，不会静默"没匹配上"
+        assertEquals(ErrorCode.DATA_CONVERSION_ERROR_1,
+                assertSqlFails("SELECT 1 = ANY('1,2,3')").getErrorCode());
+    }
+
+    @Test
+    public void malformedArrayLiteralIsRejected() {
+        // 花括号字面量解析失败必须报明确错误，不能静默退化成单值
+        SQLException e = assertSqlFails("SELECT 1 = ANY('{1,2')");
+        assertEquals(ErrorCode.MALFORMED_ARRAY_LITERAL_1, e.getErrorCode());
+        assertSqlFails("SELECT 1 = ANY('{1,2}b')");
+        assertSqlFails("SELECT 1 = ANY('{a,,b}')");
+        assertSqlFails("SELECT 1 = ANY('{a,}')");
+        assertSqlFails("SELECT 1 = ANY('{\"a}')");
+        assertSqlFails("SELECT 1 = ANY('{{1,2},{3,4}}')");
+        assertSqlFails("SELECT 'b' = ANY('{\"a\"b}')");
+        // 表列/参数的坏字面量走逐行求值路径，同样必须报错，不能静默当单值
+        executeUpdate("DROP TABLE IF EXISTS condition_any_bad");
+        executeUpdate("CREATE TABLE condition_any_bad(v varchar(20))");
+        executeUpdate("INSERT INTO condition_any_bad VALUES('{a,b')");
+        SQLException runtime = assertSqlFails(
+                "SELECT COUNT(*) FROM condition_any_bad WHERE 'a' = ANY(v)");
+        assertEquals(ErrorCode.MALFORMED_ARRAY_LITERAL_1, runtime.getErrorCode());
+        executeUpdate("DROP TABLE IF EXISTS condition_any_bad");
     }
 
     @Test
     public void anyAllWithTableColumnsAndParameters() throws Exception {
         executeUpdate("DROP TABLE IF EXISTS condition_any_t");
-        executeUpdate("CREATE TABLE condition_any_t(id int, name varchar(10), csv varchar(20))");
-        executeUpdate("INSERT INTO condition_any_t VALUES(1, 'a', '1,3,5')");
-        executeUpdate("INSERT INTO condition_any_t VALUES(2, 'b', '1,3,5')");
-        executeUpdate("INSERT INTO condition_any_t VALUES(3, 'c', '1,3,5')");
-        executeUpdate("INSERT INTO condition_any_t VALUES(4, 'd', '1,3,5')");
-        executeUpdate("INSERT INTO condition_any_t VALUES(5, 'e', '1,3,5')");
+        executeUpdate("DROP TABLE IF EXISTS condition_any_names");
+        executeUpdate("CREATE TABLE condition_any_t(id int, name varchar(30), csv varchar(20))");
+        executeUpdate("INSERT INTO condition_any_t VALUES(1, 'a', '{1,3,5}')");
+        executeUpdate("INSERT INTO condition_any_t VALUES(2, 'b', '{1,3,5}')");
+        executeUpdate("INSERT INTO condition_any_t VALUES(3, 'c', '{1,3,5}')");
+        executeUpdate("INSERT INTO condition_any_t VALUES(4, 'd', '{1,3,5}')");
+        executeUpdate("INSERT INTO condition_any_t VALUES(5, 'e', '{1,3,5}')");
 
         assertQueryEquals(3L, "SELECT COUNT(*) FROM condition_any_t WHERE id = ANY((1, 3, 5))");
-        assertQueryEquals(3L, "SELECT COUNT(*) FROM condition_any_t WHERE id = ANY('1,3,5')");
+        assertQueryEquals(3L, "SELECT COUNT(*) FROM condition_any_t WHERE id = ANY('{1,3,5}')");
         assertQueryEquals(2L, "SELECT COUNT(*) FROM condition_any_t WHERE id <> ALL((1, 2, 3))");
-        assertQueryEquals(3L, "SELECT COUNT(*) FROM condition_any_t WHERE name = ANY('a,c,e')");
-        // 右侧是表列(逐行求值)，不是常量
+        assertQueryEquals(3L, "SELECT COUNT(*) FROM condition_any_t WHERE name = ANY('{a,c,e}')");
+        // 逗号字符串是单值，不会命中任何单个 name
+        assertQueryEquals(0L, "SELECT COUNT(*) FROM condition_any_t WHERE name = ANY('a,c,e')");
+        // 右侧是表列(逐行求值)，列里存的是花括号数组字面量
         assertQueryEquals(3L, "SELECT COUNT(*) FROM condition_any_t WHERE id = ANY(csv)");
         assertQueryEquals(2L, "SELECT COUNT(*) FROM condition_any_t WHERE id <> ALL(csv)");
         // 含 NULL 且不命中：UNKNOWN 被 WHERE 过滤掉，不能算成命中
@@ -123,13 +195,39 @@ public class ConditionAnyTest extends SqlAssertTestBase {
         assertPlanContains("SELECT * FROM condition_any_t WHERE id = ANY((1, 2, 3))", "IN(");
         assertPlanContains("SELECT * FROM condition_any_t WHERE id = ANY(csv)", "ANY(");
 
-        // 逗号分隔字符串参数
+        // 表列场景：'{Doe, John}'（两个元素）与 'Doe, John'（一个值）语义不同，且都正确
+        executeUpdate("CREATE TABLE condition_any_names(name varchar(30))");
+        executeUpdate("INSERT INTO condition_any_names VALUES('Doe')");
+        executeUpdate("INSERT INTO condition_any_names VALUES('John')");
+        executeUpdate("INSERT INTO condition_any_names VALUES('Doe, John')");
+        assertQueryEquals(2L,
+                "SELECT COUNT(*) FROM condition_any_names WHERE name = ANY('{Doe, John}')");
+        assertQueryEquals(1L,
+                "SELECT COUNT(*) FROM condition_any_names WHERE name = ANY('Doe, John')");
+        assertQueryEquals(1L,
+                "SELECT COUNT(*) FROM condition_any_names WHERE name = ANY('{\"Doe, John\"}')");
+        // 右侧是表列时逐行求值：逗号只是值的一部分，每行都比自己
+        assertQueryEquals(3L, "SELECT COUNT(*) FROM condition_any_names WHERE name = ANY(name)");
+        // 常量花括号字面量同样改写成 IN(...)，能用上索引
+        assertPlanContains(
+                "SELECT * FROM condition_any_names WHERE name = ANY('{Doe, John}')", "IN(");
+
+        // 花括号数组字面量作为参数
         try (PreparedStatement ps = conn
                 .prepareStatement("SELECT COUNT(*) FROM condition_any_t WHERE id = ANY(?)")) {
-            ps.setString(1, "2,4");
+            ps.setString(1, "{2,4}");
             try (ResultSet r = ps.executeQuery()) {
                 assertTrue(r.next());
                 assertEquals(2, r.getInt(1));
+            }
+        }
+        // 普通字符串参数按单值处理，不按逗号拆分
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT COUNT(*) FROM condition_any_names WHERE name = ANY(?)")) {
+            ps.setString(1, "Doe, John");
+            try (ResultSet r = ps.executeQuery()) {
+                assertTrue(r.next());
+                assertEquals(1, r.getInt(1));
             }
         }
         // 数组参数
@@ -145,9 +243,10 @@ public class ConditionAnyTest extends SqlAssertTestBase {
 
     /**
      * pgjdbc 在 getColumns() 等元数据查询里会发
-     * {@code n.nspname = ANY(current_schemas(true))}。这里用 PG_CATALOG 表模拟，
-     * current_schemas(true) 换成等价的、返回逗号分隔字符串的普通表达式
-     * （真实函数由 PostgreSQL 插件实现，不属于核心库）。
+     * {@code n.nspname = ANY(current_schemas(true))}。PostgreSQL 插件会先把这条语句改写成
+     * {@code ANY(SELECT ...)}（见插件 PgSQLParser），所以核心库这边只需要支持数组语义。
+     * 这里用 PG_CATALOG 表模拟，右侧换成运行时拼出来的花括号数组字面量，覆盖"非常量字符串
+     * 右值也要按数组字面量解析"这条路径。
      */
     @Test
     public void pgjdbcCurrentSchemasQuery() {
@@ -161,7 +260,7 @@ public class ConditionAnyTest extends SqlAssertTestBase {
         executeUpdate("INSERT INTO PG_CATALOG.PG_NAMESPACE VALUES(2200, 'PUBLIC')");
         executeUpdate("INSERT INTO PG_CATALOG.PG_TYPE VALUES(23, 'INT4', 2200)");
         try {
-            String query = "SELECT n.nspname = ANY(CONCAT('PG_CATALOG', ',PUBLIC')), "
+            String query = "SELECT n.nspname = ANY(CONCAT('{PG_CATALOG', ',PUBLIC}')), "
                     + "n.nspname, t.typname " //
                     + "FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n "
                     + "ON t.typnamespace = n.oid WHERE t.oid = 23";
@@ -250,7 +349,7 @@ public class ConditionAnyTest extends SqlAssertTestBase {
             assertEquals(3L, queryObject("SELECT COUNT(*) FROM condition_any_rt WHERE "
                     + conditionSQL));
 
-            // 常量数组/逗号分隔字符串被优化成 IN，仍然必须可重新解析且语义不变
+            // 常量数组/花括号数组字面量被优化成 IN，仍然必须可重新解析且语义不变
             select = (Select) session.prepareStatement("SELECT * FROM condition_any_rt "
                     + "WHERE id = ANY((1, 3, 5))");
             conditionSQL = conditionSQL(select.getCondition());
@@ -259,7 +358,7 @@ public class ConditionAnyTest extends SqlAssertTestBase {
                     + conditionSQL));
 
             select = (Select) session.prepareStatement("SELECT * FROM condition_any_rt "
-                    + "WHERE id = ANY('1, 3')");
+                    + "WHERE id = ANY('{1, 3}')");
             conditionSQL = conditionSQL(select.getCondition());
             assertTrue(conditionSQL, conditionSQL.contains("IN("));
             assertEquals(2L, queryObject("SELECT COUNT(*) FROM condition_any_rt WHERE "
