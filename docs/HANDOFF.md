@@ -16,7 +16,7 @@
 
 | worktree | 分支 | HEAD | 内容 | 状态 |
 |---|---|---|---|---|
-| `/tmp/wt-all` | `integration/all-fixes` | `b95bb19f1` | **本文件所在分支**，上述 4 个分支的合并结果（3 次 merge 无冲突） | 424 tests 绿 |
+| `/tmp/wt-all` | `integration/all-fixes` | 见 `git log -1` | **本文件所在分支**，6 个分支/分支头的合并结果（`480235474` 为 fast-forward，其余 3 次为 merge commit，均零冲突） | **433 tests 绿** |
 | `/tmp/wt-fix1` | `review/consolidated`→`fix/p0-perf` | `e9831e251` | P0：字符串协议编解码 + 发送缓冲自适应 | 已 push |
 | `/tmp/wt-any` | `fix/any-array` | `abad9f55a` | `expr = ANY/ALL(array)` 表达式 | 已 push |
 | `/tmp/wt-win` | `fix/window-row-number` | `73780ca23` | 窗口函数最小子集 + 2 Blocker 修复 | 已 push |
@@ -24,13 +24,21 @@
 | `/tmp/wt-net` | `fix/zero-length-packet` | `6628fa146` | 0 长度包丢失 + 负长度包 | 已 push |
 | `/tmp/pl-cat` | `fix/pg-jdbc-funcs` | `e7c29f3` | **PostgreSQL 插件**（不在核心评审范围，仅供参考） | 已 push |
 
-集成分支的 merge 顺序：`73780ca23`(基) ← `480235474` ← `6628fa146` ← `3290fc83a`。
+集成分支的合并顺序：`73780ca23`(基) ← `480235474`(fast-forward) ← `6628fa146`(merge) ← `3290fc83a`(merge) ← `e9831e251`(merge)。
+
+> ⚠️ **勘误（第三方评审指出）**：本文初版只合并到 `3290fc83a`，**漏了 `fix/p0-perf` 的最后 3 个提交**
+> （`1c427d362` / `d8ab45ad4` / `e9831e251`），导致集成分支一度携带已被否决的 64KB 发送缓冲默认值。
+> 已补 `git merge e9831e251`（零冲突），现在 `NetClientBase` 的默认值是 **8K + 自适应上调**。
+> 补合并后全量回归：**433 tests, 0 failures, 0 errors, 10 skipped**。
 
 > 主 checkout `/home/jovyan/data/work/lealone` **全程未改动**（在别人的分支上）。
 
 ## 3. 核心库改动逐条说明
 
-### 3.1 窗口函数最小子集（`73780ca23`，基于 `abad9f55a`）
+### 3.1 窗口函数最小子集（分支 `fix/window-row-number`，基于 `abad9f55a`，分支头 `73780ca23`）
+
+> **勘误**：`73780ca23` 自身的提交信息是「优化 ANY/ALL」，它是该分支的**头提交**而不是窗口功能的提交。
+> 窗口相关实际提交：`c0f27b52`（最小子集）、`f3f30264d`（Blocker 1）、`4061b2d40`（Blocker 2）、`749894b0b`（High 3/4/5）。
 - 新增 `lealone-sql/.../expression/WindowFunction.java`（695 行）、`lealone-sql/.../query/WindowResultTarget.java`
 - 改 `SQLParserBase`（解析 `OVER (...)`）、`Select`、`QOperator`、`YieldableSelect`、`BuiltInAggregate.isDistinct()`、3 个 visitor
 - **支持**：`ROW_NUMBER/RANK/DENSE_RANK` + `COUNT(*)/COUNT(x)/SUM/MIN/MAX/AVG`；`OVER ()`/`PARTITION BY`/`ORDER BY`
@@ -150,6 +158,24 @@ setsid java -cp "$(cat /tmp/cp.txt)" com.lealone.main.Lealone -baseDir /tmp/x/sr
 # 等日志出现 "Lealone started"，然后
 java -cp "/tmp/pgplug:$(cat /tmp/cp.txt)" Mk   # 或自己连 jdbc:lealone:tcp://localhost:9401/lealone 建库
 ```
+
+## 6.1 跑全量测试的前置条件（第三方评审踩到过）
+
+`lealone-test` 里的 `SqlTestBase` 系用例**要求 9210 上已经有一个测试服务**，否则约 99 个用例直接
+`Connection refused: localhost/9210`。这不是缺陷，是既有的测试架构前提。
+
+```bash
+export PATH=/home/jovyan/data/maven/bin:$PATH JAVA_HOME=/usr/lib/jvm/sapmachine-21
+mkdir -p /tmp/srv9210 /tmp/cwd9210          # CWD 必须在仓库外，否则生成的代码落到仓库根
+cd /tmp/cwd9210 && setsid $JAVA_HOME/bin/java \
+  -cp "<repo>/lealone-test/target/test-classes:$(cat /tmp/cp.txt)" \
+  com.lealone.main.Lealone -baseDir /tmp/srv9210 \
+  -config <repo>/lealone-test/src/test/resources/lealone-test.sql -port 9210 \
+  > /tmp/srv9210.log 2>&1 < /dev/null &
+# 等日志出现 "Lealone started"，并核对监听 9210 的 PID 就是刚起的进程（残留旧进程会让你测到旧版本）
+```
+
+classpath **必须**包含 `lealone-test/target/test-classes`（分隔符不能漏），否则服务端缺少测试资源配置。
 
 ## 7. 环境事实与坑
 

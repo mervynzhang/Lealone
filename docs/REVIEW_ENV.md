@@ -39,6 +39,14 @@ setsid $JAVA_HOME/bin/java -cp "$(cat /tmp/cp.txt)" com.lealone.main.Lealone \
 # 等 /tmp/rev/srv.log 出现 "Lealone started"
 ```
 
+## 跑全量测试前必须有 9210 测试服务
+
+`mvn -o test -pl lealone-test` 的 `SqlTestBase` 系用例（约 99 个）要求 9210 上已有一个测试服务，
+否则全部 `Connection refused: localhost/9210`。启动方式见 `docs/HANDOFF.md` 第 6.1 节
+（关键：classpath 要带 `lealone-test/target/test-classes`，服务端 CWD 在仓库外）。
+
+当前环境：**9210 已启动**（用集成分支产物启动，规格 `scheduler_count: 4`），其余 Lealone 端口无实例。
+
 ## 三个坑（本轮踩过）
 
 1. **测试/调试实例必须在 jar 重新打包之后启动**，否则跑的是旧类（本轮因此出现过一次"假红"）。
