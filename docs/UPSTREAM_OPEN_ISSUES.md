@@ -1,7 +1,10 @@
 # upstream master 未修复问题清单（对照我们的分支）
 
 - **上游**：`github.com/lealone/Lealone` master = `34596f242`（2026-10-29，"加密文件头只存放经过SHA256的密码"）
-- **我们**：`review/consolidated` = `39ee21d6f`（含本轮 121 个提交）
+- **我们**：`review/consolidated` = `b3afc1cce`（= fork `master`）
+- **提交口径**：相对起点 `b6c7cc654` raw **122** 个，按 `patch-id` 去重后 **99** 个（19 组是 rebase 重复，
+  第 20 对 `d3fa1206d`/`cb4f8c085` 有 95 行漂移）。完整分类与全部 30 个缺陷家族的台账见
+  [`DEFECT_LEDGER.md`](DEFECT_LEDGER.md)。
 - **采集方式**：逐条实证复现（不是读代码猜），所有数字均为本机实测
 - **纪律**：本文只列**上游仍未修**的问题；每条都给可执行的复现方式。SLT 类问题给出**原始 `.test` 文件名 + 行号**。
 
@@ -144,16 +147,20 @@ rm -rf /tmp/slt-db && java -Xmx4g -Dlealone.base.dir=/tmp/slt-db \
 - **我们的状态**：`ccd5dc076`「修复关联子查询返回过期值与 IN/NOT IN 只看首行的问题」。
   实测我们分支 `select1.test` 0 失败。
 
-### U5 🟡 表达式整数溢出直接报错（SQLite/PG 会提升类型）
+### U5 🟡 不该求值的表达式被过早求值 → 溢出报错
 
-- **现象**：`Numeric value out of range: "45682308000"`。典型 SQL 都是常量乘法/COALESCE 组合，
-  期望值明显超出 INT 但 SQLite（本套件的 oracle）按更大类型算。
+- **现象**：`Numeric value out of range: "45682308000"`。典型 SQL 都是"本不该被求值"的分支
+  （`COALESCE(-3, <溢出常量>)`、`CASE WHEN TRUE THEN 1 ELSE 1/0 END`）。
+- **⚠️ 口径收窄（第二次审计纠正）**：我们**没有**把裸整数溢出改成自动类型提升——`SELECT -29*95*-84*+94*-25*+84`
+  在我们分支**仍然报** `Numeric value out of range`（与上游一致）。我们修的是**短路求值**：
+  不该求值的分支不再被求值，所以 `COALESCE(-3, <溢出表达式>)` 返回 `-3`。
 - **复现（原始 SLT）**：`random/expr/slt_good_60.test:74168`、`slt_good_91.test:31229`、`slt_good_109.test:66138`、
   `slt_good_25.test:19593`、`slt_good_31.test:30937`、`slt_good_40.test:31363`（均为 `random/expr/` 下）。
   ⚠️ 这 6 例里 **`random/expr/slt_good_91.test:31229` 在我们分支上仍以同一异常失败**（见 §3），其余已修。
   样例：`random/expr/slt_good_60.test:74168  SELECT ALL COALESCE ( - 3, - - 29 * 95 * - 84 * + 94 * - 25 * + 84 )`
-- **我们的状态**：`db4278df8`「修正数值语义: DECIMAL 精度标度、AVG、ROUND 与 TRUNC」。
+- **我们的状态**：`db4278df8`「修正数值语义: DECIMAL 精度标度、AVG、ROUND 与 TRUNC」+ `f05b5652b`/`5e0c64967`（短路求值）。
   实测我们分支：`SELECT ALL COALESCE(-3, -29*95*-84*+94*-25*+84)` → `-3`。
+  同族还有：`AVG(1,2)` 上游返回 `1`、我们 `1.5`；`ROUND(-2.5)` 上游 `-2.0`、我们 `-3`（见台账 F04）。
 
 ### U6 🟡 `SUM(NULL)` / `AVG(NULL)` 报"类型错误"
 
@@ -265,7 +272,7 @@ rm -rf /tmp/slt-db && java -Xmx4g -Dlealone.base.dir=/tmp/slt-db \
 |---|---|---|
 | `FileStorage.getInputStream()` 现在强制 `resetFilePointer()`（`dfbf8b16e`） | 修好了"第二次 `BACKUP TO` 读到空数据"，但把"每次取流都从头读"变成了硬约定；若有调用方依赖"接着上次位置读"会静默读到重复数据 | 未验证到实际回归，仅记录 |
 | `IndexKeyType.java:201-203` | 留了被注释掉的 `if (ax == null) { getOldValue... }` 死代码 | 风格问题 |
-| 上游与我们重复的工作 | `1c45274a8`（SCRIPT 不生成 SystemSchema 表）、`126165952`（`DbSetting.ENCRYPTION_KEY`）与我们 `ab8670a64` **主题相同**（该提交同时改了 `GenScript`/`RunScript`/`ScriptBase`/`FileStorage`）；未逐行证明等价 | 主题已覆盖，合并前建议逐行比对 |
+| 上游与我们重复的工作 | `1c45274a8`（SCRIPT 不生成 SystemSchema 表）、`126165952`（`DbSetting.ENCRYPTION_KEY`）与我们 `ab8670a64` **主题相同**（该提交同时改了 `GenScript`/`RunScript`/`ScriptBase`/`FileStorage`）；`dfbf8b16e`（第二次 `BACKUP TO` 读到空数据，`getInputStream()` 加 `resetFilePointer()`）与我们 `2921e8d90` **主题相同**。均未逐行证明等价 | 主题已覆盖，合并前建议逐行比对 |
 
 ---
 
